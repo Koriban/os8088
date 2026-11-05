@@ -576,9 +576,83 @@ Measured, not quoted: **11,528 image + 7,755 bss = 19,283 of 65,024,
 29.7%**, from 11,784 + 7,669 = 19,453. The dead code paid for the stack:
 −256 image, +86 bss, −170 net.
 
+## Wave 2a — scalar variables, and three bugs only the glass found
+
+Wave 2 is `IF`, `SELECT CASE`, `FOR`, `WHILE`, `DO`, `REPEAT`, `GOSUB` and
+procedures, and not one of them works without a variable to loop on or
+compare. So this is the floor: `x = 7`, `y = x * 6`, `PRINT y`, and the
+answer on the console is **42**.
+
+The design is in SPEC.md 126.17. The one choice worth repeating here is that
+**an entry does not hold the name** — it holds an offset into the program
+text and a length. A fixed-width name field would quietly make two long
+names one variable; comparing against the program's own text cannot. It also
+costs nothing: the index is resolved at compile time and rides in the op
+stream as one byte, so the interpreter indexes rather than searching.
+
+### Three bugs, and the glass found all three
+
+**`mul` clobbers DX.** `bas_varfind` held the table's count in DX and
+computed each entry's address with `mov ax, BAS_VAR_SZ / mul bx` — which
+writes DX:AX. The scan's own bound would have been gone after the first
+entry and every name created fresh. Caught by reading it back before
+building; `bas_varat` does `(i*4) + (i*8)` with shifts instead, and the
+interpreter's two call sites wanted BX and CX kept anyway.
+
+**The table outlived the text it points into.** The comment on `bas_varfind`
+said "bas_run clears it, so nothing survives into the next RUN". It said so
+because that is what I designed; I never wrote the line. Run
+`x = 7 / y = x * 6 / PRINT y`, retype the program as `PRINT n / N = 3 /
+PRINT n + N`, run again — and `y`'s entry, offset 6 and one character long,
+spells `n` in the new text. `PRINT n` answered **42** where it owed 0:
+
+| | `PRINT n` after a previous run |
+| --- | --- |
+| as written | ` 42` — the old `y`, through a stale text pointer |
+| with the reset | ` 0` |
+
+and `PRINT n + N` gives ` 6`, so the case-insensitivity holds too. **A
+comment describing code I had not written** is this chapter's own lesson
+arriving one section later, and the only thing that caught it was typing two
+programs in a row instead of one.
+
+**`File > New` cleared the console and not the program** — which reads as
+New having done nothing, since the program is the thing on screen. Fixing
+that uncovered the third: New is the one path in `bas_oncmd` without a
+`push si` around its body, and `bas_conreset` ends `mov si, bas_s_banner`.
+So `.redraw` handed `bas_abdismiss` and `bas_repaint` the banner's address
+instead of the window's, and **the repaint drew nothing while every byte of
+state was already correct** — New cleared the program and the screen kept
+showing it. `.run` and `.stop` both bracket SI; New did not, back when
+nothing it touched was on screen. That is docs' own "sh_repaint needs SI"
+rule, one package along.
+
+### Verified, and how
+
+On the glass, because none of the three was visible any other way: `42` for
+the arithmetic, `0` then `6` for the default and the case-folding, and an
+empty editor and console after New. The machine is QEMU on the **pre-merge**
+system disk — upstream's `doswtail` gate is red, so no current system disk
+can be built — which is sound here because `PKG_FMT` did not move across the
+merge and BASIC names no slot the older kernel lacks. The package had to be
+packed UNCOMPRESSED to load: the merge brought an `E8` filter into
+`os88pkg.py` that the older kernel's decompressor does not know.
+
+`fpscratch` still passes 50/50 and no symbol is dead. **12,129 image + 7,950
+bss = 20,079 of 65,024, 30.9%.**
+
+### Owed from here
+
+The op dispatch is still a compare chain and wave 2 has just added two more
+ops to it; SPEC.md 126.5 owes the indexed jump, and it should land before
+the control-flow ops rather than after, as its own verified step. And the
+row that runs a program and compares the answer — which would have caught
+all three of the above without a human driving QEMU — still waits on a
+system disk.
+
 ## Next
 
-Wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
+The rest of wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.

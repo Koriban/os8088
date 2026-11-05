@@ -102,6 +102,25 @@ bas_entry:
     ret
 
 ; -----------------------------------------------------------------------------
+; bas_new - File > New: an empty program and a fresh console
+; in:  nothing; out: nothing; clobbers AX/SI like any internal call
+;
+; It cleared the CONSOLE only until wave 2, which read as New having done
+; nothing: the program is the thing on screen, and it stayed. NEW empties the
+; program in every BASIC of this line, and here it has a second job - the
+; variable table keys on offsets INTO this text (bas_varfind), so leaving the
+; text while clearing nothing else would be the one state those entries must
+; never see. bas_run clears them too, so both doors are shut.
+; -----------------------------------------------------------------------------
+bas_new:
+    mov word [bas_tx + TX_LEN], 0
+    mov word [bas_tx + TX_CAR], 0
+    mov word [bas_tx + TX_TOP], 0
+    mov byte [bas_prog], 0          ; ...and the buffer itself NUL-terminated
+    mov word [bas_nvar], 0
+    jmp bas_conreset                ; tail call: its ret is ours
+
+; -----------------------------------------------------------------------------
 ; bas_conreset - a fresh console, with the cursor where the user can see it
 ; in:  nothing; out: nothing; clobbers AX/SI like any internal call
 ;
@@ -269,8 +288,21 @@ bas_oncmd:
     ; --- File ----------------------------------------------------------------
     or al, al
     jnz .about                      ; item 1 = About
-    call bas_conreset               ; item 0 = New: back to what a fresh
-    jmp .redraw                     ; launch shows
+    push si                         ; item 0 = New: the program AND the
+    call bas_new                    ; console, which is what New means.
+    pop si                          ; **SI IS THE WINDOW AND bas_new ENDS IN
+                                    ; bas_conreset, WHICH LOADS SI WITH THE
+                                    ; BANNER.** .redraw hands SI to
+                                    ; bas_abdismiss and bas_repaint, and a
+                                    ; repaint through the wrong pointer draws
+                                    ; nothing while every byte of state is
+                                    ; already correct - so New cleared the
+                                    ; program and the screen kept showing it.
+                                    ; .run and .stop below both bracket for
+                                    ; this reason; New was the path that did
+                                    ; not, back when it only reset the console
+                                    ; and nothing it touched was on screen.
+    jmp .redraw
 .about:
     mov bx, si
     jmp bas_about                   ; tail call: the card's ret is ours
@@ -543,7 +575,9 @@ BAS_B_bas_ops    equ BAS_B_bas_bad + 2
 BAS_B_bas_stk    equ BAS_B_bas_ops + BAS_OPS_MAX
 BAS_B_bas_numbuf equ BAS_B_bas_stk + BAS_STK_MAX*BAS_SLOT
 BAS_B_bas_reg    equ BAS_B_bas_numbuf + 8
-BAS_B_bas_fp     equ BAS_B_bas_reg + R_N*2
+BAS_B_bas_nvar   equ BAS_B_bas_reg + R_N*2
+BAS_B_bas_vars   equ BAS_B_bas_nvar + 2
+BAS_B_bas_fp     equ BAS_B_bas_vars + BAS_VAR_MAX*BAS_VAR_SZ
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
 BAS_B_fp_ae      equ BAS_B_fp_bs + 1
@@ -621,6 +655,18 @@ bas_stk         equ os88_image_end + BAS_B_bas_stk   ; the evaluation stack, BAS
                                          ; counts in slots)
 bas_numbuf      equ os88_image_end + BAS_B_bas_numbuf   ; 8 bytes: ' -32768', 0
 bas_reg         equ os88_image_end + BAS_B_bas_reg   ; the tier C register file, R_N words
+bas_nvar        equ os88_image_end + BAS_B_bas_nvar   ; word: how many of the
+                                         ; table below are in use this RUN
+bas_vars        equ os88_image_end + BAS_B_bas_vars   ; the scalar variables
+                                         ; (SPEC.md 126.4): BAS_VAR_MAX entries
+                                         ; of BAS_VAR_SZ. A name is NOT stored -
+                                         ; the entry points at the one in
+                                         ; bas_prog, so a name is any length and
+                                         ; two long names cannot alias by being
+                                         ; truncated to a common prefix. The
+                                         ; text is stable for the whole of a
+                                         ; run, which is the only window the
+                                         ; table lives in
 bas_fp          equ os88_image_end + BAS_B_bas_fp   ; dword: the far pointer a dynamic
                                          ; OSAPI call is made through
 

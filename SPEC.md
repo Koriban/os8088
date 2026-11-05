@@ -240832,6 +240832,43 @@ mechanisms for named fields where two suffice.
 Reserving it costs nothing and un-reserving one later breaks programs, so it
 stays reserved against a use that has not arrived.
 
+### 126.17 Scalar variables, and what a RUN resets
+
+Wave 2's floor, and everything above it needs this first: `FOR` has no loop
+variable without it and `IF` has nothing to compare.
+
+**A name is any length, and no two names alias.** An entry does not hold the
+name — it holds **where the name is**, an offset into the program buffer and
+a length. A fixed-width name field would make `averylongname1` and
+`averylongname2` one variable, silently, which is the kind of wrong answer
+§126.7 exists to refuse; this cannot, because the comparison is against the
+program's own text.
+
+**Names are case-insensitive.** `Total`, `total` and `TOTAL` are one
+variable, as in every BASIC of this line and as `bas_wordis` already treats
+keywords.
+
+**A name never assigned reads 0.** An entry is born as eight zero bytes,
+which is 0.0 in §84's format. That is QuickBASIC's behaviour and it means a
+mistyped name is a second variable rather than an error — `OPTION EXPLICIT`
+(§126.10, decided, not built) is where a program asks for the error instead,
+and it gates exactly the create path.
+
+**Sixteen of them, and the seventeenth is refused by name** rather than
+overwriting one or wrapping.
+
+**The table is cleared by RUN, and by `File > New`.** This is a CONTRACT and
+not an implementation detail, because the entries point into the program
+text: an entry that outlives the text it points into names whatever now sits
+at that offset. Running `x = 7 / y = x * 6 / PRINT y`, retyping the program
+as `PRINT n / N = 3 / …` and running again put `y`'s entry — offset 6, one
+character — on top of the new text's `n`, and `PRINT n` answered **42** where
+it owed 0. Both doors are shut: `bas_run` clears the table on every run, and
+`File > New` clears the program, the console and the table together.
+
+**`File > New` clears the PROGRAM.** It reset only the console until wave 2,
+which read as New having done nothing, the program being the thing on screen.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

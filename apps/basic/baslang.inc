@@ -61,6 +61,25 @@ OP_PRINT    equ 7                   ; pop and print it
 OP_NEWL     equ 8                   ; end the print line
 OP_OSAPI    equ 9                   ; + a count byte: the tier C gateway
 OP_REG      equ 10                  ; pop an index, push that register
+OP_LOAD     equ 12                  ; + an index byte: push that variable
+OP_STORE    equ 13                  ; + an index byte: pop into that variable
+
+; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
+; An entry does NOT hold the name. It holds where the name IS - an offset into
+; bas_prog and a length - so a name may be any length and two long names
+; cannot alias by sharing a prefix, which a fixed-width name field would make
+; silent. The program text is what the editor holds and it does not move for
+; the whole of a run, which is the only window this table lives in: bas_run
+; clears it, so a name means the same variable from the first line to the last
+; and nothing survives into the next RUN.
+;
+; An index is resolved at COMPILE time and rides in the op stream as one byte,
+; so the interpreter multiplies and indexes rather than searching.
+BAS_VAR_MAX equ 16                  ; ...and a 17th is refused BY NAME
+BAS_VAR_SRC equ 0                   ; word: where the name is in bas_prog
+BAS_VAR_LEN equ 2                   ; word: how long it is
+BAS_VAR_VAL equ 4                   ; 8:    the value, packed (SPEC.md 84)
+BAS_VAR_SZ  equ 12
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -93,6 +112,17 @@ BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 bas_run:
     mov word [bas_src], bas_prog    ; the scanner's cursor
     mov word [bas_line], 1
+    mov word [bas_nvar], 0          ; **AND THE VARIABLES GO.** An entry keys
+                                    ; on WHERE its name is in bas_prog, not on
+                                    ; a copy of it, so an entry that outlives
+                                    ; the text it points into names whatever
+                                    ; now sits at that offset. Run
+                                    ; `x = 7 / y = x * 6 / PRINT y`, retype the
+                                    ; program as `PRINT n / N = 3 / ...`, and
+                                    ; y's entry - offset 6, one character -
+                                    ; spells `n` in the new text: `PRINT n`
+                                    ; answered 42. The comment on bas_varfind
+                                    ; said this line was here before it was.
 .stmt:
     call bas_skipsp
     mov si, [bas_src]
@@ -148,6 +178,34 @@ bas_c_stmt:
     mov si, bas_kw_osapi
     call bas_wordis
     je .osapi
+    ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
+    ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
+    ; miss, so looking the name up first would make a variable out of every
+    ; mistyped statement and then report the mistyped statement anyway -
+    ; leaving a phantom in the table, and one entry nearer the refusal, for a
+    ; line that never ran. bas_wordis and bas_skipsp both preserve DI and CX,
+    ; so the name is still in hand here.
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '='
+    jne .nostmt
+    inc word [bas_src]
+    call bas_varfind                ; AX = its index, created if new
+    jc .x                           ; the table is full; said by name
+    push ax
+    call bas_c_expr                 ; ...the value
+    cmp byte [bas_bad], 0
+    jne .xpop
+    mov al, OP_STORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .xpop
+    pop ax                          ; ...and the index rides with the op
+    jmp bas_emit
+.xpop:
+    pop ax
+    ret
+.nostmt:
     mov si, bas_e_stmt
     jmp bas_err
 .nokw:
@@ -329,8 +387,20 @@ bas_c_fact:
     mov al, OP_REG
     jmp bas_emit
 .nofn:
-    mov si, bas_e_fn
-    jmp bas_err
+    ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
+    ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
+    ; never assigned reads 0, which is what every BASIC of this line does -
+    ; the entry is born zero in bas_varfind. OPTION EXPLICIT (126, decided,
+    ; not built) is where a program says it would rather have the typo.
+    call bas_varfind
+    jc .x                           ; the table is full; said by name
+    push ax
+    mov al, OP_LOAD
+    call bas_emit
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .x
+    jmp bas_emit                    ; ...the index byte after it
 .noopen:
     mov si, bas_e_paren
     jmp bas_err
@@ -385,6 +455,126 @@ bas_c_fact:
     jmp bas_err
 
 ; -----------------------------------------------------------------------------
+; bas_varfind - the index of the variable named at DI/CX, created if new
+; in:  DI = the name in bas_prog, CX = its length
+; out: AX = the index, CF=0; CF=1 = the table is full (the reason is said)
+;      clobbers AX only
+;
+; CASE-INSENSITIVE, because BASIC is and bas_wordis already is: `Total` and
+; `total` are one variable, which is what every BASIC of this line does and
+; what a reader expects. A new entry is born ZERO - eight zero bytes IS 0.0 in
+; this format (SPEC.md 84) - so a read before any write answers 0 the way
+; QuickBASIC does, rather than whatever the last RUN left there.
+;
+; THE TYPO IS STILL A BUG and this does not fix it: `totl = total + 1` makes a
+; second variable rather than an error. That is the language's own behaviour
+; and SPEC.md 126's answer to it is OPTION EXPLICIT, which is decided and not
+; yet built; when it is, it gates exactly this routine's create path.
+; -----------------------------------------------------------------------------
+bas_varfind:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor bx, bx                      ; BX = the entry being compared
+    mov dx, [bas_nvar]
+.scan:
+    cmp bx, dx
+    jae .new
+    push bx
+    push cx
+    push di
+    call bas_varat                  ; SI = the entry. NOT `mul`: DX is the
+                                    ; table's count and mul writes DX:AX, so
+                                    ; the scan's own bound would be gone after
+                                    ; the first entry and every name would be
+                                    ; created fresh
+    cmp cx, [si + BAS_VAR_LEN]
+    jne .nextpop
+    mov si, [si + BAS_VAR_SRC]      ; SI = its name, in bas_prog
+.cmp:
+    or cx, cx
+    jz .hitpop
+    mov al, [si]
+    call bas_upper
+    mov ah, al
+    mov al, [di]
+    call bas_upper
+    cmp al, ah
+    jne .nextpop
+    inc si
+    inc di
+    dec cx
+    jmp .cmp
+.nextpop:
+    pop di
+    pop cx
+    pop bx
+    inc bx
+    jmp .scan
+.hitpop:
+    pop di
+    pop cx
+    pop bx
+    mov ax, bx                      ; found: AX = its index
+    clc
+    jmp .out
+.new:
+    cmp dx, BAS_VAR_MAX
+    jae .full
+    call bas_varat                  ; SI = the new entry; BX == DX here, the
+                                    ; scan having run the table out
+    mov [si + BAS_VAR_SRC], di
+    mov [si + BAS_VAR_LEN], cx
+    xor ax, ax                      ; ...born 0.0, which is eight zero bytes
+    mov [si + BAS_VAR_VAL], ax
+    mov [si + BAS_VAR_VAL + 2], ax
+    mov [si + BAS_VAR_VAL + 4], ax
+    mov [si + BAS_VAR_VAL + 6], ax
+    mov ax, dx
+    inc dx
+    mov [bas_nvar], dx
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.full:
+    mov si, bas_e_vars
+    call bas_err
+    stc
+    jmp .out
+
+; --- bas_varat - SI = the address of entry BX --------------------------------
+; BAS_VAR_SZ is 12, so this is (i*4) + (i*8) and no `mul`: the one caller that
+; wanted mul needed DX, and the interpreter's two want BX and CX kept too.
+bas_varat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1                       ; i*4
+    mov si, ax
+    shl ax, 1                       ; i*8
+    add si, ax                      ; i*12
+    add si, bas_vars
+    pop ax
+    ret
+
+; --- bas_upper - AL to upper case, ASCII letters only ------------------------
+bas_upper:
+    cmp al, 'a'
+    jb .no
+    cmp al, 'z'
+    ja .no
+    sub al, 32
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
 ; bas_exec - run the compiled op stream
 ; -----------------------------------------------------------------------------
 bas_exec:
@@ -407,6 +597,10 @@ bas_exec:
     je .osapi
     cmp al, OP_REG
     je .reg
+    cmp al, OP_LOAD
+    je .vload
+    cmp al, OP_STORE
+    je .vstore
     ; --- the binaries: A is the slot below the top, B is the top ------------
     cmp di, bas_stk + 2*BAS_SLOT
     jb .under
@@ -556,6 +750,56 @@ bas_exec:
 .badreg:
     mov si, bas_e_reg
     jmp bas_err
+
+; --- OP_LOAD / OP_STORE: a scalar variable (SPEC.md 126.4) ------------------
+; The index is one byte in the op stream, resolved at compile time, so neither
+; of these searches. EIGHT BYTES BY HAND rather than `rep movsb`, for the
+; reason OP_PUSHN carries: movsb writes to ES:DI and ES is the KERNEL'S
+; segment on entry to any callback, so the string move would copy into the
+; kernel. [bx+di] and [bx+si] are both legal 8086 addressings; [di+bx] is the
+; same mode written the other way round.
+.vload:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push bx
+    mov bl, [si]                    ; the index...
+    inc si
+    xor bh, bh
+    push si                         ; ...and the op cursor, out of the way
+    call bas_varat                  ; SI = the entry
+    add si, BAS_VAR_VAL
+    xor bx, bx
+.ld:
+    mov ax, [si + bx]
+    mov [di + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .ld
+    pop si
+    pop bx
+    add di, BAS_SLOT
+    jmp .next
+.vstore:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT                ; the value is consumed
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_varat
+    add si, BAS_VAR_VAL
+    xor bx, bx
+.st:
+    mov ax, [di + bx]
+    mov [si + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .st
+    pop si
+    pop bx
+    jmp .next
 
 ; --- OP_OSAPI: the gateway (BASIC-BINDINGS-PLAN 3) --------------------------
 .osapi:
@@ -936,5 +1180,5 @@ bas_e_deep:     db 'expression too deep', 0
 bas_e_long:     db 'line too long to compile', 0
 bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
 bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
-bas_e_fn:       db 'not a function this wave knows', 0
+bas_e_vars:     db 'too many variables - this wave holds 16', 0
 bas_e_wide:     db "'\\' truncates to an INTEGER and this is outside it", 0
