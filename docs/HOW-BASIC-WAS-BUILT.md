@@ -919,6 +919,31 @@ It is the third register-clobber of this chapter — `mul` taking DX in
 a helper quietly using a register its caller was still holding. The row
 caught this one in a single run.
 
+## `ELSEIF`, which the chain had already paid for
+
+`EXIT IF`'s pending-jump list turned out to be the expensive half of
+`ELSEIF` as well, and it was already built. An arm has two jumps: the
+false-jump at its head, whose destination the NEXT LINE names, and the
+finished-jump at its foot, whose destination nobody knows until `ENDIF`.
+The first wants one slot that each arm hands on; the second wants a list,
+and the list is the one the loops walk.
+
+That left `ELSE` carrying a patch slot of its own for no reason, so it was
+rewritten onto the chain too — a deletion in the middle of a feature, which
+is the shape worth noticing: the new construct made the old one simpler
+instead of sitting beside it. `ENDIF` now patches the last arm's false-jump
+if it has one and walks the chain either way, and an `ELSE` arm says it has
+none by leaving the slot at **0** — offset 0 in the op stream is the
+program's first opcode and can never be a placeholder, so zero is a free
+sentinel rather than a second field.
+
+234 bytes, and the row's fourth part reads all four shapes: the middle arm
+taken, the first arm taken with two true `ELSEIF`s below it that must not
+run, the `ELSE` reached when nothing matches, and a chain with no `ELSE` at
+all skipped entirely with the line after it still running. The last case is
+an `ELSEIF` chain inside a `FOR`, where the arms' jumps and the loop's share
+one op stream and must not cross: `t` sums to 112 over four iterations.
+
 ## Next
 
 `GOTO`/`GOSUB` and **procedures** with `LOCAL`/`STATIC` and recursion,

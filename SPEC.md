@@ -240962,6 +240962,37 @@ them. `OP_JT` is `OP_JF`'s twin and exists for this one caller.
 Blocks nest eight deep, and a ninth, an unclosed one at the end of the
 program, or a `WEND` that closes a `FOR` are each refused by name.
 
+### 126.20 `ELSEIF`, and an arm's two kinds of pending jump
+
+**`ELSEIF <cond> THEN`, one word and with a `THEN`.** GFA spells it `ELSE IF`
+and takes no `THEN` at all; this language's block `IF` already requires one
+(§126.18), so the arm keyword matches it rather than its ancestor, and a
+missing `THEN` is refused in the same words `IF` uses. `ELSEIF` after `ELSE`
+is a mistake of its own and says so, rather than reporting the generic
+wrong-block refusal.
+
+**An arm has two jumps and they are pending in different ways**, which is the
+whole of the implementation:
+
+* the **false-jump** at an arm's head has exactly ONE destination — the next
+  arm — and the next line names it, so the block entry's single `PAT` slot
+  holds it and each new arm patches the one before it. An `ELSE` arm has no
+  false-jump, and `PAT` = 0 says so: offset 0 in the op stream is the
+  program's first opcode and can never be a placeholder, so zero is a usable
+  "none" without a second field.
+* the **finished-jump** at an arm's foot goes to the end of the whole
+  construct, which no arm knows yet, and there is one per arm. Those are
+  §126.19's chain — each placeholder carries the offset of the one before it,
+  so the pending jumps are a list in the op stream and no table pays for
+  them — and `ENDIF` walks it once, through the same `bas_blkexits` that
+  closes a loop's `EXIT IF`s.
+
+So an `ELSEIF` costs one `OP_JMP`, one patch and one compare, and an arm's
+test is reached by a jump rather than by falling through the arm above it; a
+chain of `n` arms is `n` tests at worst and not `n` nested blocks. `ELSE` is
+the same code with the condition and the new `PAT` left out, which is how it
+came to be rewritten onto the chain rather than keeping its own patch slot.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

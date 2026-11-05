@@ -19983,7 +19983,7 @@ SOAK = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/mbr.bin", "build/boothd.bin", "build/kernel.sys",
                "build/sound.hma.bin", "build/xmem.bin")),
-    Row("basiclang", "soak", py("tests/basiclang.py"), 200.0,
+    Row("basiclang", "soak", py("tests/basiclang.py"), 260.0,
         "SPEC.md 126: BASIC/8088 RUNS A PROGRAM and the answers are right - "
         "the first row that executes the language at all. Everything before "
         "it checked the package's layout or its size, and the cost of that "

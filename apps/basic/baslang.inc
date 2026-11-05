@@ -281,6 +281,9 @@ bas_c_stmt:
     mov si, bas_kw_else
     call bas_wordis
     je .selse
+    mov si, bas_kw_elseif           ; BEFORE or after ELSE makes no
+    call bas_wordis                 ; difference: bas_wordis compares the
+    je .selseif                     ; whole word, never a prefix
     mov si, bas_kw_endif
     call bas_wordis
     je .sendif
@@ -427,33 +430,85 @@ bas_c_stmt:
 ; --- ELSE and ENDIF, as STATEMENTS (the block form) -------------------------
 ; The one-line form reads its own ELSE inside .if above and never reaches
 ; these; here ELSE begins a line, so it is a statement like any other.
+; AN ARM'S TWO JUMPS ARE DIFFERENT KINDS OF PENDING. The false-jump at the
+; arm's head has exactly ONE destination - the next arm, which the next line
+; names - so the entry's PAT slot holds it and each arm patches the last
+; one. The jump at the arm's FOOT goes to the end of the whole construct,
+; which no arm knows, and there is one per arm; so those are the chain
+; EXIT IF already built (SPEC.md 126.19), threaded through their own
+; placeholders and walked once by ENDIF. An ELSE arm has no false-jump, and
+; PAT = 0 says so - offset 0 is the program's first OPCODE and can never be
+; a placeholder, which is what makes zero a usable "none" here.
 .selse:
-    call bas_blkpop                 ; AX = kind, BX = top, CX = the patch
-    jc .x
+    call bas_blkpop                 ; AX = kind, BX = top, CX = the JF slot,
+    jc .x                           ; and the done-chain in [bas_blkex]
     cmp ax, BK_IF
     jne .wrongblk
-    push cx                         ; the IF's JF
-    mov al, OP_JMP                  ; ...the THEN arm steps over the ELSE
-    call bas_emit
-    mov cx, [bas_opn]
     push cx
+    mov ax, [bas_blkex]             ; this arm is finished: jump to the ENDIF
+    call bas_donejmp
+    mov [bas_blkex], ax
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]
+    call bas_patch                  ; ...and the JF lands on the ELSE arm
+    xor cx, cx                      ; ELSE opens no false-jump of its own
+    xor bx, bx
+    mov ax, BK_ELSE
+    call bas_blkpush
+    jc .x
+    mov ax, [bas_blkex]
+    jmp bas_blksetex
+
+; --- ELSEIF <cond> THEN: another arm (SPEC.md 126) -------------------------
+; GFA spells it `ELSE IF` and takes no THEN at all; this language's block IF
+; already requires THEN (SPEC.md 126.18), so it is one word here and takes
+; one, and the refusals say so by name.
+.selseif:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_ELSE                 ; ...which is a DIFFERENT mistake from
+    je .elifelse                    ; closing the wrong kind of block
+    cmp ax, BK_IF
+    jne .wrongblk
+    push cx
+    mov ax, [bas_blkex]
+    call bas_donejmp
+    mov [bas_blkex], ax
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]
+    call bas_patch                  ; the last arm's JF lands on THIS TEST,
+    call bas_c_rel                  ; which is the one instruction that
+    cmp byte [bas_bad], 0           ; makes ELSEIF cheaper than a nested IF
+    jne .x
+    call bas_skipsp
+    call bas_word
+    jc .elifnothen
+    mov si, bas_kw_then
+    call bas_wordis
+    jne .elifnothen
+    mov al, OP_JF
+    call bas_emit
+    mov cx, [bas_opn]               ; ...and this arm opens its own
     xor ax, ax
     call bas_emitw
     cmp byte [bas_bad], 0
-    jne .selsepop2
-    pop cx                          ; CX = the JMP's slot, the new patch
-    pop bx                          ; BX = the IF's JF slot
-    push cx
-    mov ax, [bas_opn]
-    call bas_patch                  ; ...which lands on the ELSE arm
-    pop cx
+    jne .x
     xor bx, bx
-    mov ax, BK_ELSE
-    jmp bas_blkpush
-.selsepop2:
-    pop bx
-    pop bx
-    ret
+    mov ax, BK_IF                   ; still a BK_IF: ENDIF closes either
+    call bas_blkpush
+    jc .x
+    mov ax, [bas_blkex]
+    jmp bas_blksetex
+.elifnothen:
+    mov si, bas_e_then
+    jmp bas_err
+.elifelse:
+    mov si, bas_e_elifelse
+    jmp bas_err
 ; --- DO ... LOOP [UNTIL c] and REPEAT ... UNTIL c (SPEC.md 126) ------------
 ; BOTH TEST AT THE BOTTOM, which is what distinguishes them from WHILE: the
 ; body always runs at least once. They are the same loop with two spellings
@@ -561,9 +616,13 @@ bas_c_stmt:
     cmp ax, BK_ELSE                 ; ...or the ELSE that followed one
     jne .wrongblk
 .endifok:
+    or cx, cx                       ; the last arm's false-jump, if the last
+    jz .endifch                     ; arm was not an ELSE
     mov bx, cx
     mov ax, [bas_opn]
-    jmp bas_patch
+    call bas_patch
+.endifch:
+    jmp bas_exitshere               ; ...then every arm's finished-jump
 .cls:
     mov al, OP_CLS
     jmp bas_emit
@@ -1370,6 +1429,44 @@ bas_blkexits:
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- bas_donejmp - a JMP onto the end of the construct, chained -----------
+; in:  AX = the chain's head so far, 0 if this is the first
+; out: AX = the new head, which is the placeholder this call just emitted
+;
+; The old head rides IN the placeholder, so the pending jumps are a list in
+; the op stream and no table pays for them.
+bas_donejmp:
+    push bx
+    push cx
+    mov cx, ax
+    mov al, OP_JMP
+    call bas_emit
+    mov bx, [bas_opn]
+    mov ax, cx
+    call bas_emitw
+    mov ax, bx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_blksetex - the top block's chain head is AX ----------------------
+; bas_blkpush zeroes the field deliberately, so that a caller who has never
+; heard of the chain cannot inherit one; a caller who HAS writes it here,
+; right after pushing.
+bas_blksetex:
+    push bx
+    push si
+    mov bx, [bas_nblk]
+    or bx, bx
+    jz .sxout
+    dec bx
+    call bas_blkat
+    mov [si + BAS_BLK_EXIT], ax
+.sxout:
+    pop si
+    pop bx
     ret
 
 ; --- bas_varhidden - a variable NO PROGRAM CAN NAME ------------------------
@@ -2244,6 +2341,7 @@ bas_kw_loop:    db 'LOOP', 0
 bas_kw_repeat:  db 'REPEAT', 0
 bas_kw_until:   db 'UNTIL', 0
 bas_kw_exit:    db 'EXIT', 0
+bas_kw_elseif:  db 'ELSEIF', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -2274,4 +2372,5 @@ bas_e_forstep:  db 'STEP takes a plain number here, not an expression', 0
 bas_e_nextvar:  db 'NEXT names a different variable from its FOR', 0
 bas_e_exitif:   db 'EXIT wants IF and a condition', 0
 bas_e_exitloop: db 'EXIT IF is not inside a loop', 0
+bas_e_elifelse: db 'ELSEIF cannot come after ELSE', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

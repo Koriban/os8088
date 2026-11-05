@@ -60,6 +60,9 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     anchor rather than on the value. A coarse red, but a red. It also caught
     a CL clobber in bas_blkat on the first run, as part two hanging and part
     three reading the stale console behind it.
+  * ELSEIF: taking ENDIF's walk of the finished-jump chain out - every arm
+    then falls into the one below it, and part 3's ELSE case goes wrong
+    before part 4 is reached.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -245,7 +248,58 @@ PART3 = [
     ("PRINT p",                          "3"),
 ]
 
-PARTS = (PART1, PART2, PART3)
+PART4 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- ELSEIF: the middle arm runs, and only it -------------------------
+    ("m = 2",                            None),
+    ("IF m = 1 THEN",                    None),
+    ("PRINT 41",                         None),
+    ("ELSEIF m = 2 THEN",                None),
+    ("PRINT 42",                         "42"),
+    ("ELSE",                             None),
+    ("PRINT 43",                         None),
+    ("ENDIF",                            None),
+    # ...the FIRST arm, with two ELSEIFs below it that must not run --------
+    ("m = 1",                            None),
+    ("IF m = 1 THEN",                    None),
+    ("PRINT 44",                         "44"),
+    ("ELSEIF m = 1 THEN",                None),      # true as well, and
+    ("PRINT 45",                         None),      # still not taken
+    ("ELSEIF m = 1 THEN",                None),
+    ("PRINT 46",                         None),
+    ("ENDIF",                            None),
+    # ...and the ELSE, when no arm matches ---------------------------------
+    ("m = 9",                            None),
+    ("IF m = 1 THEN",                    None),
+    ("PRINT 47",                         None),
+    ("ELSEIF m = 2 THEN",                None),
+    ("PRINT 48",                         None),
+    ("ELSE",                             None),
+    ("PRINT 49",                         "49"),
+    ("ENDIF",                            None),
+    # ...no ELSE at all, and nothing matching: the whole thing is skipped --
+    ("IF m = 1 THEN",                    None),
+    ("PRINT 50",                         None),
+    ("ELSEIF m = 2 THEN",                None),
+    ("PRINT 51",                         None),
+    ("ENDIF",                            None),
+    ("PRINT 52",                         "52"),      # ...and the line AFTER
+    # ...inside a loop, so the arms' jumps and the loop's must not cross ---
+    ("t = 0",                            None),
+    ("FOR k = 1 TO 4",                   None),
+    ("IF k = 2 THEN",                    None),
+    ("t = t + 10",                       None),
+    ("ELSEIF k = 3 THEN",                None),
+    ("t = t + 100",                      None),
+    ("ELSE",                             None),
+    ("t = t + 1",                        None),
+    ("ENDIF",                            None),
+    ("NEXT",                             None),
+    ("PRINT t",                          "112"),     # 1 + 10 + 100 + 1
+]
+
+PARTS = (PART1, PART2, PART3, PART4)
 
 QCHAR = {" ": "spc", "=": "equal", "+": "shift-equal", "-": "minus",
          "*": "shift-8", "/": "slash", "\\": "backslash",
