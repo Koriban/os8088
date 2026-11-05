@@ -240871,6 +240871,34 @@ it owed 0. Both doors are shut: `bas_run` clears the table on every run, and
 **`File > New` clears the PROGRAM.** It reset only the console until wave 2,
 which read as New having done nothing, the program being the thing on screen.
 
+### 126.18 Comparisons, and the one-line `IF`
+
+**TRUE IS -1 AND FALSE IS 0**, QuickBASIC's convention and not a private
+one: a comparison's answer is an ordinary number, so `PRINT 1 < 2` prints
+`-1` and a program may add, store or test it like any other value.
+
+`= <> < > <= >=`, and they bind **looser than all arithmetic** — `a + 1 <
+b * 2` is one comparison of two sums, which is what the operators are for.
+The two-character forms are read before the one-character ones, or `a <= b`
+parses as `a < (= b)` and is refused for the wrong reason.
+
+**One comparison, not a chain.** QuickBASIC accepts `a < b < c` and means
+`(a < b) < c` — a truth value compared against `c`, which is almost never
+the author's intent. Here the second operator is simply not consumed, so the
+line is refused by name instead of being given that reading.
+
+**`IF <cond> THEN <stmt> [ELSE <stmt>]`, on one line.** The block form —
+`IF` alone on a line, `ENDIF` below — spans STATEMENTS, and the interpreter
+compiles and runs one statement at a time. A construct whose arms are other
+lines needs the whole program compiled first, which is the change the loops
+need as well and belongs with them. The arms are compiled by re-entering the
+statement compiler, so `IF a THEN IF b THEN PRINT 1` nests with no extra
+code.
+
+**The condition is tested for ZERO, not converted.** `fp_iszero` on the
+accumulator, never `fp_a2i`: truncating first would make `IF 0.5 THEN`
+false, a number that is not zero answering as though it were.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

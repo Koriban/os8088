@@ -67,14 +67,26 @@ OP_OSAPI    equ 5                   ; + a count byte: the tier C gateway
 OP_REG      equ 6                   ; pop an index, push that register
 OP_LOAD     equ 7                   ; + an index byte: push that variable
 OP_STORE    equ 8                   ; + an index byte: pop into that variable
+OP_JF       equ 9                   ; + a word: pop, and jump there if FALSE
+OP_JMP      equ 10                  ; + a word: jump there
 ; --- the binaries, contiguous and last --------------------------------------
-OP_ADD      equ 9
-OP_SUB      equ 10
-OP_MUL      equ 11
-OP_DIV      equ 12                  ; `/`, real division
-OP_IDIV     equ 13                  ; `\`, integer division
-OP_N        equ 14                  ; how many there are, table included
-OP_BIN_N    equ 5                   ; ...and how many of them are binaries
+OP_ADD      equ 11
+OP_SUB      equ 12
+OP_MUL      equ 13
+OP_DIV      equ 14                  ; `/`, real division
+OP_IDIV     equ 15                  ; `\`, integer division
+; ...and the six comparisons, which are binaries like any other: two slots in,
+; one out. SPEC.md 126's truth is QuickBASIC's - **-1 is TRUE and 0 is
+; FALSE** - so a comparison's answer is an ordinary number and `PRINT 1 < 2`
+; says -1, which is what a program may then add, store or test.
+OP_EQ       equ 16
+OP_NE       equ 17
+OP_LT       equ 18
+OP_GT       equ 19
+OP_LE       equ 20
+OP_GE       equ 21
+OP_N        equ 22                  ; how many there are, table included
+OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
 ; An entry does NOT hold the name. It holds where the name IS - an offset into
@@ -176,6 +188,12 @@ bas_run:
 ; bas_c_stmt - compile one statement
 ; -----------------------------------------------------------------------------
 bas_c_stmt:
+    ; **SKIP SPACES FIRST.** bas_word reads from the cursor and does not skip
+    ; any, and bas_run only skipped before the top-level call - so the moment
+    ; IF compiled its arm by calling this proc again, the cursor sat on the
+    ; space before `PRINT` and the arm was refused as "not a statement".
+    ; Making the entry point tolerant is what lets it be reentrant at all.
+    call bas_skipsp
     call bas_word                   ; DI = the keyword, CX = its length
     jc .nokw
     mov si, bas_kw_print
@@ -190,6 +208,9 @@ bas_c_stmt:
     mov si, bas_kw_osapi
     call bas_wordis
     je .osapi
+    mov si, bas_kw_if
+    call bas_wordis
+    je .if
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -205,7 +226,7 @@ bas_c_stmt:
     call bas_varfind                ; AX = its index, created if new
     jc .x                           ; the table is full; said by name
     push ax
-    call bas_c_expr                 ; ...the value
+    call bas_c_rel                   ; ...the value
     cmp byte [bas_bad], 0
     jne .xpop
     mov al, OP_STORE
@@ -219,6 +240,85 @@ bas_c_stmt:
     ret
 .nostmt:
     mov si, bas_e_stmt
+    jmp bas_err
+
+; --- IF <cond> THEN <stmt> [ELSE <stmt>] (SPEC.md 126) ----------------------
+; ONE LINE. The block form - IF/THEN on a line of its own, ENDIF below it -
+; spans STATEMENTS, and bas_run compiles and runs one statement at a time
+; (it resets bas_opn per line), so a construct whose arms are other lines
+; needs the whole program compiled first. That is wave 2d's change, which
+; the loops need anyway; this is the half that fits the machine as it is,
+; and it is the half that introduces the branch the rest will reuse.
+;
+; The arms are compiled by calling bas_c_stmt AGAIN - the statement compiler
+; is reentrant, so `IF a THEN IF b THEN PRINT 1` nests without a word of
+; extra code, and so does ELSE.
+.if:
+    call bas_c_rel                  ; the condition
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    call bas_word                   ; ...THEN, and it is not optional: the
+    jc .nothen                      ; `IF x GOTO n` spelling is not this
+    mov si, bas_kw_then             ; language's and is refused by name
+    call bas_wordis
+    jne .nothen
+    mov al, OP_JF
+    call bas_emit
+    mov bx, [bas_opn]               ; where the target goes, once it is known
+    push bx
+    xor ax, ax
+    call bas_emitw                  ; ...a placeholder for now
+    cmp byte [bas_bad], 0
+    jne .ifpop
+    call bas_c_stmt                 ; the THEN arm
+    cmp byte [bas_bad], 0
+    jne .ifpop
+    call bas_skipsp                 ; ...ELSE?
+    call bas_word
+    jc .ifnoelse
+    mov si, bas_kw_else
+    call bas_wordis
+    jne .ifnoelse
+    mov al, OP_JMP                  ; the THEN arm must step over the ELSE
+    call bas_emit
+    mov bx, [bas_opn]
+    push bx
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .ifpop2
+    pop ax                          ; ...and the JF lands HERE, on the ELSE
+    pop bx
+    push ax
+    mov ax, [bas_opn]
+    call bas_patch
+    call bas_c_stmt                 ; the ELSE arm
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]
+    jmp bas_patch                   ; ...and the JMP lands after it
+.ifnoelse:
+    ; bas_word found a word and it was not ELSE, so the cursor goes back.
+    ; **NOT REACHABLE TODAY, and kept deliberately**: bas_word does not move
+    ; the cursor when it finds nothing, bas_skipsp does not cross a newline,
+    ; and no statement separator exists - so after an arm the probe always
+    ; lands on the line's end and returns CF=1 above. Deleting these two
+    ; instructions passes the gate, which is why they are described here
+    ; rather than claimed as tested. They become load-bearing the day `:` or
+    ; a block IF arrives, and both are cheaper to keep than to rediscover.
+    mov [bas_src], di
+    pop bx
+    mov ax, [bas_opn]
+    jmp bas_patch
+.ifpop2:
+    pop bx
+.ifpop:
+    pop bx
+    ret
+.nothen:
+    mov si, bas_e_then
     jmp bas_err
 .nokw:
     mov si, [bas_src]
@@ -240,7 +340,7 @@ bas_c_stmt:
     ; sequence of related calls short.
     xor cx, cx                      ; CX = how many values pushed
 .oarg:
-    call bas_c_expr
+    call bas_c_rel  
     cmp byte [bas_bad], 0
     jne .x
     inc cx
@@ -272,7 +372,7 @@ bas_c_stmt:
     jz .pbare
     cmp al, 10
     je .pbare
-    call bas_c_expr                 ; the value...
+    call bas_c_rel                   ; the value...
     cmp byte [bas_bad], 0
     jne .x
     mov al, OP_PRINT                ; ...and print it
@@ -282,6 +382,75 @@ bas_c_stmt:
     jmp bas_emit
 .x:
     ret
+
+; -----------------------------------------------------------------------------
+; bas_c_rel - expr [ relop expr ], the whole of what a VALUE is
+;
+; **THIS IS THE ENTRY POINT NOW, not bas_c_expr.** A comparison binds looser
+; than any arithmetic, so it sits above the whole of it: `a + 1 < b * 2` is
+; one comparison of two sums, which is what every BASIC of this line means
+; and what makes the operators usable without parentheses.
+;
+; ONE comparison, not a chain. `a < b < c` is accepted by QuickBASIC and
+; means `(a < b) < c` - a truth value compared against c - which is almost
+; never what the author meant. Here the second `<` is simply not consumed,
+; so the statement ends early and the line is refused by name rather than
+; being given that reading.
+;
+; THE TWO-CHARACTER OPERATORS ARE TESTED FIRST. `<` is a prefix of `<=` and
+; `<>`, so testing the single characters first would read `a <= b` as
+; `a < (= b)` and refuse it for the wrong reason.
+; -----------------------------------------------------------------------------
+bas_c_rel:
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    mov ah, [si + 1]
+    cmp al, '<'
+    je .lt
+    cmp al, '>'
+    je .gt
+    cmp al, '='
+    je .eq
+.x:
+    ret
+.lt:
+    cmp ah, '='
+    je .le2
+    cmp ah, '>'
+    je .ne2
+    mov cl, OP_LT
+    jmp .one
+.gt:
+    cmp ah, '='
+    je .ge2
+    mov cl, OP_GT
+    jmp .one
+.eq:
+    mov cl, OP_EQ
+    jmp .one
+.le2:
+    mov cl, OP_LE
+    jmp .two
+.ge2:
+    mov cl, OP_GE
+    jmp .two
+.ne2:
+    mov cl, OP_NE
+.two:
+    inc word [bas_src]              ; the second character as well
+.one:
+    inc word [bas_src]
+    push cx
+    call bas_c_expr                 ; ...the right-hand side
+    pop cx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, cl
+    jmp bas_emit
 
 ; -----------------------------------------------------------------------------
 ; bas_c_expr - expression:  term { (+|-) term }
@@ -388,7 +557,7 @@ bas_c_fact:
     cmp byte [si], '('
     jne .noopen
     inc word [bas_src]
-    call bas_c_expr
+    call bas_c_rel  
     cmp byte [bas_bad], 0
     jne .x
     call bas_skipsp
@@ -449,7 +618,7 @@ bas_c_fact:
     jmp bas_emit
 .paren:
     inc word [bas_src]
-    call bas_c_expr
+    call bas_c_rel  
     cmp byte [bas_bad], 0
     jne .x
     call bas_skipsp
@@ -747,6 +916,69 @@ bas_exec:
     mov si, bas_e_reg
     jmp bas_err
 
+; --- OP_JF / OP_JMP: the branch (SPEC.md 126) -------------------------------
+; The operand is a word - an offset into bas_ops - and a FORWARD one is
+; patched by the compiler once the arm it skips has been emitted
+; (bas_patch). OP_JF pops its condition.
+;
+; **THE TEST IS fp_iszero, NOT fp_a2i.** Truth here is QuickBASIC's: zero is
+; false and anything else is true. Converting to an integer first would
+; truncate, so `IF 0.5 THEN` would be FALSE - a number that is not zero
+; answering as though it were.
+.jf:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT                ; the condition is consumed
+    push si
+    mov si, di
+    call fp_unpack_a
+    pop si
+    push bx
+    mov bx, fp_am0
+    call fp_iszero                  ; CF=1: A is zero, so the branch is taken
+    pop bx
+    jc .jmpop
+    add si, 2                       ; true: step over the target word
+    jmp .next
+.jmpop:
+    mov si, [si]
+    add si, bas_ops
+    jmp .next
+
+; --- the six comparisons, as ONE body (SPEC.md 126) -------------------------
+; .binary leaves the opcode in BX - it is the word it indexed bas_bintab with
+; - so the operator is still in hand here and six bodies collapse to one
+; table of masks. fp_cmpab answers -1, 0 or 1 and keeps both accumulators;
+; the result's SIGN picks a bit, the operator picks a mask, and the AND of
+; them is the answer. -1 is TRUE, which is what every BASIC of this line
+; says and what makes `PRINT 1 < 2` print -1 rather than a word.
+.cmp:
+    push bx
+    call fp_cmpab                   ; AX = -1 / 0 / 1
+    mov cl, 1                       ; ...A > B
+    or ax, ax
+    jz .cz
+    jns .cgo
+    mov cl, 4                       ; ...A < B
+    jmp .cgo
+.cz:
+    mov cl, 2                       ; ...equal
+.cgo:
+    pop bx
+    push bx
+    sub bx, OP_EQ*2                 ; BX = which comparison, doubled
+    shr bx, 1
+    mov bl, [bas_relmask + bx]
+    xor bh, bh
+    test bl, cl
+    pop bx
+    mov ax, 0
+    jz .cset
+    mov ax, -1                      ; TRUE
+.cset:
+    call fp_i2a
+    jmp .store
+
 ; --- OP_LOAD / OP_STORE: a scalar variable (SPEC.md 126.4) ------------------
 ; The index is one byte in the op stream, resolved at compile time, so neither
 ; of these searches. EIGHT BYTES BY HAND rather than `rep movsb`, for the
@@ -890,11 +1122,19 @@ bas_optab:
     dw bas_exec.reg                 ; OP_REG
     dw bas_exec.vload               ; OP_LOAD
     dw bas_exec.vstore              ; OP_STORE
+    dw bas_exec.jf                  ; OP_JF
+    dw bas_exec.jmpop               ; OP_JMP
     dw bas_exec.binary              ; OP_ADD  - all five share the operand
     dw bas_exec.binary              ; OP_SUB    prologue, so every one of them
     dw bas_exec.binary              ; OP_MUL    enters .binary and is sorted
     dw bas_exec.binary              ; OP_DIV    out by bas_bintab below.
-    dw bas_exec.binary              ; OP_IDIV   (NO TRAILING BACKSLASH IN A
+    dw bas_exec.binary              ; OP_IDIV
+    dw bas_exec.binary              ; OP_EQ
+    dw bas_exec.binary              ; OP_NE
+    dw bas_exec.binary              ; OP_LT
+    dw bas_exec.binary              ; OP_GT
+    dw bas_exec.binary              ; OP_LE
+    dw bas_exec.binary              ; OP_GE     (NO TRAILING BACKSLASH IN A
                                     ; COMMENT: nasm continues the line on one
                                     ; even there, and an ASCII brace drawn up
                                     ; the right margin silently merged two of
@@ -904,12 +1144,31 @@ BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
 
+; --- which results each comparison calls TRUE -------------------------------
+; one bit per fp_cmpab answer: 4 = A<B, 2 = A=B, 1 = A>B
+bas_relmask:
+    db 2                            ; OP_EQ : equal
+    db 5                            ; OP_NE : less or greater
+    db 4                            ; OP_LT
+    db 1                            ; OP_GT
+    db 6                            ; OP_LE : less or equal
+    db 3                            ; OP_GE : greater or equal
+BAS_RELMASK_N equ $ - bas_relmask
+    times BAS_RELMASK_N - 6 db 0
+    times 6 - BAS_RELMASK_N db 0
+
 bas_bintab:
     dw bas_exec.add                 ; OP_ADD
     dw bas_exec.sub                 ; OP_SUB
     dw bas_exec.mul                 ; OP_MUL
     dw bas_exec.div                 ; OP_DIV
     dw bas_exec.idiv                ; OP_IDIV
+    dw bas_exec.cmp                 ; OP_EQ  - all six comparisons share one
+    dw bas_exec.cmp                 ; OP_NE    body and tell themselves apart
+    dw bas_exec.cmp                 ; OP_LT    by the opcode STILL IN BX, which
+    dw bas_exec.cmp                 ; OP_GT    .binary leaves there: one table
+    dw bas_exec.cmp                 ; OP_LE    of masks instead of six bodies
+    dw bas_exec.cmp                 ; OP_GE
 BAS_BINTAB_N equ ($ - bas_bintab) / 2
     times BAS_BINTAB_N - OP_BIN_N db 0
     times OP_BIN_N - BAS_BINTAB_N db 0
@@ -1085,6 +1344,35 @@ bas_wordis:
 ; =============================================================================
 
 ; --- bas_emit / bas_emitw - one byte, one word, into the op stream -----------
+; --- bas_emitw - AX as a WORD into the op stream -----------------------------
+; Retired in the audit for having no caller; OP_JF and OP_JMP are that caller,
+; and their operand is a word because an op-stream offset is.
+bas_emitw:
+    push bx
+    mov bx, [bas_opn]
+    cmp bx, BAS_OPS_MAX - 4
+    jae .wfull
+    mov [bas_ops + bx], ax
+    add word [bas_opn], 2
+    pop bx
+    ret
+.wfull:
+    pop bx
+    mov si, bas_e_long
+    jmp bas_err
+
+; --- bas_patch - the word at op-stream offset BX becomes AX ------------------
+; A forward jump's target is not known until its arm is compiled, so the two
+; emit a placeholder and come back. BX is where the placeholder is.
+bas_patch:
+    push bx
+    cmp bx, BAS_OPS_MAX - 2
+    jae .pout
+    mov [bas_ops + bx], ax
+.pout:
+    pop bx
+    ret
+
 bas_emit:
     push bx
     mov bx, [bas_opn]
@@ -1220,6 +1508,9 @@ bas_kw_rem:     db 'REM', 0
 bas_kw_end:     db 'END', 0
 bas_kw_osapi:   db 'OSAPI', 0
 bas_kw_reg:     db 'REG', 0
+bas_kw_if:      db 'IF', 0
+bas_kw_then:    db 'THEN', 0
+bas_kw_else:    db 'ELSE', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -1238,4 +1529,5 @@ bas_e_long:     db 'line too long to compile', 0
 bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
 bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
 bas_e_vars:     db 'too many variables - this wave holds 16', 0
+bas_e_then:     db 'IF wants THEN on the same line', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

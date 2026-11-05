@@ -465,7 +465,9 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           # than a path or a URL (tests/basiclang.py types BASIC programs).
           # US layout, which is what the kernel's own table is.
           "+": ("equal", 1), "*": ("8", 1), "(": ("9", 1), ")": ("0", 1),
-          "\\": ("backslash", 0)}
+          "\\": ("backslash", 0),
+          # ...and the comparisons, for the same reason
+          "<": ("comma", 1), ">": ("dot", 1)}
 
 
 class _Sock(object):

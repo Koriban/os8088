@@ -753,9 +753,68 @@ whole of what a future carrier needs, and no shared code changed.
 
 **12,109 image + 7,950 bss = 20,059 of 65,024, 30.8%.**
 
+## Wave 2c — comparisons, and the one-line `IF`
+
+Wave 2's floor, the way variables were 2a's: there were no comparison
+operators at all and no truth convention, so `IF` could not exist and
+neither could `WHILE` or `UNTIL`.
+
+`= <> < > <= >=`, binding looser than all arithmetic, answering **-1 for
+true and 0 for false** — an ordinary number, so `PRINT 1 < 2` prints -1.
+SPEC.md 126.18 is the contract. Three details worth keeping:
+
+- the six comparisons are **one body**, not six. They are binaries like any
+  other, and `.binary` leaves the opcode in BX, so the operator is still in
+  hand at the handler: `fp_cmpab` answers -1/0/1, the result's sign picks a
+  bit, the operator picks a mask from a six-byte table, and the AND of them
+  is the answer;
+- the condition is tested with **`fp_iszero`, never `fp_a2i`** — converting
+  first would truncate and make `IF 0.5 THEN` false, a number that is not
+  zero answering as though it were;
+- `IF` compiles its arm by **re-entering the statement compiler**, so
+  `IF a THEN IF b THEN PRINT 1` nests with no extra code. That reentrancy
+  is also what exposed the one real bug below.
+
+**The block `IF` is not here, deliberately.** Its arms are other LINES, and
+`bas_run` compiles and runs one statement at a time. Compiling the whole
+program first is the change the loops need anyway, so it belongs with them
+rather than being half-done here. The one-line form introduces `OP_JF` and
+`OP_JMP` and the backpatching the rest will reuse.
+
+### The bug, and the two mutations
+
+Making the statement compiler reentrant broke it immediately: `bas_word`
+reads from the cursor and skips nothing, and `bas_run` only skipped spaces
+before the TOP-LEVEL call. So the moment `IF` compiled its arm by calling
+the compiler again, the cursor sat on the space before `PRINT` and the arm
+came back *"not a statement this wave knows"* — reported against the IF's
+own line, which is what made it look like `IF` was unrecognised. The entry
+point skips for itself now, which is what being reentrant means.
+
+Mutated, because the row is what makes this wave different from the last
+three: giving `OP_LT` the mask that means *greater* reports `PRINT 1 < 2`
+answering 0 and every IF arm inverting — the 99, 98 and 97 in the row's
+program are values no correct run prints, and they appear. And one mutation
+**passed**: deleting the cursor restore in `.ifnoelse` changes nothing,
+because `bas_word` does not move the cursor when it finds no word and
+`bas_skipsp` does not cross a newline, so after an arm the ELSE probe always
+lands on the line's end. Those two instructions are unreachable in today's
+grammar; the comment there says so rather than letting them read as
+load-bearing.
+
+`tests/basiclang.py` is 30 lines and 23 answers now, 104s. Its buffer anchor
+had to change with this wave: it found the console by BASIC's banner as
+cells, and 23 answers scroll the banner off the 25-row buffer. It finds the
+buffer by its SHAPE instead — one attribute byte across 25 rows of printable
+cells, which nothing the program prints can take away.
+
+**12,612 image + 7,950 bss = 20,562 of 65,024, 31.6%.**
+
 ## Next
 
-The rest of wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
+The rest of wave 2: **loops** (`FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP`,
+`REPEAT`/`UNTIL`, `EXIT IF`), which need the whole program compiled before
+it runs, and then **procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.

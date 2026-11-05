@@ -46,6 +46,12 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     puts above, and since wave 2a that is bas_nvar and the variable table,
     not register A. The mutation passed a row whose deep line stood alone,
     which is the fixture failing and not the assertion.
+  * wave 2c: giving `OP_LT` the mask that means "greater" reports
+    `PRINT 1 < 2` answering 0, and every IF arm inverting - the 99, 98 and
+    97 above are values no correct run prints, which is what they are for.
+  * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
+    unreachable in this grammar (see the comment there) and the row says so
+    rather than covering it by accident.
   * the ink assertion is **NOT** shown to catch its own defect. Deleting
     bas_paint's `con_takescroll` leaves this row green - with one run and
     with three - though it blanks the pane under a hand-driven session of
@@ -105,6 +111,23 @@ PROGRAM = [
     ("PRINT n",                          "0"),       # never assigned reads 0
     ("N = 3",                            None),
     ("PRINT n + N",                      "6"),       # ...and names fold case
+    # --- wave 2c: the comparisons, and IF ---------------------------------
+    ("PRINT 1 < 2",                      "-1"),      # TRUE is -1, a NUMBER
+    ("PRINT 2 < 1",                      "0"),       # ...and false is 0
+    ("PRINT 3 = 3",                      "-1"),
+    ("PRINT 3 <> 3",                     "0"),
+    ("PRINT 3 <= 3",                     "-1"),      # the two-character ones
+    ("PRINT 3 >= 4",                     "0"),       # are read before `<`/`>`
+    ("PRINT 1+1 < 3*1",                  "-1"),      # looser than arithmetic
+    ("IF 1 < 2 THEN PRINT 11",           "11"),      # the taken arm
+    ("IF 2 < 1 THEN PRINT 99",           None),      # ...and the skipped one
+    ("IF 2 < 1 THEN PRINT 98 ELSE PRINT 12", "12"),  # ELSE
+    ("IF 1 < 2 THEN PRINT 13 ELSE PRINT 97", "13"),  # ...and not ELSE
+    ("IF 0 THEN PRINT 96",               None),      # 0 is false
+    ("IF -1 THEN PRINT 14",              "14"),      # anything else is true
+    ("q = 5",                            None),
+    ("IF q > 4 THEN q = 6",              None),      # an arm that ASSIGNS
+    ("PRINT q",                          "6"),
 ]
 
 QCHAR = {" ": "spc", "=": "equal", "+": "shift-equal", "-": "minus",
@@ -280,55 +303,45 @@ def typ(m, text):
 def console_lines(m):
     """Every non-blank line of the console BUFFER, in order.
 
-    The buffer is located by its own content - the banner, as cells - so this
-    needs no kernel symbol and no package map, and works on a package the
-    loader put wherever it liked.
+    **FOUND BY ITS SHAPE, NOT BY ITS CONTENT.** The first version anchored on
+    BASIC's banner as cells - which works until the program prints more than
+    the 25-row buffer holds and the banner scrolls off the top, and wave 2c's
+    program does exactly that. A console buffer is 25 rows of 80 (character,
+    attribute) pairs with ONE attribute throughout, so the region is found by
+    that: every odd byte equal, non-zero, over at least CON_ROWS rows, and
+    the characters overwhelmingly printable. Nothing else in the megabyte
+    looks like that, and nothing the program prints can take it away.
     """
     img = m.read(0, 0x100000)
-    pat = BANNER.encode()
-    nxt = b"Ready"
-    at = -1
-    # TWO ROWS, NOT ONE. The banner alone matched in the package IMAGE, where
-    # the same letters sit as a plain string and the every-other-byte test can
-    # still land on them by accident - and the row then read code as text and
-    # reported a screenful of NULs. `Ready` one row below is the confirmation:
-    # bas_conreset writes the pair together and nothing else in memory has
-    # them a row apart AS CELLS.
-    for i in range(len(img) - ROW - 2 * len(nxt)):
-        if img[i] != pat[0]:
+    best = None
+    i = 0
+    n = len(img)
+    while i < n - ROW:
+        attr = img[i + 1]
+        if attr == 0 or attr == 0xFF:
+            i += 1
             continue
-        if not all(img[i + 2 * k] == pat[k] for k in range(len(pat))):
-            continue
-        j = i + ROW
-        if all(img[j + 2 * k] == nxt[k] for k in range(len(nxt))):
-            at = i
-            break
-    if at < 0:
+        # how many whole rows from here share this attribute in every cell?
+        rows = 0
+        base = i
+        while base + ROW <= n and all(img[base + 2 * c + 1] == attr
+                                      for c in range(CON_COLS)):
+            rows += 1
+            base += ROW
+        if rows >= CON_ROWS:
+            span = img[i:i + rows * ROW]
+            chars = [span[2 * k] for k in range(len(span) // 2)]
+            good = sum(1 for c in chars if 32 <= c < 127)
+            if good >= 0.95 * len(chars):
+                if best is None or rows > best[1]:
+                    best = (i, rows)
+        i += max(1, rows * ROW) if rows else 1
+    if best is None:
         return None
-    print("      console buffer: banner at 0x%X" % at)
-    # BOUND IT BY THE ATTRIBUTE BYTE. A cell is (character, attribute) and
-    # the console writes ONE attribute for the whole pane, so every odd byte
-    # of a real row is that value and no row of package image is. Without
-    # this the window either side of the banner came back as "lines" of
-    # decoded code - the answers were right and buried in it.
-    attr = img[at + 1]
-    rows = []
-    base = at
-    while base - ROW >= 0 and all(img[base - ROW + 2 * c + 1] == attr
-                                  for c in range(CON_COLS)):
-        base -= ROW                                   # up to the first row
-    lo, n = base, 0
-    while (lo + (n + 1) * ROW <= len(img) and n < CON_ROWS
-           and all(img[lo + n * ROW + 2 * c + 1] == attr
-                   for c in range(CON_COLS))):
-        n += 1
+    lo, rows = best
+    print("      console buffer: 0x%X, %d rows" % (lo, rows))
     out = []
-    for base in range(lo, lo + n * ROW, ROW):
-        if base + ROW > len(img):
-            break
-        # PRINTABLE ONLY. `str.strip()` does not remove NUL - it is not
-        # whitespace - so a row of zeroed cells came through as a "line" 80
-        # characters long and the comparison printed the whole buffer.
+    for base in range(lo, lo + rows * ROW, ROW):
         txt = "".join(chr(img[base + 2 * c])
                       if 32 <= img[base + 2 * c] < 127 else " "
                       for c in range(CON_COLS)).strip()
@@ -423,7 +436,7 @@ def main():
                    capture_output=True, cwd=ROOT)
     print("      screen: %s" % os.path.join(m.tmp, "end.png"))
     got = console_lines(m)
-    if not check(got is not None, "the console buffer is found by its banner",
+    if not check(got is not None, "the console buffer is found by its shape",
                  why="no run can be read without it"):
         return 1
     want = [e for _, e in PROGRAM if e is not None]
