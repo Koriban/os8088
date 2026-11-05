@@ -54,6 +54,12 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
   * the block IF: stopping ENDIF from patching its forward jump reports the
     run dying immediately after part three's sentinel - the unpatched jump
     lands at offset 0.
+  * EXIT IF: taking the TOP open block in bas_blkinloop instead of searching
+    downwards for the nearest loop - the mutant refuses `EXIT IF` inside a
+    block IF and part 3 never prints its sentinel, so the row fails on the
+    anchor rather than on the value. A coarse red, but a red. It also caught
+    a CL clobber in bas_blkat on the first run, as part two hanging and part
+    three reading the stale console behind it.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -222,6 +228,21 @@ PART3 = [
     ("g = g + 2",                        None),
     ("LOOP UNTIL g >= 6",                None),
     ("PRINT g",                          "6"),
+    # --- EXIT IF: leaves the innermost LOOP, not the innermost block ------
+    ("h = 0",                            None),
+    ("FOR k = 1 TO 100",                 None),
+    ("h = h + 1",                        None),
+    ("EXIT IF h >= 4",                   None),
+    ("NEXT",                             None),
+    ("PRINT h",                          "4"),       # ...not 100
+    ("p = 0",                            None),
+    ("WHILE 1",                          None),      # ...and out of a WHILE
+    ("p = p + 1",                        None),
+    ("IF p > 2 THEN",                    None),      # from inside a BLOCK IF,
+    ("EXIT IF 1",                        None),      # which is the case the
+    ("ENDIF",                            None),      # downward search is for
+    ("WEND",                             None),
+    ("PRINT p",                          "3"),
 ]
 
 PARTS = (PART1, PART2, PART3)

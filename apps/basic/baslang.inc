@@ -70,6 +70,7 @@ OP_STORE    equ 8                   ; + an index byte: pop into that variable
 OP_JF       equ 9                   ; + a word: pop, and jump there if FALSE
 OP_JMP      equ 10                  ; + a word: jump there
 OP_CLS      equ 23                  ; clear the console
+OP_JT       equ 24                  ; + a word: pop, and jump there if TRUE
 OP_LINE     equ 22                  ; + a word: the line now running, for a
                                     ; refusal's message (it is LAST because
                                     ; the binaries must stay contiguous)
@@ -89,7 +90,7 @@ OP_LT       equ 18
 OP_GT       equ 19
 OP_LE       equ 20
 OP_GE       equ 21
-OP_N        equ 24                  ; how many there are, table included
+OP_N        equ 25                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -119,7 +120,15 @@ BAS_BLK_KIND equ 0                  ; word: BK_* below
 BAS_BLK_TOP  equ 2                  ; word: the op offset to jump back to
 BAS_BLK_PAT  equ 4                  ; word: the forward word to patch
 BAS_BLK_V    equ 6                  ; word: FOR's loop variable, else unused
-BAS_BLK_SZ   equ 8
+BAS_BLK_EXIT equ 8                  ; word: the head of this loop's chain of
+                                    ; EXIT IFs, 0 = none. A loop may have
+                                    ; several and none of them knows where
+                                    ; the end is yet, so each jump's
+                                    ; placeholder holds the offset of the
+                                    ; one before it and the closer walks
+                                    ; them - the list lives in the op stream
+                                    ; and costs no table
+BAS_BLK_SZ   equ 16                 ; a POWER OF TWO so bas_blkat is a shift
 BK_IF    equ 1
 BK_ELSE  equ 2
 BK_WHILE equ 3
@@ -287,6 +296,9 @@ bas_c_stmt:
     mov si, bas_kw_until
     call bas_wordis
     je .until
+    mov si, bas_kw_exit
+    call bas_wordis
+    je .exit
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -451,6 +463,40 @@ bas_c_stmt:
 ;
 ; Neither opens a FORWARD jump, so there is nothing to patch: the block
 ; carries only where the top is, and the closing test jumps back to it.
+; --- EXIT IF <cond>: leave the innermost loop (SPEC.md 126) ----------------
+.exit:
+    call bas_skipsp
+    call bas_word                   ; EXIT IF, and IF is not optional - a
+    jc .exitnoif                    ; bare EXIT is GFA's and means the same,
+    mov si, bas_kw_if               ; but one spelling is enough
+    call bas_wordis
+    jne .exitnoif
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_blkinloop              ; BX = which loop, searched DOWNWARDS
+    jc .x
+    push bx
+    mov al, OP_JT                   ; ...leave it when the condition holds
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    push bx
+    call bas_blkat
+    mov ax, [si + BAS_BLK_EXIT]     ; the chain's old head rides in the
+    mov cx, [bas_opn]               ; placeholder, and this becomes the head
+    call bas_emitw
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_blkat
+    mov [si + BAS_BLK_EXIT], cx
+    ret
+.exitnoif:
+    mov si, bas_e_exitif
+    jmp bas_err
+
 .do:
     mov bx, [bas_opn]
     xor cx, cx
@@ -479,7 +525,8 @@ bas_c_stmt:
     mov al, OP_JMP                  ; is what a program asking for one means
     call bas_emit
     mov ax, bx
-    jmp bas_emitw
+    call bas_emitw
+    jmp bas_exitshere
 .loopuntil:
     pop bx
     jmp .bottom
@@ -500,7 +547,8 @@ bas_c_stmt:
     mov al, OP_JF
     call bas_emit
     pop ax
-    jmp bas_emitw
+    call bas_emitw
+    jmp bas_exitshere
 .btmpop:
     pop bx
     ret
@@ -651,7 +699,8 @@ bas_c_stmt:
     jne .nextvar
 .nextdone:
     mov ax, [bas_opn]
-    jmp bas_patch
+    call bas_patch
+    jmp bas_exitshere
 .nextvar:
     mov si, bas_e_nextvar
     jmp bas_err
@@ -710,7 +759,8 @@ bas_c_stmt:
     cmp byte [bas_bad], 0
     jne .x
     mov ax, [bas_opn]               ; ...and the WHILE's JF lands here
-    jmp bas_patch
+    call bas_patch
+    jmp bas_exitshere               ; ...as does every EXIT IF it holds
 .wrongblk:
     mov si, bas_e_wrongblk
     jmp bas_err
@@ -1130,11 +1180,14 @@ bas_varfind:
 ; bas_blkpop - AX = kind, BX = top, CX = patch slot; CF=1 = none open, said
 bas_blkat:
     push ax
-    mov ax, bx
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1                       ; i*8 - BAS_BLK_SZ, and a shift not a mul
-    mov si, ax
+    mov ax, bx                      ; i*16 = BAS_BLK_SZ, in FOUR shifts and
+    shl ax, 1                       ; **NOT `mov cl,4 / shl ax,cl`**: CX is
+    shl ax, 1                       ; bas_blkpush's PATCH SLOT argument, and
+    shl ax, 1                       ; clobbering CL corrupted the forward
+    shl ax, 1                       ; jump of every block pushed - which on
+    mov si, ax                      ; a loop is a jump to nowhere, so the
+                                    ; program hung and the row read a stale
+                                    ; console for the part after it
     add si, bas_blk
     pop ax
     ret
@@ -1153,6 +1206,8 @@ bas_blkpush:
     mov [si + BAS_BLK_PAT], cx
     mov ax, [bas_blkv]              ; FOR's loop variable, parked by the
     mov [si + BAS_BLK_V], ax        ; caller; anything else leaves it alone
+    xor ax, ax
+    mov [si + BAS_BLK_EXIT], ax     ; ...and no EXIT IF has been seen yet
     inc word [bas_nblk]
     clc
 .out:
@@ -1176,6 +1231,8 @@ bas_blkpop:
     call bas_blkat
     mov ax, [si + BAS_BLK_V]
     mov [bas_blkv], ax
+    mov ax, [si + BAS_BLK_EXIT]
+    mov [bas_blkex], ax
     mov ax, [si + BAS_BLK_KIND]
     mov cx, [si + BAS_BLK_PAT]
     mov bx, [si + BAS_BLK_TOP]
@@ -1252,6 +1309,68 @@ bas_for_step:
     mov si, bas_e_forstep
     call bas_err
     jmp .sout
+
+; --- bas_exitshere - the loop just closed: its EXIT IFs land on this op ----
+bas_exitshere:
+    mov bx, [bas_blkex]             ; the chain bas_blkpop took off the entry
+    mov ax, [bas_opn]
+    jmp bas_blkexits
+
+; --- bas_blkinloop - BX = the innermost OPEN LOOP's index; CF=1 if none ----
+; EXIT IF leaves the nearest LOOP, not the nearest block: written inside a
+; block IF inside a WHILE it must still leave the WHILE, so the stack is
+; searched downwards rather than its top being assumed.
+bas_blkinloop:
+    push ax
+    push si
+    mov bx, [bas_nblk]
+.ilp:
+    or bx, bx
+    jz .inone
+    dec bx
+    call bas_blkat
+    mov ax, [si + BAS_BLK_KIND]
+    cmp ax, BK_WHILE
+    je .ifound
+    cmp ax, BK_FOR
+    je .ifound
+    cmp ax, BK_DO
+    je .ifound
+    cmp ax, BK_REPEAT
+    je .ifound
+    jmp .ilp
+.ifound:
+    clc
+    pop si
+    pop ax
+    ret
+.inone:
+    mov si, bas_e_exitloop
+    call bas_err
+    stc
+    pop si
+    pop ax
+    ret
+
+; --- bas_blkexits - every EXIT IF in the chain at BX lands on AX ------------
+; Each placeholder holds the offset of the one before it, so the walk reads
+; a link, patches it, and follows what it read.
+bas_blkexits:
+    push ax
+    push bx
+    push cx
+.elp:
+    or bx, bx
+    jz .edone
+    mov cx, [bas_ops + bx]          ; ...the next one, before it is overwritten
+    call bas_patch
+    mov bx, cx
+    jmp .elp
+.edone:
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; --- bas_varhidden - a variable NO PROGRAM CAN NAME ------------------------
 ; out: AX = its index, CF=1 if the table is full (said by name)
@@ -1521,6 +1640,23 @@ bas_exec:
     jc .jmpop
     add si, 2                       ; true: step over the target word
     jmp .next
+.jt:
+    ; OP_JF's twin, and EXIT IF is its only caller: the same pop and the
+    ; same zero test, taken on the other answer.
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT
+    push si
+    mov si, di
+    call fp_unpack_a
+    pop si
+    push bx
+    mov bx, fp_am0
+    call fp_iszero
+    pop bx
+    jnc .jmpop                      ; NOT zero, so true: take it
+    add si, 2
+    jmp .next
 .jmpop:
     mov si, [si]
     add si, bas_ops
@@ -1717,7 +1853,8 @@ bas_optab:
     dw bas_exec.binary              ; OP_LE
     dw bas_exec.binary              ; OP_GE
     dw bas_exec.line                ; OP_LINE
-    dw bas_exec.cls                 ; OP_CLS    (NO TRAILING BACKSLASH IN A
+    dw bas_exec.cls                 ; OP_CLS
+    dw bas_exec.jt                  ; OP_JT     (NO TRAILING BACKSLASH IN A
                                     ; COMMENT: nasm continues the line on one
                                     ; even there, and an ASCII brace drawn up
                                     ; the right margin silently merged two of
@@ -2106,6 +2243,7 @@ bas_kw_do:      db 'DO', 0
 bas_kw_loop:    db 'LOOP', 0
 bas_kw_repeat:  db 'REPEAT', 0
 bas_kw_until:   db 'UNTIL', 0
+bas_kw_exit:    db 'EXIT', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -2134,4 +2272,6 @@ bas_e_foreq:    db "FOR wants '=' after its variable", 0
 bas_e_forto:    db 'FOR wants TO', 0
 bas_e_forstep:  db 'STEP takes a plain number here, not an expression', 0
 bas_e_nextvar:  db 'NEXT names a different variable from its FOR', 0
+bas_e_exitif:   db 'EXIT wants IF and a condition', 0
+bas_e_exitloop: db 'EXIT IF is not inside a loop', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

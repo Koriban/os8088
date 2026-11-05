@@ -636,7 +636,8 @@ BAS_B_bas_nvar   equ BAS_B_bas_reg + R_N*2
 BAS_B_bas_vars   equ BAS_B_bas_nvar + 2
 BAS_B_bas_nblk   equ BAS_B_bas_vars + BAS_VAR_MAX*BAS_VAR_SZ
 BAS_B_bas_blkv   equ BAS_B_bas_nblk + 2
-BAS_B_bas_forlim equ BAS_B_bas_blkv + 2
+BAS_B_bas_blkex  equ BAS_B_bas_blkv + 2
+BAS_B_bas_forlim equ BAS_B_bas_blkex + 2
 BAS_B_bas_forjin equ BAS_B_bas_forlim + 2
 BAS_B_bas_fortop equ BAS_B_bas_forjin + 2
 BAS_B_bas_forcmp equ BAS_B_bas_fortop + 2
@@ -735,6 +736,8 @@ bas_nblk        equ os88_image_end + BAS_B_bas_nblk   ; word: open blocks
 bas_blkv        equ os88_image_end + BAS_B_bas_blkv   ; word: the loop
                                          ; variable a FOR is pushing, or
                                          ; the one a NEXT just popped
+bas_blkex       equ os88_image_end + BAS_B_bas_blkex   ; word: the exit
+                                         ; chain a bas_blkpop just took
 bas_forlim      equ os88_image_end + BAS_B_bas_forlim  ; FOR's four
 bas_forjin      equ os88_image_end + BAS_B_bas_forjin  ; scratch words, used
 bas_fortop      equ os88_image_end + BAS_B_bas_fortop  ; only while ONE header

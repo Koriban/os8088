@@ -240950,6 +240950,15 @@ so a `DO` cannot be closed by a bare `UNTIL` and the refusal says so. A bare
 `LOOP` goes round for ever, which is what a program that writes one means.
 Neither opens a forward jump, so neither has anything to patch.
 
+**`EXIT IF <cond>`** leaves the innermost **LOOP** — not the innermost
+block. Written inside a block `IF` inside a `WHILE` it leaves the `WHILE`,
+so the open-block stack is searched downwards for the nearest loop rather
+than its top being assumed, and an `EXIT IF` outside any loop is refused by
+name. A loop may hold several, and none of them knows where the end is yet:
+each jump's placeholder carries the offset of the one before it, so the
+exits are a list living in the op stream itself and the loop's closer walks
+them. `OP_JT` is `OP_JF`'s twin and exists for this one caller.
+
 Blocks nest eight deep, and a ninth, an unclosed one at the end of the
 program, or a `WEND` that closes a `FOR` are each refused by name.
 

@@ -897,10 +897,33 @@ console holds 24 answers and wave 2a's would otherwise have had to go.
 
 **14,201 image + 11,610 bss = 25,811 of 65,024, 39.7%.**
 
+## `EXIT IF`, and a register I clobbered
+
+`EXIT IF <cond>` leaves the innermost **loop**, which is not the innermost
+block: written inside a block `IF` inside a `WHILE` it must leave the
+`WHILE`, so the stack is searched downwards. A loop may hold several exits
+and none knows where the end is yet, so each jump's placeholder carries the
+offset of the one before it — the pending exits are a **list in the op
+stream**, costing no table, and the loop's closer walks it.
+
+Widening the block entry to sixteen bytes to hold that chain's head is what
+broke it. `bas_blkat` turns an index into an address, and I wrote the
+multiply as `mov cl, 4 / shl ax, cl` — **but CX is `bas_blkpush`'s patch-slot
+argument**, so every block pushed got a corrupted forward jump. On a loop
+that is a jump to nowhere: part two of the row hung, and part three then
+read a console the hung program had left behind, so the failure arrived as
+*part three's answers are part two's again*. Four `shl ax, 1` instead.
+
+It is the third register-clobber of this chapter — `mul` taking DX in
+`bas_varfind`, SI in `bas_new`'s repaint, now CL here — and all three were
+a helper quietly using a register its caller was still holding. The row
+caught this one in a single run.
+
 ## Next
 
-`EXIT IF` to leave a loop early, then `GOTO`/`GOSUB` and **procedures** with
-`LOCAL`/`STATIC` and recursion, which close wave 2 — the `OSAPI` gateway, which is
+`GOTO`/`GOSUB` and **procedures** with `LOCAL`/`STATIC` and recursion,
+which close wave 2. Procedures want a call stack and a frame convention
+pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.
