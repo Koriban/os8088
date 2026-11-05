@@ -173,7 +173,9 @@ BAS_PRC_MAX  equ 8
 BAS_PRC_SRC  equ 0
 BAS_PRC_LEN  equ 2
 BAS_PRC_OPS  equ 4                  ; word: where its body begins
+BAS_PRC_NP   equ 6                  ; word: how many values it takes
 BAS_PRC_SZ   equ 8
+BAS_PRC_PMAX equ 4                  ; ...and the most it may take
 
 ; A call whose procedure has not been seen yet. LINE rides along for
 ; BAS_FWD_LINE's reason.
@@ -182,7 +184,8 @@ BAS_CAL_SRC  equ 0
 BAS_CAL_LEN  equ 2
 BAS_CAL_SLOT equ 4
 BAS_CAL_LINE equ 6
-BAS_CAL_SZ   equ 8
+BAS_CAL_NARG equ 8                  ; word: so the count is checked even when
+BAS_CAL_SZ   equ 10                 ; the procedure is seen later
 
 ; A FRAME is two words and nothing else: where to come back to, and where
 ; this frame's saved variables begin. Thirty-two of them is the recursion
@@ -465,6 +468,8 @@ bas_c_stmt:
     jz .barecall
     cmp al, 10
     je .barecall
+    cmp al, '('                     ; ...or hands over values
+    je .barecall
     jmp .nostmt
 .barecall:
     jmp bas_callemit                ; DI/CX = the name
@@ -745,6 +750,9 @@ bas_c_stmt:
     cmp byte [bas_bad], 0
     jne .procpop
     call bas_prcdef                 ; ...the body begins HERE, after the jump
+    cmp byte [bas_bad], 0
+    jne .procpop
+    call bas_prcparams              ; (w, h) - the prologue, if there is one
     cmp byte [bas_bad], 0
     jne .procpop
     pop cx                          ; CX = the jump to patch at RETURN
@@ -2002,6 +2010,8 @@ bas_lblat:
     mov si, ax
     pop ax
     ret
+    times BAS_LBL_SZ - 8 db 0
+    times 8 - BAS_LBL_SZ db 0
 
 bas_fwdat:
     push ax
@@ -2017,6 +2027,8 @@ bas_fwdat:
     pop cx
     pop ax
     ret
+    times BAS_FWD_SZ - 10 db 0
+    times 10 - BAS_FWD_SZ db 0
 
 ; --- bas_lblchar - is AL legal in a label name? ---------------------------
 ; Letters, digits, '_' and '.', and a label MAY BEGIN WITH A DIGIT (GFA's
@@ -2300,17 +2312,31 @@ bas_prcat:
     mov si, ax
     pop ax
     ret
+    times BAS_PRC_SZ - 8 db 0
+    times 8 - BAS_PRC_SZ db 0
 
 bas_calat:
     push ax
+    push cx
     mov ax, bx
     shl ax, 1
+    mov cx, ax                      ; i*2
     shl ax, 1
-    shl ax, 1
+    shl ax, 1                       ; i*8
+    add ax, cx                      ; ...+ i*2 = i*10
     add ax, bas_cals
     mov si, ax
+    pop cx
     pop ax
     ret
+    times BAS_CAL_SZ - 10 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE and
+    times 10 - BAS_CAL_SZ db 0      ; nothing else ties them to it: widening
+                                    ; BAS_CAL_SZ to 10 for the value count
+                                    ; and leaving three shifts here put entry
+                                    ; 1's first word on entry 0's last, so
+                                    ; `GOSUB hello` was refused for handing
+                                    ; over the wrong number of values. Every
+                                    ; indexer below carries the same pair now
 
 ; --- bas_prcfind - BX = the procedure named by DI/CX; CF=1 if none --------
 ; bas_lblfind's body one table along. The two are not merged because the
@@ -2407,7 +2433,14 @@ bas_prcdef:
 bas_callemit:
     push ax
     push bx
+    push dx
     push si
+    ; **THE VALUES ARE EMITTED FIRST**, before the OP_CALL, so they are on
+    ; the stack when the callee's backwards prologue stores them
+    ; (SPEC.md 126.24). bas_callargs preserves the NAME in DI/CX.
+    call bas_callargs               ; DX = how many
+    cmp byte [bas_bad], 0
+    jne .cout
     mov al, OP_CALL
     call bas_emit
     cmp byte [bas_bad], 0
@@ -2416,9 +2449,16 @@ bas_callemit:
     jc .fwd
     push bx
     call bas_prcat
+    cmp dx, [si + BAS_PRC_NP]       ; ...and it must want that many
+    jne .cwrongn
     mov ax, [si + BAS_PRC_OPS]
     pop bx
     call bas_emitw
+    jmp .cout
+.cwrongn:
+    pop bx
+    mov si, bas_e_argcount
+    call bas_err
     jmp .cout
 .fwd:
     mov bx, [bas_opn]
@@ -2434,11 +2474,13 @@ bas_callemit:
     mov [si + BAS_CAL_SLOT], ax
     mov [si + BAS_CAL_SRC], di
     mov [si + BAS_CAL_LEN], cx
+    mov [si + BAS_CAL_NARG], dx     ; ...checked where the name is resolved
     mov ax, [bas_line]
     mov [si + BAS_CAL_LINE], ax
     inc word [bas_ncal]
 .cout:
     pop si
+    pop dx
     pop bx
     pop ax
     ret
@@ -2446,6 +2488,177 @@ bas_callemit:
     mov si, bas_e_calmax
     call bas_err
     jmp .cout
+
+; --- bas_prcparams - the PROCEDURE's parameter list and its prologue ------
+; (SPEC.md 126.24) A parameter is a LOCAL that arrives with a value in it,
+; so the prologue is one OP_LOCAL and one OP_STORE each and needs no new
+; mechanism. It runs BACKWARDS: the caller pushes left to right, so the last
+; parameter is on top of the value stack - which is why the whole list is
+; collected before any of it is emitted.
+bas_prcparams:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor dx, dx                      ; DX = how many
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    jne .pdone
+    inc word [bas_src]
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'              ; PROCEDURE p() takes none
+    je .pclose
+.plp:
+    call bas_skipsp
+    call bas_word
+    jc .pnoname
+    call bas_varfind                ; AX = its index, created if new
+    jc .pout
+    cmp dx, BAS_PRC_PMAX
+    jae .ptoomany
+    xor bx, bx                      ; ...and not a name twice: the second
+.pdup:                              ; OP_LOCAL would save the first's own
+    cmp bx, dx                      ; already zeroed value
+    jae .pkeep
+    cmp al, [bas_prcp + bx]
+    je .pdupname
+    inc bx
+    jmp .pdup
+.pkeep:
+    mov bx, dx
+    mov [bas_prcp + bx], al
+    inc dx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .pclose
+    inc word [bas_src]
+    jmp .plp
+.pclose:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    jne .pnopar
+    inc word [bas_src]
+.pdone:
+    ; the count goes in the table, for a call to be checked against
+    mov bx, [bas_inprc]
+    dec bx                          ; 1-based while it is live
+    call bas_prcat
+    mov [si + BAS_PRC_NP], dx
+    ; ...and now the prologue, last parameter first
+    mov bx, dx
+.elp:
+    or bx, bx
+    jz .pout
+    dec bx
+    push bx
+    mov al, OP_LOCAL
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .pout
+    push bx
+    mov al, [bas_prcp + bx]
+    call bas_emit
+    mov al, OP_STORE
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .pout
+    push bx
+    mov al, [bas_prcp + bx]
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .pout
+    jmp .elp
+.pout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.pnoname:
+    mov si, bas_e_locname
+    call bas_err
+    jmp .pout
+.ptoomany:
+    mov si, bas_e_prcargs
+    call bas_err
+    jmp .pout
+.pdupname:
+    mov si, bas_e_prcpdup
+    call bas_err
+    jmp .pout
+.pnopar:
+    mov si, bas_e_argpar
+    call bas_err
+    jmp .pout
+
+; --- bas_callargs - a call's (a, b) list; out: DX = how many -------------
+; Each one is compiled where it stands, so the values are on the stack left
+; to right and the callee's backwards prologue finds them in order.
+bas_callargs:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor dx, dx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    jne .adone
+    inc word [bas_src]
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    je .aclose
+.alp:
+    cmp dx, BAS_PRC_PMAX
+    jae .atoomany
+    push dx
+    call bas_c_rel                  ; the value
+    pop dx
+    cmp byte [bas_bad], 0
+    jne .aout
+    inc dx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .aclose
+    inc word [bas_src]
+    jmp .alp
+.aclose:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    jne .anopar
+    inc word [bas_src]
+.adone:
+    clc
+.aout:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.atoomany:
+    mov si, bas_e_prcargs
+    call bas_err
+    jmp .aout
+.anopar:
+    mov si, bas_e_argpar
+    call bas_err
+    jmp .aout
 
 ; --- bas_calfix - resolve every call still owed a procedure --------------
 ; Beside bas_fwdfix, where the program's text ends, for its reason.
@@ -2466,10 +2679,15 @@ bas_calfix:
     mov [bas_line], ax
     mov di, [si + BAS_CAL_SRC]
     mov cx, [si + BAS_CAL_LEN]
+    mov bx, [si + BAS_CAL_NARG]     ; what the call hands over...
+    push bx
     call bas_prcfind
-    jc .noprc
+    jc .noprcpop
     call bas_prcat
     mov ax, [si + BAS_PRC_OPS]
+    pop bx
+    cmp bx, [si + BAS_PRC_NP]       ; ...against what it takes
+    jne .nargs
     mov bx, dx
     push ax
     call bas_calat
@@ -2486,8 +2704,14 @@ bas_calfix:
     pop bx
     pop ax
     ret
+.noprcpop:
+    pop bx
 .noprc:
     mov si, bas_e_noprc
+    call bas_err
+    jmp .fdone
+.nargs:
+    mov si, bas_e_argcount
     call bas_err
     jmp .fdone
 
@@ -2501,6 +2725,25 @@ bas_frmat:
     mov si, ax
     pop ax
     ret
+    times BAS_FRM_SZ - 4 db 0
+    times 4 - BAS_FRM_SZ db 0
+
+; --- bas_savat - DI = save record CX -------------------------------------
+; i*10 as ((i*4)+i)*2, which needs the index still in CX - it is, both
+; callers holding the count there.
+bas_savat:
+    push ax
+    mov ax, cx
+    shl ax, 1
+    shl ax, 1
+    add ax, cx                      ; i*5
+    shl ax, 1                       ; ...*2
+    add ax, bas_savs
+    mov di, ax
+    pop ax
+    ret
+    times BAS_SAV_SZ - 10 db 0
+    times 10 - BAS_SAV_SZ db 0
 
 ; --- bas_dosave - BX = a variable: push it on the save stack and zero it --
 ; A LOCAL is exactly this (SPEC.md 126.23): the old value goes where RETURN
@@ -2517,14 +2760,7 @@ bas_dosave:
     jae .sfull
     call bas_varat                  ; SI = the variable
     add si, BAS_VAR_VAL
-    mov ax, cx                      ; the save record's address: i*10
-    shl ax, 1
-    mov cx, ax
-    shl ax, 1
-    shl ax, 1
-    add ax, cx
-    add ax, bas_savs
-    mov di, ax
+    call bas_savat                  ; DI = the save record
     mov [di + BAS_SAV_IDX], bx
     xor bx, bx                      ; ...and BX is the byte counter now: it
 .cp:                                ; is the only index register an 8086 can
@@ -2562,14 +2798,7 @@ bas_unsave:
     jbe .udone
     dec cx
     mov [bas_nsav], cx
-    mov ax, cx                      ; the record's address: i*10
-    shl ax, 1
-    mov cx, ax
-    shl ax, 1
-    shl ax, 1
-    add ax, cx
-    add ax, bas_savs
-    mov di, ax
+    call bas_savat                  ; DI = the record
     mov bx, [di + BAS_SAV_IDX]
     call bas_varat                  ; SI = the variable it belongs to
     add si, BAS_VAR_VAL
@@ -3688,4 +3917,8 @@ bas_e_locout:   db 'LOCAL is not inside a procedure', 0
 bas_e_locname:  db 'LOCAL wants a variable name', 0
 bas_e_deepcall: db 'procedures called more than 32 deep', 0
 bas_e_savmax:   db 'more than 64 locals held at once', 0
+bas_e_prcargs:  db 'a procedure takes at most four values here', 0
+bas_e_prcpdup:  db 'that parameter name is used twice', 0
+bas_e_argpar:   db 'a list of values wants )', 0
+bas_e_argcount: db 'that call hands over the wrong number of values', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

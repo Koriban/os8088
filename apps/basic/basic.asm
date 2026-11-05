@@ -650,7 +650,8 @@ BAS_B_bas_nprc   equ BAS_B_bas_fwds + BAS_FWD_MAX*BAS_FWD_SZ
 BAS_B_bas_prcs   equ BAS_B_bas_nprc + 2
 BAS_B_bas_ncal   equ BAS_B_bas_prcs + BAS_PRC_MAX*BAS_PRC_SZ
 BAS_B_bas_cals   equ BAS_B_bas_ncal + 2
-BAS_B_bas_inprc  equ BAS_B_bas_cals + BAS_CAL_MAX*BAS_CAL_SZ
+BAS_B_bas_prcp   equ BAS_B_bas_cals + BAS_CAL_MAX*BAS_CAL_SZ
+BAS_B_bas_inprc  equ BAS_B_bas_prcp + BAS_PRC_PMAX
 BAS_B_bas_nfrm   equ BAS_B_bas_inprc + 2
 BAS_B_bas_frms   equ BAS_B_bas_nfrm + 2
 BAS_B_bas_nsav   equ BAS_B_bas_frms + BAS_FRM_MAX*BAS_FRM_SZ
@@ -781,6 +782,13 @@ bas_ncal        equ os88_image_end + BAS_B_bas_ncal  ; word: calls still owed
 bas_cals        equ os88_image_end + BAS_B_bas_cals  ; a procedure - the
                                          ; NORMAL case, procedures living
                                          ; after the program that calls them
+bas_prcp        equ os88_image_end + BAS_B_bas_prcp  ; the parameter indices
+                                         ; of the PROCEDURE being compiled,
+                                         ; collected before any of the
+                                         ; prologue is emitted because the
+                                         ; prologue runs BACKWARDS
+                                         ; (SPEC.md 126.24) - compile time
+                                         ; only, bas_forlim's shape
 bas_inprc       equ os88_image_end + BAS_B_bas_inprc ; word: which procedure
                                          ; is being compiled, 0 for none -
                                          ; COMPILE time only

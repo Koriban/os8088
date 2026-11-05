@@ -241143,6 +241143,39 @@ one, a second procedure of the same name, a call to a name the program never
 defines, the thirty-third frame and the sixty-fifth save. The frame limits
 are run-time refusals and name the line, like a division by zero.
 
+### 126.24 Parameters, and why the prologue runs backwards
+
+```
+PROCEDURE area(w, h)
+  PRINT w * h
+RETURN
+area(3, 4)              ' GOSUB area(3, 4) and @area(3, 4) as well
+```
+
+**By value, and always local.** GFA's manual states the second half as a
+note — *"The parameter list given to a procedure or function are always
+local"* — so a parameter is a `LOCAL` that arrives with a value in it, and
+it needs no mechanism of its own: the prologue the compiler emits for
+`PROCEDURE` is one `OP_LOCAL` and one `OP_STORE` per parameter, which is
+§126.23's save stack doing exactly what it already does.
+
+**The prologue runs backwards.** The caller pushes its arguments left to
+right, so the LAST one is on top of the value stack, and the prologue must
+therefore store the last parameter first. That is the whole reason the
+parameter names are collected before any of the prologue is emitted rather
+than one at a time as they are parsed.
+
+**Four parameters**, refused by name beyond; a repeated parameter name is
+refused too, the second `OP_LOCAL` otherwise saving the first's already
+zeroed value.
+
+**The count is checked, including across a forward call.** A procedure
+records how many it takes, a call how many it hands over, and a call to a
+procedure that has not been seen yet carries its count into the pending
+table so the check happens where the name is resolved — the same place the
+undefined-procedure refusal lives. A procedure that takes none may still be
+called as `name()`.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

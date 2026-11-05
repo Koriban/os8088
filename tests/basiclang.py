@@ -76,6 +76,10 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     that catches it - a procedure with a local calling another procedure with
     a local - and the caller's 7 becomes the global 5 the moment the callee
     returns.
+  * parameters: running the callee's prologue FORWARDS instead of backwards.
+    Writing it showed that both two-value calls in the part were symmetric -
+    3*4 and 4*3 are one number - so `order(10, 3)` printing `a - b` was
+    added, and it is the single difference the mutant makes: 7 against -7.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -473,6 +477,19 @@ PART9 = [
     ("GOSUB outer",                      ["7", "7"]),  # inner sees outer's z,
                                                      # and outer still has it
     ("PRINT z",                          "5"),      # ...and it is back
+    # --- values handed over, which are LOCALs that arrive full -----------
+    ("w = 100",                          None),
+    ("area(3, 4)",                       "12"),
+    ("GOSUB area(5, 6)",                 "30"),
+    ("@area(2, 2)",                      "4"),
+    ("PRINT w",                          "100"),    # ...the global, untouched
+    # ...IN ORDER, which `area` cannot show: 3*4 and 4*3 are the same number,
+    # so nothing above would notice a prologue that ran forwards
+    ("order(10, 3)",                     "7"),
+    # ...and one per frame, which is what recursion needs of them ---------
+    ("r = 1",                            None),
+    ("GOSUB fact(5)",                    None),
+    ("PRINT r",                          "120"),
     # --- recursion, which a stack of frames already is -------------------
     ("d = 0",                            None),
     ("c = 4",                            None),
@@ -499,6 +516,18 @@ PART9 = [
     ("w = 1",                            None),
     ("PRINT z",                          None),     # ...outer's z, not 5
     ("RETURN",                           None),
+    ("PROCEDURE area(w, h)",             None),
+    ("PRINT w * h",                      None),
+    ("RETURN",                           None),
+    ("PROCEDURE order(a, b)",            None),
+    ("PRINT a - b",                      None),
+    ("RETURN",                           None),
+    ("PROCEDURE fact(n)",                None),
+    ("IF n > 1 THEN",                    None),
+    ("r = r * n",                        None),
+    ("GOSUB fact(n - 1)",                None),
+    ("ENDIF",                            None),
+    ("RETURN",                           None),
     ("PROCEDURE down",                   None),
     ("IF c > 0 THEN",                    None),
     ("c = c - 1",                        None),
@@ -521,13 +550,21 @@ PART11 = [
      "Error at line 2: RETURN is not inside a procedure"),
 ]
 
+PART12 = [
+    ("CLS",                              None),
+    ("area(1)",
+     "Error at line 2: that call hands over the wrong number of values"),
+    ("PROCEDURE area(w, h)",             None),
+    ("RETURN",                           None),
+]
+
 # TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
 # through SELECT and `--late` is GOTO, labels and procedures; no flag runs
 # the lot, which is what a developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
-LATE = (PART6, PART7, PART8, PART9, PART10, PART11)
+LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:

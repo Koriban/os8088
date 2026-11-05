@@ -1075,9 +1075,32 @@ had its `PRINT`s run in source order; a procedure's body is written *below*
 the call that runs it, so an expectation belongs to the line that RUNS —
 `GOSUB hide` is what prints the `0`, not the `PRINT x` inside `hide`.
 
+## Values handed over, and a record that outgrew its own indexer
+
+A parameter is a `LOCAL` that arrives with a value in it — GFA's manual
+says the parameter list is *"always local"* as a note in passing — so the
+prologue is one `OP_LOCAL` and one `OP_STORE` each and there is no new
+mechanism at all. It runs **backwards**: the caller pushes left to right, so
+the last parameter is on top, which is the whole reason the names are
+collected before any of the prologue is emitted.
+
+The defect was in the table, not the feature. Recording how many values a
+call hands over took the pending-call record from 8 bytes to 10, and
+`bas_calat` still turned an index into an address with **three shifts** —
+so entry 1's first word landed on entry 0's last, and the first call in the
+program was refused for handing over the wrong number of values. Every
+symptom pointed at the counting code, which was correct.
+
+Three shifts *are* a record size, and nothing in the file tied them to the
+constant. They do now: every one of the six indexers carries the project's
+`times A-B db 0` pair against the size it assumes, and changing
+`BAS_CAL_SZ` to 12 fails the build at that line. The save stack's two
+copies of the arithmetic became one `bas_savat` on the way, which is where
+the duplication would have bitten next.
+
 ## Next
 
-Parameters by value, then `FUNCTION` with `LOCAL`/`STATIC` and recursion,
+`FUNCTION`, then `VAR` by reference and `STATIC` with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
