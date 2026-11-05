@@ -90,7 +90,12 @@ OP_LT       equ 18
 OP_GT       equ 19
 OP_LE       equ 20
 OP_GE       equ 21
-OP_N        equ 25                  ; how many there are, table included
+OP_CALL     equ 25                  ; + a word: call the procedure there
+OP_RET      equ 26                  ; ...and come back out of one
+OP_LOCAL    equ 27                  ; + an index byte: save that variable on
+                                    ; the frame's share of the save stack and
+                                    ; zero it (SPEC.md 126.23)
+OP_N        equ 28                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -137,6 +142,7 @@ BK_DO    equ 5
 BK_REPEAT equ 6
 BK_SELECT equ 7
 BK_DEFAULT equ 8
+BK_PROC  equ 9
 
 ; --- labels and GOTO (SPEC.md 126.22) --------------------------------------
 ; A label's name is kept as WHERE IT IS in bas_prog, for bas_vars' reason -
@@ -161,6 +167,37 @@ BAS_FWD_SLOT equ 4                  ; word: the placeholder to patch
 BAS_FWD_LOOP equ 6
 BAS_FWD_LINE equ 8
 BAS_FWD_SZ   equ 10
+
+; --- procedures (SPEC.md 126.23) -------------------------------------------
+BAS_PRC_MAX  equ 8
+BAS_PRC_SRC  equ 0
+BAS_PRC_LEN  equ 2
+BAS_PRC_OPS  equ 4                  ; word: where its body begins
+BAS_PRC_SZ   equ 8
+
+; A call whose procedure has not been seen yet. LINE rides along for
+; BAS_FWD_LINE's reason.
+BAS_CAL_MAX  equ 16
+BAS_CAL_SRC  equ 0
+BAS_CAL_LEN  equ 2
+BAS_CAL_SLOT equ 4
+BAS_CAL_LINE equ 6
+BAS_CAL_SZ   equ 8
+
+; A FRAME is two words and nothing else: where to come back to, and where
+; this frame's saved variables begin. Thirty-two of them is the recursion
+; depth, and GFA's own manual recurses ten deep in its FUNCTION example.
+BAS_FRM_MAX  equ 32
+BAS_FRM_RET  equ 0
+BAS_FRM_SAVE equ 2
+BAS_FRM_SZ   equ 4
+
+; ONE save stack for every frame. A record is which variable and what it
+; held, so a LOCAL is a push and a RETURN is a run of pops.
+BAS_SAV_MAX  equ 64
+BAS_SAV_IDX  equ 0
+BAS_SAV_VAL  equ 2
+BAS_SAV_SZ   equ 10
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -211,7 +248,12 @@ bas_run:
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
     mov word [bas_nlbl], 0          ; ...nor any label seen, for the reason
-    mov word [bas_nfwd], 0          ; the variables go below: an entry keys on
+    mov word [bas_nprc], 0          ; the variables go below: an entry keys on
+    mov word [bas_ncal], 0
+    mov word [bas_inprc], 0
+    mov word [bas_nfrm], 0          ; ...and no call is in progress
+    mov word [bas_nsav], 0
+    mov word [bas_nfwd], 0          ;
                                     ; where its name is in a text that the
                                     ; next RUN will have replaced
     mov word [bas_nvar], 0          ; **AND THE VARIABLES GO.** An entry keys
@@ -256,6 +298,9 @@ bas_run:
     jne .unclosed
     call bas_fwdfix                 ; ...and every GOTO must have found its
     cmp byte [bas_bad], 0           ; label (SPEC.md 126.22)
+    jne .done
+    call bas_calfix                 ; ...and every call its procedure
+    cmp byte [bas_bad], 0
     jne .done
     mov al, OP_END
     call bas_emit
@@ -380,6 +425,27 @@ bas_c_stmt:
     mov si, bas_kw_goto
     call bas_wordis
     je .goto
+    mov si, bas_kw_gosub            ; GOSUB name / @name / name - one call,
+    call bas_wordis                 ; three spellings, GFA's entry 237
+    je .gosub
+    mov si, bas_kw_proc
+    call bas_wordis
+    je .proc
+    mov si, bas_kw_sub
+    call bas_wordis
+    je .proc
+    mov si, bas_kw_return
+    call bas_wordis
+    je .sreturn
+    mov si, bas_kw_endproc
+    call bas_wordis
+    je .sreturn
+    mov si, bas_kw_endsub
+    call bas_wordis
+    je .sreturn
+    mov si, bas_kw_local
+    call bas_wordis
+    je .slocal
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -390,7 +456,19 @@ bas_c_stmt:
     call bas_skipsp
     mov si, [bas_src]
     cmp byte [si], '='
-    jne .nostmt
+    je .assign
+    ; **A BARE NAME IS A CALL ONLY IF NOTHING ELSE FOLLOWS IT**, which keeps
+    ; `PRIN 3` the refusal it was rather than a call to a procedure called
+    ; PRIN with a stray 3 after it (SPEC.md 126.23).
+    mov al, [si]
+    or al, al
+    jz .barecall
+    cmp al, 10
+    je .barecall
+    jmp .nostmt
+.barecall:
+    jmp bas_callemit                ; DI/CX = the name
+.assign:
     inc word [bas_src]
     call bas_varfind                ; AX = its index, created if new
     jc .x                           ; the table is full; said by name
@@ -628,6 +706,113 @@ bas_c_stmt:
     ret
 .exitnoif:
     mov si, bas_e_exitif
+    jmp bas_err
+
+; --- PROCEDURE / RETURN / LOCAL, and the three spellings of a call ---------
+; (SPEC.md 126.23)
+.gosub:
+    call bas_skipsp
+    call bas_lblword                ; a procedure's name is a label's name
+    jc .gosnoname
+    jmp bas_callemit
+.gosnoname:
+    mov si, bas_e_gosname
+    jmp bas_err
+.atcall:
+    inc word [bas_src]              ; over the '@'
+    call bas_lblword
+    jc .gosnoname
+    jmp bas_callemit
+
+.proc:
+    cmp word [bas_inprc], 0         ; ...and not inside another one
+    jne .procin
+    call bas_skipsp
+    call bas_lblword
+    jc .procnoname
+    ; **THE JUMP OVER THE BODY COMES FIRST.** A main program that runs off
+    ; its own end must step over every procedure rather than fall into the
+    ; first one, and three bytes a procedure removes the whole question.
+    ; Its placeholder is the block's PAT, patched by RETURN.
+    mov al, OP_JMP
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .x
+    mov bx, [bas_opn]               ; ...and the slot rides on the STACK: CX
+    push bx                         ; and DI are the NAME, which bas_prcdef
+    xor ax, ax                      ; still needs
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .procpop
+    call bas_prcdef                 ; ...the body begins HERE, after the jump
+    cmp byte [bas_bad], 0
+    jne .procpop
+    pop cx                          ; CX = the jump to patch at RETURN
+    xor bx, bx
+    mov ax, BK_PROC
+    jmp bas_blkpush
+.procpop:
+    pop bx
+    ret
+.procin:
+    mov si, bas_e_prcin
+    jmp bas_err
+.procnoname:
+    mov si, bas_e_prcname
+    jmp bas_err
+
+.sreturn:
+    cmp word [bas_inprc], 0
+    je .retout
+    call bas_blkpop                 ; AX = kind, CX = the jump over the body
+    jc .x
+    cmp ax, BK_PROC
+    jne .wrongblk
+    push cx
+    mov al, OP_RET
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]
+    call bas_patch                  ; ...and the jump over lands after it
+    mov word [bas_inprc], 0
+    ret
+.retout:
+    mov si, bas_e_retout
+    jmp bas_err
+
+.slocal:
+    cmp word [bas_inprc], 0         ; a LOCAL outside a procedure would save
+    je .locout                      ; a value nothing ever restores
+.loclp:
+    call bas_skipsp
+    call bas_word                   ; a VARIABLE's name, not a label's
+    jc .locnoname
+    call bas_varfind                ; AX = its index, created if new
+    jc .x
+    push ax
+    mov al, OP_LOCAL
+    call bas_emit
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_emit                   ; AL = which variable
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .locdone
+    inc word [bas_src]
+    jmp .loclp
+.locdone:
+    ret
+.locout:
+    mov si, bas_e_locout
+    jmp bas_err
+.locnoname:
+    mov si, bas_e_locname
     jmp bas_err
 
 ; --- GOTO <label> (SPEC.md 126.22) ----------------------------------------
@@ -1128,6 +1313,9 @@ bas_c_stmt:
     mov al, [si]
     cmp al, "'"                     ; ' is REM, as it is in every BASIC here
     je .rem
+    cmp al, '@'                     ; ...and @name is a call (SPEC.md 126.23),
+    je .atcall                      ; which bas_word cannot have read: '@' is
+                                    ; not a character a word may hold
     mov si, bas_e_stmt
     jmp bas_err
 .rem:
@@ -1693,9 +1881,17 @@ bas_blkinloop:
     stc
     ret
 
-; --- bas_loopid - AX = the innermost loop's own top offset, 0 if none ------
+; --- bas_loopid - AX = WHERE THIS LINE IS, for GOTO's rule ----------------
 ; The IDENTITY of a loop, not a depth: two sibling loops nest equally deep
-; and a jump from one into the other must still be refused.
+; and a jump from one into the other must still be refused. A loop's own top
+; offset is unique across the program, so it IS the identity.
+;
+; **AND A PROCEDURE COUNTS TOO** (SPEC.md 126.23): GFA forbids a GOTO between
+; a procedure and the main program as firmly as one out of a FOR, and both
+; sit at no loop at all. Outside a loop the answer is therefore the
+; procedure's own number with the top bit set - an op offset cannot reach
+; 0x8000 (BAS_OPS_MAX is far below it), so the two kinds of answer cannot
+; collide, and the main program's 0 is distinct from both.
 bas_loopid:
     push bx
     push si
@@ -1707,7 +1903,11 @@ bas_loopid:
     pop bx
     ret
 .lnone:
-    xor ax, ax
+    mov ax, [bas_inprc]
+    or ax, ax
+    jz .lout                        ; the main program, outside every loop
+    or ax, 0x8000
+.lout:
     pop si
     pop bx
     ret
@@ -2086,6 +2286,309 @@ bas_fwdfix:
     mov si, bas_e_lblloop
     call bas_err
     jmp .fdone
+
+; -----------------------------------------------------------------------------
+; Procedures, compile side (SPEC.md 126.23)
+; -----------------------------------------------------------------------------
+bas_prcat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, bas_prcs
+    mov si, ax
+    pop ax
+    ret
+
+bas_calat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, bas_cals
+    mov si, ax
+    pop ax
+    ret
+
+; --- bas_prcfind - BX = the procedure named by DI/CX; CF=1 if none --------
+; bas_lblfind's body one table along. The two are not merged because the
+; tables hold different things and the loop is nine instructions.
+bas_prcfind:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    xor bx, bx
+    mov dx, [bas_nprc]
+.scan:
+    cmp bx, dx
+    jae .miss
+    push bx
+    push cx
+    push di
+    call bas_prcat
+    cmp cx, [si + BAS_PRC_LEN]
+    jne .nextpop
+    mov si, [si + BAS_PRC_SRC]
+.cmp:
+    or cx, cx
+    jz .hitpop
+    mov al, [si]
+    call bas_upper
+    mov ah, al
+    mov al, [di]
+    call bas_upper
+    cmp al, ah
+    jne .nextpop
+    inc si
+    inc di
+    dec cx
+    jmp .cmp
+.nextpop:
+    pop di
+    pop cx
+    pop bx
+    inc bx
+    jmp .scan
+.hitpop:
+    pop di
+    pop cx
+    pop bx
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+.miss:
+    stc
+    jmp .out
+
+; --- bas_prcdef - the procedure DI/CX begins here -------------------------
+bas_prcdef:
+    push ax
+    push bx
+    push si
+    call bas_prcfind
+    jnc .dup
+    mov bx, [bas_nprc]
+    cmp bx, BAS_PRC_MAX
+    jae .pfull
+    call bas_prcat
+    mov [si + BAS_PRC_SRC], di
+    mov [si + BAS_PRC_LEN], cx
+    mov ax, [bas_opn]
+    mov [si + BAS_PRC_OPS], ax
+    inc word [bas_nprc]
+    mov ax, [bas_nprc]              ; ...and 1-based, so 0 can mean "none"
+    mov [bas_inprc], ax
+.dout:
+    pop si
+    pop bx
+    pop ax
+    ret
+.pfull:
+    mov si, bas_e_prcmax
+    call bas_err
+    jmp .dout
+.dup:
+    mov si, bas_e_prcdup
+    call bas_err
+    jmp .dout
+
+; --- bas_callemit - emit a call to the procedure named by DI/CX ----------
+; A name not yet seen is the NORMAL case, so this looks exactly like GOTO's
+; forward reference and shares its shape (SPEC.md 126.23).
+bas_callemit:
+    push ax
+    push bx
+    push si
+    mov al, OP_CALL
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .cout
+    call bas_prcfind
+    jc .fwd
+    push bx
+    call bas_prcat
+    mov ax, [si + BAS_PRC_OPS]
+    pop bx
+    call bas_emitw
+    jmp .cout
+.fwd:
+    mov bx, [bas_opn]
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .cout
+    mov ax, bx                      ; the slot, while BX indexes the table
+    mov bx, [bas_ncal]
+    cmp bx, BAS_CAL_MAX
+    jae .cfull
+    call bas_calat
+    mov [si + BAS_CAL_SLOT], ax
+    mov [si + BAS_CAL_SRC], di
+    mov [si + BAS_CAL_LEN], cx
+    mov ax, [bas_line]
+    mov [si + BAS_CAL_LINE], ax
+    inc word [bas_ncal]
+.cout:
+    pop si
+    pop bx
+    pop ax
+    ret
+.cfull:
+    mov si, bas_e_calmax
+    call bas_err
+    jmp .cout
+
+; --- bas_calfix - resolve every call still owed a procedure --------------
+; Beside bas_fwdfix, where the program's text ends, for its reason.
+bas_calfix:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor dx, dx
+.flp:
+    cmp dx, [bas_ncal]
+    jae .fdone
+    mov bx, dx
+    call bas_calat
+    mov ax, [si + BAS_CAL_LINE]
+    mov [bas_line], ax
+    mov di, [si + BAS_CAL_SRC]
+    mov cx, [si + BAS_CAL_LEN]
+    call bas_prcfind
+    jc .noprc
+    call bas_prcat
+    mov ax, [si + BAS_PRC_OPS]
+    mov bx, dx
+    push ax
+    call bas_calat
+    mov bx, [si + BAS_CAL_SLOT]
+    pop ax
+    call bas_patch
+    inc dx
+    jmp .flp
+.fdone:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.noprc:
+    mov si, bas_e_noprc
+    call bas_err
+    jmp .fdone
+
+; --- bas_frmat - SI = frame BX --------------------------------------------
+bas_frmat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    add ax, bas_frms
+    mov si, ax
+    pop ax
+    ret
+
+; --- bas_dosave - BX = a variable: push it on the save stack and zero it --
+; A LOCAL is exactly this (SPEC.md 126.23): the old value goes where RETURN
+; will find it, and the new one is 0 - which GFA's manual notes its own
+; original neglected to state.
+bas_dosave:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov cx, [bas_nsav]
+    cmp cx, BAS_SAV_MAX
+    jae .sfull
+    call bas_varat                  ; SI = the variable
+    add si, BAS_VAR_VAL
+    mov ax, cx                      ; the save record's address: i*10
+    shl ax, 1
+    mov cx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, cx
+    add ax, bas_savs
+    mov di, ax
+    mov [di + BAS_SAV_IDX], bx
+    xor bx, bx                      ; ...and BX is the byte counter now: it
+.cp:                                ; is the only index register an 8086 can
+    mov ax, [si + bx]               ; add to SI or DI, which is why vload and
+    mov [di + BAS_SAV_VAL + bx], ax ; vstore count in it too
+    mov word [si + bx], 0           ; ...and born 0
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .cp
+    inc word [bas_nsav]
+.sout:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.sfull:
+    mov si, bas_e_savmax
+    call bas_err
+    jmp .sout
+
+; --- bas_unsave - put every saved variable above the mark CX back ---------
+bas_unsave:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, cx
+.ulp:
+    mov cx, [bas_nsav]
+    cmp cx, dx
+    jbe .udone
+    dec cx
+    mov [bas_nsav], cx
+    mov ax, cx                      ; the record's address: i*10
+    shl ax, 1
+    mov cx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, cx
+    add ax, bas_savs
+    mov di, ax
+    mov bx, [di + BAS_SAV_IDX]
+    call bas_varat                  ; SI = the variable it belongs to
+    add si, BAS_VAR_VAL
+    xor bx, bx
+.cp:
+    mov ax, [di + BAS_SAV_VAL + bx]
+    mov [si + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .cp
+    jmp .ulp
+.udone:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; --- bas_donejmp - a JMP onto the end of the construct, chained -----------
 ; in:  AX = the chain's head so far, 0 if this is the first
@@ -2470,6 +2973,72 @@ bas_exec:
     add si, bas_ops
     jmp .next
 
+; --- OP_CALL / OP_RET / OP_LOCAL (SPEC.md 126.23) --------------------------
+; A FRAME IS TWO WORDS: where to come back to, and where this frame's share
+; of the one save stack begins. Recursion is then free - it is what a stack
+; of frames already is - and RETURN is a run of pops down to the mark.
+.callop:
+    push bx
+    mov bx, [bas_nfrm]
+    cmp bx, BAS_FRM_MAX
+    jae .toodeep
+    push si
+    call bas_frmat                  ; SI = the frame
+    mov ax, [bas_nsav]
+    mov [si + BAS_FRM_SAVE], ax
+    pop ax                          ; the op cursor, as it was
+    push ax
+    add ax, 2                       ; ...the word operand is consumed too
+    sub ax, bas_ops
+    mov [si + BAS_FRM_RET], ax
+    inc word [bas_nfrm]
+    pop si
+    pop bx
+    mov si, [si]                    ; and in we go
+    add si, bas_ops
+    jmp .next
+.toodeep:
+    pop bx
+    mov si, bas_e_deepcall
+    jmp bas_err                     ; ...and it names the line, OP_LINE
+                                    ; having kept [bas_line] current
+
+.retop:
+    push bx
+    mov bx, [bas_nfrm]
+    or bx, bx
+    jz .retnone                     ; nothing emits this outside a procedure
+    dec bx
+    mov [bas_nfrm], bx
+    push si
+    call bas_frmat
+    mov ax, [si + BAS_FRM_RET]
+    mov cx, [si + BAS_FRM_SAVE]
+    pop si
+    mov si, ax
+    add si, bas_ops
+    push si
+    call bas_unsave                 ; CX = the mark: put the locals back
+    pop si
+    pop bx
+    jmp .next
+.retnone:
+    pop bx
+    jmp .done
+
+.localop:
+    push bx
+    mov bl, [si]                    ; which variable...
+    inc si
+    xor bh, bh
+    push si
+    call bas_dosave                 ; ...onto the save stack, and zeroed
+    pop si
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .done
+    jmp .next
+
 ; --- the six comparisons, as ONE body (SPEC.md 126) -------------------------
 ; .binary leaves the opcode in BX - it is the word it indexed bas_bintab with
 ; - so the operator is still in hand here and six bodies collapse to one
@@ -2668,6 +3237,9 @@ bas_optab:
                                     ; the right margin silently merged two of
                                     ; these rows into one. The table was 13
                                     ; long and the assertion below said so.)
+    dw bas_exec.callop              ; OP_CALL
+    dw bas_exec.retop               ; OP_RET
+    dw bas_exec.localop             ; OP_LOCAL
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3058,6 +3630,13 @@ bas_kw_othw:    db 'OTHERWISE', 0
 bas_kw_endsel:  db 'ENDSELECT', 0
 bas_kw_endsw:   db 'ENDSWITCH', 0
 bas_kw_goto:    db 'GOTO', 0
+bas_kw_gosub:   db 'GOSUB', 0
+bas_kw_proc:    db 'PROCEDURE', 0
+bas_kw_sub:     db 'SUB', 0
+bas_kw_return:  db 'RETURN', 0
+bas_kw_endproc: db 'ENDPROC', 0
+bas_kw_endsub:  db 'ENDSUB', 0
+bas_kw_local:   db 'LOCAL', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -3097,4 +3676,16 @@ bas_e_lbldup:   db 'that label is already defined', 0
 bas_e_nolbl:    db 'GOTO names a label the program does not have', 0
 bas_e_lblloop:  db 'GOTO cannot jump into or out of a loop', 0
 bas_e_gotolbl:  db 'GOTO wants a label', 0
+bas_e_prcmax:   db 'too many procedures - this wave holds eight', 0
+bas_e_calmax:   db 'too many calls waiting for their procedures - sixteen', 0
+bas_e_prcdup:   db 'that procedure is already defined', 0
+bas_e_noprc:    db 'that names a procedure the program does not have', 0
+bas_e_prcname:  db 'PROCEDURE wants a name', 0
+bas_e_prcin:    db 'a procedure cannot be declared inside another', 0
+bas_e_retout:   db 'RETURN is not inside a procedure', 0
+bas_e_gosname:  db 'GOSUB wants a procedure name', 0
+bas_e_locout:   db 'LOCAL is not inside a procedure', 0
+bas_e_locname:  db 'LOCAL wants a variable name', 0
+bas_e_deepcall: db 'procedures called more than 32 deep', 0
+bas_e_savmax:   db 'more than 64 locals held at once', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

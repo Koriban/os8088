@@ -646,7 +646,16 @@ BAS_B_bas_nlbl   equ BAS_B_bas_casech + 2
 BAS_B_bas_lbls   equ BAS_B_bas_nlbl + 2
 BAS_B_bas_nfwd   equ BAS_B_bas_lbls + BAS_LBL_MAX*BAS_LBL_SZ
 BAS_B_bas_fwds   equ BAS_B_bas_nfwd + 2
-BAS_B_bas_blk    equ BAS_B_bas_fwds + BAS_FWD_MAX*BAS_FWD_SZ
+BAS_B_bas_nprc   equ BAS_B_bas_fwds + BAS_FWD_MAX*BAS_FWD_SZ
+BAS_B_bas_prcs   equ BAS_B_bas_nprc + 2
+BAS_B_bas_ncal   equ BAS_B_bas_prcs + BAS_PRC_MAX*BAS_PRC_SZ
+BAS_B_bas_cals   equ BAS_B_bas_ncal + 2
+BAS_B_bas_inprc  equ BAS_B_bas_cals + BAS_CAL_MAX*BAS_CAL_SZ
+BAS_B_bas_nfrm   equ BAS_B_bas_inprc + 2
+BAS_B_bas_frms   equ BAS_B_bas_nfrm + 2
+BAS_B_bas_nsav   equ BAS_B_bas_frms + BAS_FRM_MAX*BAS_FRM_SZ
+BAS_B_bas_savs   equ BAS_B_bas_nsav + 2
+BAS_B_bas_blk    equ BAS_B_bas_savs + BAS_SAV_MAX*BAS_SAV_SZ
 BAS_B_bas_fp     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
@@ -765,6 +774,25 @@ bas_fwds        equ os88_image_end + BAS_B_bas_fwds  ; owed a label, resolved
                                          ; where the program's text ends -
                                          ; the one question only the end of
                                          ; the program can answer
+bas_nprc        equ os88_image_end + BAS_B_bas_nprc  ; word: procedures
+bas_prcs        equ os88_image_end + BAS_B_bas_prcs  ; ...and the table of
+                                         ; them (SPEC.md 126.23)
+bas_ncal        equ os88_image_end + BAS_B_bas_ncal  ; word: calls still owed
+bas_cals        equ os88_image_end + BAS_B_bas_cals  ; a procedure - the
+                                         ; NORMAL case, procedures living
+                                         ; after the program that calls them
+bas_inprc       equ os88_image_end + BAS_B_bas_inprc ; word: which procedure
+                                         ; is being compiled, 0 for none -
+                                         ; COMPILE time only
+bas_nfrm        equ os88_image_end + BAS_B_bas_nfrm  ; word: frames in hand
+bas_frms        equ os88_image_end + BAS_B_bas_frms  ; ...the return offset
+                                         ; and the save mark of each, which
+                                         ; is the whole of what recursion
+                                         ; needs
+bas_nsav        equ os88_image_end + BAS_B_bas_nsav  ; word: saved variables
+bas_savs        equ os88_image_end + BAS_B_bas_savs  ; ...ONE stack for every
+                                         ; frame, each frame knowing where
+                                         ; its own share begins
 bas_blk         equ os88_image_end + BAS_B_bas_blk    ; ...and the stack of
                                          ; them, COMPILE TIME ONLY: a loop
                                          ; remembers where to jump back to and

@@ -19983,7 +19983,7 @@ SOAK = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/mbr.bin", "build/boothd.bin", "build/kernel.sys",
                "build/sound.hma.bin", "build/xmem.bin")),
-    Row("basiclang", "soak", py("tests/basiclang.py"), 600.0,
+    Row("basiclang", "soak", py("tests/basiclang.py", "--early"), 320.0,
         "SPEC.md 126: BASIC/8088 RUNS A PROGRAM and the answers are right - "
         "the first row that executes the language at all. Everything before "
         "it checked the package's layout or its size, and the cost of that "
@@ -19999,7 +19999,22 @@ SOAK = [
         "shares, so no kernel symbol and no package map is needed - and it "
         "presses F5 rather than picking Run off a pulldown whose dy drifts. "
         "One pixel assertion stands beside the text and its own docstring "
-        "says what it does NOT cover.",
+        "says what it does NOT cover. IT IS THE EARLY HALF - the language "
+        "through SELECT; basiclang2 is GOTO, labels and procedures. One "
+        "file, two rows, because thirteen minutes of typing is too slow to "
+        "iterate against and holds a soak slot while others sit idle.",
+        needs=("qemu",), wants=("build/basic.img",)),
+    Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 460.0,
+        "SPEC.md 126.22 and 126.23: labels, GOTO and PROCEDURE. The half of "
+        "basiclang whose constructs span the WHOLE program rather than a "
+        "line - a GOTO's label and a call's procedure are both normally "
+        "below the line that names them, so both wait in a pending table "
+        "that the end of the text answers. It is also the first part of the "
+        "row to read a REFUSAL off the console, which found four waves of "
+        "`Error at line  3 : ...` that nothing had ever looked at, and the "
+        "first to need EXECUTION order rather than source order: a "
+        "procedure's body is written below the call that runs it, so a line "
+        "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "

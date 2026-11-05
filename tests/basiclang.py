@@ -71,6 +71,11 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
   * GOTO: making every loop identity 0 (what a DEPTH count would effectively
     do for two loops at the same depth) - the jump out of a FOR stops being
     refused and that one sentence disappears from the console.
+  * PROCEDURE: making a RETURN restore EVERY frame's saved locals instead of
+    only its own, down to the frame's mark. Writing it is what added the case
+    that catches it - a procedure with a local calling another procedure with
+    a local - and the caller's 7 becomes the global 5 the moment the callee
+    returns.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -446,7 +451,89 @@ PART8 = [
      "Error at line 3: GOTO cannot jump into or out of a loop"),
 ]
 
-PARTS = (PART1, PART2, PART3, PART4, PART5, PART6, PART7, PART8)
+PART9 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- the three spellings of one call (SPEC.md 126.23) -----------------
+    # AN EXPECTATION IS PINNED TO THE LINE THAT RUNS, not to the line that
+    # holds the PRINT: the console is in execution order, and a procedure's
+    # body runs at its CALL - which is below its own text here.
+    ("GOSUB hello",                      "85"),
+    ("@hello",                           "85"),
+    ("hello",                            "85"),
+    # --- LOCAL is DYNAMIC scope: the global is saved and put back ---------
+    ("x = 2",                            None),
+    ("y = 9",                            None),
+    ("GOSUB hide",                       "0"),      # ...its local, born 0
+    ("PRINT x",                          "2"),      # ...untouched outside
+    ("PRINT y",                          "9"),
+    # --- a local is visible to what the procedure CALLS, which is GFA's
+    # own wording and what save-and-restore gives for nothing
+    ("z = 5",                            None),
+    ("GOSUB outer",                      ["7", "7"]),  # inner sees outer's z,
+                                                     # and outer still has it
+    ("PRINT z",                          "5"),      # ...and it is back
+    # --- recursion, which a stack of frames already is -------------------
+    ("d = 0",                            None),
+    ("c = 4",                            None),
+    ("GOSUB down",                       None),
+    ("PRINT d",                          "4"),
+    ("END",                              None),
+    ("PROCEDURE hello",                  None),
+    ("PRINT 85",                         None),
+    ("RETURN",                           None),
+    ("PROCEDURE hide",                   None),
+    ("LOCAL x, y",                       None),
+    ("PRINT x",                          None),     # ...expected at the CALL
+    ("x = 77",                           None),
+    ("y = 88",                           None),
+    ("RETURN",                           None),
+    ("PROCEDURE outer",                  None),
+    ("LOCAL z",                          None),
+    ("z = 7",                            None),
+    ("GOSUB inner",                      None),
+    ("PRINT z",                          None),     # ...STILL outer's 7:
+    ("RETURN",                           None),     # inner's RETURN restores
+    ("PROCEDURE inner",                  None),     # only ITS OWN saves, down
+    ("LOCAL w",                          None),     # to the frame's mark
+    ("w = 1",                            None),
+    ("PRINT z",                          None),     # ...outer's z, not 5
+    ("RETURN",                           None),
+    ("PROCEDURE down",                   None),
+    ("IF c > 0 THEN",                    None),
+    ("c = c - 1",                        None),
+    ("d = d + 1",                        None),
+    ("GOSUB down",                       None),
+    ("ENDIF",                            None),
+    ("RETURN",                           None),
+]
+
+PART10 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      None),
+    ("GOSUB missing",
+     "Error at line 3: that names a procedure the program does not have"),
+]
+
+PART11 = [
+    ("CLS",                              None),
+    ("RETURN",
+     "Error at line 2: RETURN is not inside a procedure"),
+]
+
+# TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
+# too slow to iterate against and too slow to sit in one soak slot while
+# docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
+# through SELECT and `--late` is GOTO, labels and procedures; no flag runs
+# the lot, which is what a developer typing the file's name means.
+EARLY = (PART1, PART2, PART3, PART4, PART5)
+LATE = (PART6, PART7, PART8, PART9, PART10, PART11)
+PARTS = EARLY + LATE
+
+if "--early" in sys.argv:
+    PARTS = EARLY
+elif "--late" in sys.argv:
+    PARTS = LATE
 
 FAILED = []
 
@@ -784,7 +871,16 @@ def main():
                   why="no run can be read without it")
             return 1
         answers += got
-        want += [e for _, e in part if e is not None]
+        for _, e in part:
+            if e is None:
+                continue
+            # A LINE MAY ANSWER WITH MORE THAN ONE, which is what a CALL
+            # does: the body is written below the line that runs it, so
+            # every line a procedure prints is owed by its caller.
+            if isinstance(e, (list, tuple)):
+                want += list(e)
+            else:
+                want.append(e)
     check(True, "the console buffer is found by its shape")
 
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),

@@ -1024,9 +1024,60 @@ bss and the package does not move while its window is open.
 
 855 bytes and 212 of bss (16 labels, 8 pending references).
 
+## Procedures, where the frame turned out to be two words
+
+The design question was what a frame has to hold, and the answer is smaller
+than it looks: the return offset, and **where this frame's saved variables
+begin**. There is one save stack for the whole program and each frame knows
+its own mark, so `RETURN` is a run of pops down to it — and recursion needs
+nothing further, being only what a stack of frames already is. `GOSUB down`
+calling itself four deep works because the thing that makes it work was
+already there.
+
+`LOCAL` is the same mechanism seen from the other end. GFA's manual says a
+local is visible to *"any variables in all subroutines called by this
+procedure"* — dynamic scope, stated plainly — and saving the old value on
+entry and restoring it at `RETURN` is exactly that, for free. A procedure's
+local `z` is what the procedure it calls sees, and the caller's `z` is back
+when it returns. I would not have chosen dynamic scope; the oracle did, and
+it is cheaper than the alternative.
+
+Three spellings of one call, because GFA has three (`GOSUB name`, `@name`,
+and the bare name), and `@` needed its own door: it is not a character a
+word may hold, so `bas_word` never sees it and the call is read where the
+"this is not a word at all" path already was, beside `'` for `REM`. The bare
+name is only read as a call when nothing follows it, which keeps `PRIN 3`
+the refusal it was rather than a call to a procedure called `PRIN`.
+
+**Control cannot fall into a body**: each procedure is preceded by a jump
+over its own `RETURN`, so a main program that runs off its end steps over
+every procedure and reaches the `END` the compiler appends. Three bytes
+each, and a whole class of question goes away.
+
+Two defects caught by reading it back before the first run, both the same
+shape as this chapter's earlier ones. `PROCEDURE` pushed the name in CX,
+emitted the jump-over, put the slot in CX, then **popped CX** — handing
+`bas_blkpush` the name's length as the forward slot to patch. And
+`bas_dosave` indexed with `[si + cx]`, which an 8086 cannot address at all:
+BX is the only register that may be added to SI or DI, which is why
+`.vload` and `.vstore` count in it.
+
+The third thing was a gap rather than a defect. `GOTO`'s legality rule asks
+"which loop is this line in", and a line inside a procedure is in no loop —
+so a `GOTO` from a procedure into the main program was allowed, which GFA
+forbids as firmly as jumping out of a `FOR`. Outside a loop the answer is
+now the procedure's own number with the top bit set: an op offset cannot
+reach `0x8000`, so the two kinds of answer cannot collide, and §126.22's one
+word still carries the whole rule.
+
+And the row's expectations had to learn execution order. Every part until now
+had its `PRINT`s run in source order; a procedure's body is written *below*
+the call that runs it, so an expectation belongs to the line that RUNS —
+`GOSUB hide` is what prints the `0`, not the `PRINT x` inside `hide`.
+
 ## Next
 
-**Procedures** with `LOCAL`/`STATIC` and recursion,
+Parameters by value, then `FUNCTION` with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes

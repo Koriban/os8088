@@ -241090,6 +241090,59 @@ into a *different* loop at the same nesting depth is caught, which a depth
 count alone would not catch. When procedures arrive they extend this one
 word rather than adding a second rule.
 
+### 126.23 Procedures, and the frame
+
+```
+GOSUB name          @name          name          ' three spellings, one call
+PROCEDURE name                     ' SUB
+  LOCAL a, b
+  (instructions)
+RETURN                             ' ENDPROC, ENDSUB
+```
+
+**Three spellings of a call, because GFA has three.** `GOSUB name` and
+`@name` exist so a procedure cannot be mistaken for a command — the manual's
+own examples are `@rem` and `GOSUB stop` — and the bare name is what a
+program that has no such clash writes. A bare name is read as a call only
+when it is followed by `(` or by the end of the line; `PRIN 3` is still
+refused as a statement nobody knows, rather than becoming a call to a
+procedure called `PRIN` with a stray `3` after it.
+
+**A name not yet seen is the normal case**, procedures living after the main
+program, so an unresolved call waits in a pending table and is answered
+where the text ends — §126.22's mechanism, with its own refusal.
+
+**Control cannot fall into a procedure body.** Each body is preceded by a
+jump over its `RETURN`, so a main program that runs off its own end steps
+over every procedure and reaches the `END` the compiler appends. This costs
+three bytes per procedure and removes a whole class of question.
+
+**The frame is two words: the return offset and the SAVE MARK.** There is a
+single stack of saved variables shared by every frame, and a frame records
+where its own saves begin; `RETURN` restores everything above that mark and
+drops the frame. Thirty-two frames and sixty-four saved variables in all,
+each refused by name — and **recursion needs nothing further**, being only
+what a stack of frames already is.
+
+**`LOCAL` is dynamic scope, and that is GFA's semantics rather than a
+shortcut.** The manual says it in as many words: the variables named by
+`LOCAL` *"are only valid in the procedure in which the LOCAL command is
+used. Also any variables in all subroutines called by this procedure will be
+local"* — so a local is visible to everything the procedure calls, which is
+exactly what saving the old value on entry and restoring it at `RETURN`
+gives. A local is **born 0**, which the manual notes its own original did
+not state.
+
+**Four opcodes.** `OP_CALL` (a word) pushes the frame and jumps; `OP_RET`
+restores the saves, drops the frame and returns; `OP_LOCAL` (an index byte)
+pushes one variable's value onto the save stack and zeroes it. The fourth,
+`OP_RETV`, belongs to functions and arrives with them.
+
+**Refused by name**: a `RETURN` outside a procedure, a `PROCEDURE` inside
+one, a second procedure of the same name, a call to a name the program never
+defines, the thirty-third frame and the sixty-fifth save. The frame limits
+are run-time refusals and name the line, like a division by zero.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
