@@ -570,7 +570,19 @@ PART13 = [
     ("PRINT @sgn3(9)",                   "1"),
     # ...a body that falls off its end answers 0, not whatever was there --
     ("PRINT @nothing(1)",                "0"),
+    # ...and a value may be worked out and FORGOTTEN (SPEC.md 126.27)
+    ("k2 = 0",                           None),
+    ("~@bump(5)",                        None),
+    ("PRINT k2",                         "5"),      # the call HAPPENED...
+    ("VOID @bump(2)",                    None),
+    ("PRINT k2",                         "7"),      # ...by either spelling
+    ("~1 + 2",                           None),     # ...and not only a call
+    ("PRINT k2",                         "7"),
     ("END",                              None),
+    ("FUNCTION bump(n)",                 None),
+    ("k2 = k2 + n",                      None),
+    ("RETURN k2",                        None),
+    ("ENDFUNC",                          None),
     ("FUNCTION twice(n)",                None),
     ("RETURN n + n",                     None),
     ("ENDFUNC",                          None),

@@ -241271,6 +241271,30 @@ the wider survey of dialects, and entry 239 has no such keyword. Its effect
 is this language's default anyway: a variable a procedure does not declare
 `LOCAL` is the global one, and keeps its value between calls.
 
+### 126.27 `~` and `VOID`, which end wave 2
+
+```
+~@my_func(3)              ' work out the value and forget it
+VOID @my_func(3)          ' ...the same thing, said at length
+```
+
+**An expression as a statement, with its value dropped.** GFA has both
+spellings and they differ there only in arithmetic: `~` *"calculates an
+integer value before forgetting it, making it faster than VOID, which
+calculates a floating-point value"*. This language has one numeric path
+(§126.4), so the two are the same thing here — recorded because the
+difference is real in the oracle and will matter if integer arithmetic ever
+arrives.
+
+It is not only for functions, though that is what it is for in practice:
+anything `bas_c_rel` can compile may be voided, which is one opcode
+(`OP_DROP`) and no special case for calls.
+
+With this, wave 2's list is complete: `IF`/`ELSEIF`, `SELECT`, `FOR`,
+`WHILE`, `DO`/`LOOP`, `REPEAT`/`UNTIL`, `EXIT IF`, `GOTO`, `PROCEDURE`,
+`FUNCTION`, `LOCAL`, recursion, `@proc`, `~func` and `VAR` — with `STATIC`
+ruled out as not GFA's (§126.26).
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

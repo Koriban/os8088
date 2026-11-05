@@ -101,7 +101,8 @@ OP_VREF     equ 28                  ; + an index byte: push the INDEX, not the
                                     ; parameter turns out to be VAR
 OP_ALIAS    equ 29                  ; + an index byte: pop an index and point
                                     ; that variable at it (SPEC.md 126.26)
-OP_N        equ 30                  ; how many there are, table included
+OP_DROP     equ 30                  ; pop a value and forget it (126.27)
+OP_N        equ 31                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -475,6 +476,9 @@ bas_c_stmt:
     mov si, bas_kw_endfunc
     call bas_wordis
     je .sendfunc
+    mov si, bas_kw_void             ; VOID <expr>, and `~<expr>` below: GFA
+    call bas_wordis                 ; has both and they differ there only in
+    je .void                        ; arithmetic (SPEC.md 126.27)
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -1429,11 +1433,21 @@ bas_c_stmt:
     cmp al, '@'                     ; ...and @name is a call (SPEC.md 126.23),
     je .atcall                      ; which bas_word cannot have read: '@' is
                                     ; not a character a word may hold
+    cmp al, '~'                     ; ...nor is '~' (SPEC.md 126.27)
+    je .tilde
     mov si, bas_e_stmt
     jmp bas_err
 .rem:
     call bas_toeol                  ; the rest of the line is a comment
     ret
+.tilde:
+    inc word [bas_src]
+.void:
+    call bas_c_rel                  ; anything at all, and then forget it
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_DROP
+    jmp bas_emit
 .end:
     mov al, OP_END
     jmp bas_emit
@@ -3672,6 +3686,12 @@ bas_exec:
     pop bx
     jmp .next
 
+.dropop:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT
+    jmp .next
+
 .localop:
     push bx
     mov bl, [si]                    ; which variable...
@@ -3893,6 +3913,7 @@ bas_optab:
     dw bas_exec.localop             ; OP_LOCAL
     dw bas_exec.vrefop              ; OP_VREF
     dw bas_exec.aliasop             ; OP_ALIAS
+    dw bas_exec.dropop              ; OP_DROP
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4310,6 +4331,7 @@ bas_kw_func:    db 'FUNCTION', 0
 bas_kw_endfunc: db 'ENDFUNC', 0
 bas_kw_fn:      db 'FN', 0
 bas_kw_var:     db 'VAR', 0
+bas_kw_void:    db 'VOID', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0

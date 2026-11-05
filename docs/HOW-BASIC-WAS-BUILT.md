@@ -1227,9 +1227,39 @@ and the plan's wave list had paired it with `LOCAL` from the wider survey.
 Its effect is this language's default anyway — a variable a procedure does
 not declare `LOCAL` is the global one.
 
+## `~` and `VOID`, and wave 2 is done
+
+The manual turned out to have two spellings of this and a reason for both:
+`~` *"calculates an integer value before forgetting it, making it faster
+than VOID, which calculates a floating-point value"*. This language has one
+numeric path, so here they are the same thing — which is worth writing down
+rather than quietly implementing one, because the distinction is real in the
+oracle and will matter if integer arithmetic ever arrives.
+
+It is also not a function feature. Any expression may be voided, which is
+one opcode and no special case for calls, and `~@bump(5)` then falls out of
+the general rule rather than being the rule.
+
+**That completes wave 2**: `IF`/`ELSEIF`, `SELECT` with ranges and lists,
+`FOR`, `WHILE`, `DO`/`LOOP`, `REPEAT`/`UNTIL`, `EXIT IF`, labels and `GOTO`,
+`PROCEDURE`, `FUNCTION`, `LOCAL`, recursion, parameters by value and by
+reference, `@proc` and `~func` — with `STATIC` ruled out as not GFA's at
+all.
+
+Nine waves, nine commits, and the shape of the work barely changed: read the
+manual entry, pin the section, write it, run the row, mutate the thing the
+design rests on, and write down what the row only caught because a case was
+put there on purpose. Six of the nine found a defect that way, and three of
+those were defects in code that had been passing for waves — a value stack
+reserved four slots where sixteen were allowed, a name that could not hold a
+digit, and an error line that had read `Error at line  3 : ` since the first
+refusal was ever written.
+
 ## Next
 
-`~name(...)`, `ON GOSUB`, then wave 3's strings with `LOCAL`/`STATIC` and recursion,
+**Wave 3: strings and arrays** — the string heap, `DIM`, and the string
+built-ins. `PRINT` cannot print a literal yet, which is the thing standing
+between this and a program anyone would write with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
