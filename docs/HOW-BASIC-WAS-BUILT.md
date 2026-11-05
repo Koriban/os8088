@@ -1255,6 +1255,104 @@ reserved four slots where sixteen were allowed, a name that could not hold a
 digit, and an error line that had read `Error at line  3 : ` since the first
 refusal was ever written.
 
+## Wave 3a: a string is an offset and a length
+
+Four bytes, where GFA's descriptor is six, because its address is 32-bit and
+every byte this interpreter can name is in one `DS`. That is the whole of
+the representation, and it fits inside the eight bytes a number already
+occupies in the variable table, so **the table did not grow**.
+
+Three things fell out of facts the package already had.
+
+**The type is the name's spelling.** §126.4 already requires `a$` and `a` to
+be different variables, and the table interns a name by *where it is in the
+program text* — so they were already different entries, and giving a name a
+type meant one change to the scanner. The compiler therefore knows every
+expression's type, which is why **no slot on the value stack carries a
+tag**: string ops and numeric ops never meet.
+
+**A literal is not allocated.** The program text is stable for a whole run,
+and a string value is any `DS` offset, so a literal is pushed *where it
+lies*. No copy, and the quotes are not in the value.
+
+**Temporaries are freed wholesale at each statement.** `OP_LINE` is already
+emitted once per statement and the value stack is empty between statements,
+so nothing can be holding one. The arena is two regions growing towards each
+other: variables up from the bottom, temporaries down from the top, and the
+temporary pointer is reset by one store in an op that already existed. A
+concatenation never has to be freed on its own.
+
+The arena is in the package's own bss, not a heap claim. A claim is another
+segment, and `ES` belongs to the kernel on every callback — the rule this
+project states twice. A claim remains the growth path; it is not what the
+first version should carry.
+
+### The contract was wrong, and reading the code back caught it
+
+I pinned "only the variables' region moves, so a live temporary's offset
+stays true" and then wrote `OP_SLOAD` to push *the variable's own offset*.
+Those two cannot both hold: the offset on the stack points into the region
+compaction slides, so `a$ + b$` could have its left operand moved out from
+under it by the allocation for the join. Nothing had run yet — it came out
+of re-reading the opcodes against the paragraph.
+
+A read **takes a copy** now, which costs a copy per variable read and buys
+an invariant that can be checked by reading six opcodes: *every string on
+the value stack is a literal in the program text or a temporary, and the
+variables' region is referenced only by the variable table.* The SPEC
+paragraph says that instead.
+
+### ...and the same hazard again, one line further in
+
+The 200-iteration `c$ = "y" + c$` in the row exists to force compaction, and
+it refused to finish. Not timing — though I changed the row to wait for its
+own last answer rather than six seconds, which it should have done anyway —
+a real defect, and **the same one the SPEC correction above was about**.
+
+`OP_SLOAD` read the variable's offset, *then* allocated the temporary to
+copy it into, and that allocation is exactly what may compact the variables'
+region and slide the string down. The copy then read from where it used to
+be. The length is safe to read early; the offset has to be read after.
+
+Twice in one feature, from the same blind spot: *an allocation is a thing
+that can move your operand.* It is worth saying plainly because the fix for
+the first instance — have a read take a copy — is what introduced the
+second, and nothing about the code looks dangerous at either site.
+
+### The empty string that would not compact
+
+Still red, and this one was worth reading for rather than guessing at. The
+compaction walk takes the lowest string at or above its write pointer, moves
+it down, and advances the pointer **by that string's length**. An empty
+string owns no bytes but it does hold an offset — so it is chosen, copied
+(nothing), leaves the pointer exactly where it was, and is chosen again.
+Compaction never returns, and the package hangs rather than refusing.
+
+`e$ = ""` on line ten, and a loop further down that fills the arena, is the
+whole reproduction. A string of length zero now reports "owns no bytes in
+the arena", which is what it is, and compaction skips it: its offset is
+never read because nothing ever copies zero bytes from anywhere.
+
+Three defects in one feature, all three in the interaction between
+*allocation* and *compaction*, and all three invisible until the arena
+actually filled. The 200-iteration loop that forces it is the most valuable
+line in the part.
+
+### Three defects the first run found
+
+`PRINT "<" + e$ + ">"` printed `<`. The concatenation "loop" ended in
+`jmp bas_emit`, so it joined exactly two pieces and returned, leaving
+`+ ">"` unread. A `jmp .more` short of a loop.
+
+`PRINT "abc" = "abc"` printed `abc`. `PRINT` had looked at the first token
+to decide which compiler to call — and an expression that *begins* with
+text can answer a **number**. It asks now instead of deciding: `bas_c_rel`
+records what it left on the stack, and `PRINT` reads that. Which also gave
+the language the refusal it was missing, `bas_wantnum`, for the sites that
+genuinely need a number — a condition, a loop bound, a numeric store. The
+alternative there is a string's offset read as a double, which is a
+plausible-looking number.
+
 ## Next
 
 **Wave 3: strings and arrays** — the string heap, `DIM`, and the string

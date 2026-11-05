@@ -467,7 +467,11 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           "+": ("equal", 1), "*": ("8", 1), "(": ("9", 1), ")": ("0", 1),
           "\\": ("backslash", 0),
           # ...and the comparisons, for the same reason
-          "<": ("comma", 1), ">": ("dot", 1)}
+          "<": ("comma", 1), ">": ("dot", 1),
+          # ...and what a program needs to hold TEXT (SPEC.md 126.28): the
+          # quotation mark around a literal and the sigil that makes a name
+          # a string one. US layout again - shift-apostrophe and shift-4.
+          '"': ("apostrophe", 1), "$": ("4", 1)}
 
 
 class _Sock(object):

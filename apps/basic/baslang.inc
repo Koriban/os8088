@@ -102,7 +102,17 @@ OP_VREF     equ 28                  ; + an index byte: push the INDEX, not the
 OP_ALIAS    equ 29                  ; + an index byte: pop an index and point
                                     ; that variable at it (SPEC.md 126.26)
 OP_DROP     equ 30                  ; pop a value and forget it (126.27)
-OP_N        equ 31                  ; how many there are, table included
+; --- strings (SPEC.md 126.28): a value is a DS offset and a length --------
+OP_SPUSHL   equ 31                  ; + a word offset and a word length: a
+                                    ; literal, pushed WHERE IT LIES in the
+                                    ; program text - no copy
+OP_SLOAD    equ 32                  ; + an index byte: push that string
+OP_SSTORE   equ 33                  ; + an index byte: pop and COPY into it
+OP_SCAT     equ 34                  ; pop two, join them in a temporary
+OP_SPRINT   equ 35                  ; pop and say it
+OP_SCMP     equ 36                  ; pop two, push -1/0/1 as a NUMBER, so
+                                    ; 126.18's six relations serve strings
+OP_N        equ 37                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -120,7 +130,15 @@ BAS_VAR_MAX equ 16                  ; ...and a 17th is refused BY NAME
 BAS_VAR_SRC equ 0                   ; word: where the name is in bas_prog
 BAS_VAR_LEN equ 2                   ; word: how long it is
 BAS_VAR_VAL equ 4                   ; 8:    the value, packed (SPEC.md 84)
+BAS_VAR_SOFF equ 4                  ; ...or, for a `$` name, where its bytes
+BAS_VAR_SLEN equ 6                  ; are and how many: SPEC.md 126.28's
+                                    ; four-byte value, inside the same eight,
+                                    ; so the table does not grow
 BAS_VAR_SZ  equ 12
+
+; The string arena, and the one constant that sizes it. 4096 against a 2048
+; program, and it is REFUSED BY NAME when it fills rather than wrapping.
+BAS_STR_MAX equ 4096
 
 ; --- the OPEN BLOCKS, at compile time only (SPEC.md 126) --------------------
 ; WHILE..WEND, FOR..NEXT and the block IF all need two things remembered
@@ -265,6 +283,8 @@ bas_run:
     mov word [bas_line], 1
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
+    mov word [bas_svtop], 0         ; ...and no text held (SPEC.md 126.28)
+    mov word [bas_sttop], BAS_STR_MAX
     mov word [bas_nlbl], 0          ; ...nor any label seen, for the reason
     mov word [bas_nprc], 0          ; the variables go below: an entry keys on
     mov word [bas_ncal], 0
@@ -506,12 +526,32 @@ bas_c_stmt:
     jmp bas_callemit                ; DI/CX = the name
 .assign:
     inc word [bas_src]
+    ; **THE TARGET'S SPELLING DECIDES** (SPEC.md 126.28), so `a$ = ...` reads
+    ; text and `a = ...` reads a number, and a mismatch is refused by name
+    ; rather than storing one kind in the other's bytes.
+    call bas_isstrname
+    jc .asnum
+    call bas_varfind
+    jc .x
+    push ax
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .xpop
+    mov al, OP_SSTORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .xpop
+    pop ax
+    jmp bas_emit
+.asnum:
     call bas_varfind                ; AX = its index, created if new
     jc .x                           ; the table is full; said by name
     push ax
     call bas_c_rel                   ; ...the value
     cmp byte [bas_bad], 0
     jne .xpop
+    call bas_wantnum                ; ...and it must BE one
+    jc .xpop
     mov al, OP_STORE
     call bas_emit
     cmp byte [bas_bad], 0
@@ -540,6 +580,8 @@ bas_c_stmt:
     call bas_c_rel                  ; the condition
     cmp byte [bas_bad], 0
     jne .x
+    call bas_wantnum                ; ...which is a number, not text
+    jc .x
     call bas_skipsp
     call bas_word                   ; ...THEN, and it is not optional: the
     jc .nothen                      ; `IF x GOTO n` spelling is not this
@@ -1490,16 +1532,201 @@ bas_c_stmt:
     jz .pbare
     cmp al, 10
     je .pbare
-    call bas_c_rel                   ; the value...
+    ; **IT ASKS, IT DOES NOT DECIDE.** `PRINT "a" = "a"` begins with text
+    ; and answers a NUMBER, so looking at the first token here printed the
+    ; first operand and left the comparison unread (SPEC.md 126.28).
+    call bas_c_rel
     cmp byte [bas_bad], 0
     jne .x
-    mov al, OP_PRINT                ; ...and print it
+    mov al, OP_PRINT
+    cmp byte [bas_restype], 0
+    je .psay
+    mov al, OP_SPRINT               ; ...text, and it came back as text
+.psay:
     call bas_emit
 .pbare:
     mov al, OP_NEWL                 ; a bare PRINT is a blank line
     jmp bas_emit
 .x:
     ret
+
+; -----------------------------------------------------------------------------
+; bas_c_str - compile a STRING expression (SPEC.md 126.28)
+;
+; literal | $-name | ( ... ) | the lot joined by '+'. The type of every
+; expression is known here, at compile time, from the names in it - which is
+; why no slot on the value stack carries a tag and why this is a separate
+; routine rather than a case inside bas_c_expr.
+; -----------------------------------------------------------------------------
+bas_c_str:
+    call bas_c_sfact
+    cmp byte [bas_bad], 0
+    jne .sx
+.more:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '+'              ; ...joined, which is the only operator
+    jne .sx                         ; a string takes here
+    inc word [bas_src]
+    call bas_c_sfact
+    cmp byte [bas_bad], 0
+    jne .sx
+    mov al, OP_SCAT
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .sx
+    jmp .more                       ; ...AND AGAIN: three pieces is two joins
+.sx:
+    ret
+
+bas_c_sfact:
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    cmp al, '"'
+    je .lit
+    cmp al, '('
+    je .paren
+    call bas_word                   ; a $-name, and nothing else is a string
+    jc .notstr
+    call bas_isstrname
+    jc .notstr
+    call bas_varfind
+    jc .sfx
+    push ax
+    mov al, OP_SLOAD
+    call bas_emit
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .sfx
+    jmp bas_emit                    ; ...the index byte after it
+.paren:
+    inc word [bas_src]
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .sfx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    jne .noclose
+    inc word [bas_src]
+    ret
+.lit:
+    ; **PUSHED WHERE IT LIES** (SPEC.md 126.28): the program text is stable
+    ; for the whole of a run, so a literal is an offset into it and the
+    ; quotation marks are not part of the value.
+    inc word [bas_src]
+    mov di, [bas_src]               ; DI = the first byte of the text
+    mov si, di
+    xor cx, cx
+.scan:
+    mov al, [si]
+    or al, al
+    jz .noquote
+    cmp al, 10
+    je .noquote
+    cmp al, '"'
+    je .gotlit
+    inc si
+    inc cx
+    jmp .scan
+.gotlit:
+    inc si
+    mov [bas_src], si               ; past the closing quote
+    mov al, OP_SPUSHL
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .sfx
+    mov ax, di
+    call bas_emitw                  ; where it is...
+    cmp byte [bas_bad], 0
+    jne .sfx
+    mov ax, cx
+    jmp bas_emitw                   ; ...and how long
+.sfx:
+    ret
+.noquote:
+    mov si, bas_e_strquote
+    jmp bas_err
+.noclose:
+    mov si, bas_e_paren
+    jmp bas_err
+.notstr:
+    mov si, bas_e_strtype
+    jmp bas_err
+
+; --- bas_wantnum - refuse if bas_c_rel just left TEXT on the stack ------
+; out: CF=1 and refused by name. Every site that needs a number says so -
+; a condition, a loop bound, a numeric store - because the alternative is a
+; string's offset read as a double, which is a plausible-looking number.
+bas_wantnum:
+    cmp byte [bas_restype], 0
+    je .wok
+    mov si, bas_e_strtype
+    call bas_err
+    stc
+    ret
+.wok:
+    clc
+    ret
+
+; --- bas_isstrname - does the word in DI/CX end in '$'? -----------------
+; out: CF=0 if it does. Preserves DI and CX, which every caller still needs.
+bas_isstrname:
+    push ax
+    push si
+    or cx, cx
+    jz .nno
+    mov si, di
+    add si, cx
+    dec si
+    cmp byte [si], '$'
+    jne .nno
+    clc
+.nout:
+    pop si
+    pop ax
+    ret
+.nno:
+    stc
+    jmp .nout
+
+; --- bas_isstrahead - is the expression at the cursor a STRING? ---------
+; out: CF=0 if it is. The cursor is left exactly where it was.
+;
+; ONE TOKEN IS ENOUGH, which is what the sigil system buys: a string
+; expression begins with a quotation mark or with a `$` name, and nothing
+; that begins any other way can become one.
+bas_isstrahead:
+    push ax
+    push cx
+    push si
+    push di
+    mov ax, [bas_src]
+    push ax
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '"'
+    je .ayes
+    call bas_word
+    jc .ano
+    call bas_isstrname
+    jc .ano
+.ayes:
+    pop ax
+    mov [bas_src], ax
+    clc
+.aout:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+.ano:
+    pop ax
+    mov [bas_src], ax
+    stc
+    jmp .aout
 
 ; -----------------------------------------------------------------------------
 ; bas_c_rel - expr [ relop expr ], the whole of what a VALUE is
@@ -1520,9 +1747,88 @@ bas_c_stmt:
 ; `a < (= b)` and refuse it for the wrong reason.
 ; -----------------------------------------------------------------------------
 bas_c_rel:
+    ; **A COMPARISON IS WHERE THE TWO KINDS MEET** (SPEC.md 126.28), and it
+    ; is the only place they may: a string comparison compiles both sides as
+    ; text, emits OP_SCMP for -1/0/1, and then runs the ordinary numeric
+    ; relation against zero - so the six come free and TRUE is still -1.
+    mov byte [bas_restype], 0       ; ...a number unless this says otherwise
+    call bas_isstrahead
+    jc .num
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    cmp al, '<'
+    je .srel
+    cmp al, '>'
+    je .srel
+    cmp al, '='
+    je .srel
+    ; **TEXT ON ITS OWN**, which only PRINT and a `$` store may use - and
+    ; they ask [bas_restype]. A COMPARISON of text is a NUMBER, which is why
+    ; this flag is set here and not by bas_c_str.
+    mov byte [bas_restype], 1
+    ret
+.srel:
+    call bas_c_relop                ; CL = which relation, cursor past it
+    cmp byte [bas_bad], 0
+    jne .x
+    push cx
+    call bas_c_str                  ; ...the right-hand text
+    pop cx
+    cmp byte [bas_bad], 0
+    jne .x
+    push cx
+    mov al, OP_SCMP
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .spop
+    call bas_emitzero               ; ...against zero
+    cmp byte [bas_bad], 0
+    jne .spop
+    pop cx
+    mov al, cl
+    jmp bas_emit
+.spop:
+    pop cx
+    ret
+.num:
     call bas_c_expr
     cmp byte [bas_bad], 0
     jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    cmp al, '<'
+    je .nrel
+    cmp al, '>'
+    je .nrel
+    cmp al, '='
+    je .nrel
+.x:
+    ret
+.nrel:
+    call bas_c_relop                ; CL = which, and the cursor past it
+    cmp byte [bas_bad], 0
+    jne .x
+    push cx
+    call bas_c_expr                 ; ...the right-hand side
+    pop cx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, cl
+    jmp bas_emit
+
+; --- bas_c_relop - the relation at the cursor; CL = its opcode ----------
+; THE TWO-CHARACTER FORMS ARE READ FIRST (SPEC.md 126.18), or `a <= b`
+; parses as `a < (= b)` and is refused for the wrong reason. Shared by the
+; numeric path above and the string path at the top of this routine, which
+; is why it is a routine at all.
+bas_c_relop:
+    push ax
+    push si
     call bas_skipsp
     mov si, [bas_src]
     mov al, [si]
@@ -1533,8 +1839,9 @@ bas_c_rel:
     je .gt
     cmp al, '='
     je .eq
-.x:
-    ret
+    mov si, bas_e_expr
+    call bas_err
+    jmp .rout
 .lt:
     cmp ah, '='
     je .le2
@@ -1562,13 +1869,10 @@ bas_c_rel:
     inc word [bas_src]              ; the second character as well
 .one:
     inc word [bas_src]
-    push cx
-    call bas_c_expr                 ; ...the right-hand side
-    pop cx
-    cmp byte [bas_bad], 0
-    jne .x
-    mov al, cl
-    jmp bas_emit
+.rout:
+    pop si
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; bas_c_expr - expression:  term { (+|-) term }
@@ -3203,6 +3507,322 @@ bas_unsave:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; The string arena (SPEC.md 126.28)
+;
+; TWO REGIONS GROWING TOWARDS EACH OTHER. Variables' bytes from the bottom
+; up; temporaries from the top down, released ALL AT ONCE at each statement
+; because OP_LINE is emitted once per statement and the value stack is empty
+; between them - so no temporary can be live across one, and a concatenation
+; never has to be freed on its own.
+;
+; A string VALUE is an absolute DS offset and a length, which is why a
+; literal needs no allocation at all: it is pushed where it lies in the
+; program text, and the text is stable for the whole of a run.
+; -----------------------------------------------------------------------------
+
+; --- bas_scopy - CX bytes from SI to DI, both in DS ----------------------
+; BY HAND, not `rep movsb`: movsb writes to ES:DI and ES is the KERNEL'S
+; segment on entry to any callback (apps/os88api.inc).
+bas_scopy:
+    push ax
+    push cx
+    push si
+    push di
+    or cx, cx
+    jz .cdone
+.clp:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .clp
+.cdone:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; --- bas_stmpalloc - CX bytes of TEMPORARY; out AX = a DS offset ---------
+; out: CF=1 and refused by name if the two regions would meet
+bas_stmpalloc:
+    push bx
+    push cx
+    push si
+    cmp cx, BAS_STR_MAX
+    ja .tlong
+    call .take
+    jnc .tout
+    call bas_scompact               ; ...which may be enough on its own
+    call .take
+    jnc .tout
+    mov si, bas_e_strfull
+    call bas_err
+    stc
+.tout:
+    pop si
+    pop cx
+    pop bx
+    ret
+.take:
+    mov ax, [bas_sttop]
+    sub ax, cx
+    cmp ax, [bas_svtop]             ; ...the variables' region is below
+    jb .tno
+    mov [bas_sttop], ax
+    add ax, bas_sarena
+    clc
+    ret
+.tno:
+    stc
+    ret
+.tlong:
+    mov si, bas_e_strlong
+    call bas_err
+    stc
+    jmp .tout
+
+; --- bas_svaralloc - CX bytes for a VARIABLE; out AX = a DS offset -------
+bas_svaralloc:
+    push bx
+    push cx
+    push si
+    cmp cx, BAS_STR_MAX
+    ja .vlong
+    call .take
+    jnc .vout
+    call bas_scompact
+    call .take
+    jnc .vout
+    mov si, bas_e_strfull
+    call bas_err
+    stc
+.vout:
+    pop si
+    pop cx
+    pop bx
+    ret
+.take:
+    mov bx, [bas_svtop]
+    mov ax, bx
+    add ax, cx
+    cmp ax, [bas_sttop]
+    ja .vno
+    mov [bas_svtop], ax
+    mov ax, bx                      ; ...where it starts, absolute
+    add ax, bas_sarena
+    clc
+    ret
+.vno:
+    stc
+    ret
+.vlong:
+    mov si, bas_e_strlong
+    call bas_err
+    stc
+    jmp .vout
+
+; --- bas_sayrun - CX bytes at SI onto the console -----------------------
+; NOT con_say: that stops at a NUL, and a string here is counted, so a NUL
+; is an ordinary character in it (CHR$(0) is a value a program may hold).
+bas_sayrun:
+    push ax
+    push cx
+    push si
+    or cx, cx
+    jz .rdone
+.rlp:
+    mov al, [si]
+    call con_write
+    inc si
+    dec cx
+    jnz .rlp
+.rdone:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; --- bas_scmpbytes - SI/CX against BX/AX; out AX = -1, 0 or 1 -----------
+; BYTE ORDER, NOT LOCALE (SPEC.md 126.28): "Z" < "a" because 90 < 97, and a
+; shorter string that is a prefix of a longer one sorts first.
+bas_scmpbytes:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, bx                      ; DI = the right-hand bytes
+    mov dx, ax                      ; DX = its length
+.clp:
+    or cx, cx
+    jz .lend
+    or dx, dx
+    jz .rshort
+    mov al, [si]
+    mov bl, [di]
+    cmp al, bl
+    jb .less
+    ja .more
+    inc si
+    inc di
+    dec cx
+    dec dx
+    jmp .clp
+.lend:
+    or dx, dx                       ; the left ran out...
+    jnz .less                       ; ...and the right did not
+    xor ax, ax                      ; both: equal
+    jmp .cout
+.rshort:
+    mov ax, 1
+    jmp .cout
+.less:
+    mov ax, -1
+    jmp .cout
+.more:
+    mov ax, 1
+.cout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_isstrvar - is variable BX a `$` name? --------------------------
+; out: CF=0 if it is. THE TYPE IS THE SPELLING (SPEC.md 126.28), so this is
+; the last character of the name where it sits in the program text, and no
+; field in the entry says it.
+bas_isstrvar:
+    push ax
+    push bx
+    push cx
+    push si
+    call bas_varat
+    mov cx, [si + BAS_VAR_LEN]
+    or cx, cx
+    jz .isno                        ; a hidden entry (126.17) is a number
+    mov si, [si + BAS_VAR_SRC]
+    add si, cx
+    dec si
+    cmp byte [si], '$'
+    jne .isno
+    clc
+.isout:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.isno:
+    stc
+    jmp .isout
+
+; --- bas_svoff - AX = variable BX's arena offset, or 0xFFFF --------------
+; 0xFFFF for "owns no bytes in the arena", so a caller can skip it without a
+; second test: not a string, never assigned, or EMPTY.
+;
+; **EMPTY MATTERS.** A zero-length string owns nothing, but it does hold an
+; offset, and compaction chooses the lowest offset at or above its write
+; pointer and then advances the pointer by the LENGTH - so an empty string
+; is chosen, copied (nothing), leaves the pointer where it was, and is
+; chosen again: compaction never returns. `e$ = ""` followed by enough
+; assignments to fill the arena is all it takes, and it hangs the whole
+; package rather than refusing.
+bas_svoff:
+    push bx
+    push si
+    call bas_isstrvar
+    jc .ono
+    call bas_varat
+    cmp word [si + BAS_VAR_SLEN], 0
+    je .ono
+    mov ax, [si + BAS_VAR_SOFF]
+    or ax, ax
+    jz .ono
+    sub ax, bas_sarena              ; arena-relative, for comparing
+    pop si
+    pop bx
+    ret
+.ono:
+    mov ax, 0xFFFF
+    pop si
+    pop bx
+    ret
+
+; --- bas_scompact - slide the variables' region down over its garbage ----
+; ONE OWNER PER STRING is what makes this a slide and not a trace: an
+; assignment COPIES (SPEC.md 126.28), so no two variables share bytes. The
+; roots are therefore the string variables, one each, and the walk is
+; "repeatedly take the lowest one not packed yet" - sixteen variables, so
+; two passes of sixteen rather than a sort.
+;
+; **ONLY THE VARIABLES' REGION MOVES.** This is reached from an allocation
+; that failed, which happens inside an op, so a TEMPORARY may well be live
+; and holding an offset; the temporaries' region is not touched here, so
+; that offset stays true.
+bas_scompact:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor dx, dx                      ; DX = where the next one goes
+.sweep:
+    mov cx, 0xFFFF                  ; the lowest offset at or above DX
+    xor bx, bx
+.look:
+    cmp bx, [bas_nvar]
+    jae .chose
+    call bas_svoff
+    cmp ax, 0xFFFF
+    je .looknext
+    cmp ax, dx
+    jb .looknext                    ; already packed below
+    cmp ax, cx
+    jae .looknext
+    mov cx, ax
+.looknext:
+    inc bx
+    jmp .look
+.chose:
+    cmp cx, 0xFFFF
+    je .packed
+    xor bx, bx                      ; ...and WHICH variable that was
+.who:
+    cmp bx, [bas_nvar]
+    jae .packed                     ; (cannot happen: CX came from one)
+    call bas_svoff
+    cmp ax, cx
+    je .move
+    inc bx
+    jmp .who
+.move:
+    call bas_varat
+    mov cx, [si + BAS_VAR_SLEN]
+    push si
+    mov si, [si + BAS_VAR_SOFF]
+    mov di, dx
+    add di, bas_sarena
+    call bas_scopy
+    pop si
+    mov [si + BAS_VAR_SOFF], di
+    add dx, cx
+    jmp .sweep
+.packed:
+    mov [bas_svtop], dx
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; --- bas_donejmp - a JMP onto the end of the construct, chained -----------
 ; in:  AX = the chain's head so far, 0 if this is the first
 ; out: AX = the new head, which is the placeholder this call just emitted
@@ -3538,6 +4158,12 @@ bas_exec:
     mov ax, [si]
     mov [bas_line], ax
     add si, 2
+    ; **AND EVERY TEMPORARY GOES WITH IT** (SPEC.md 126.28). The value stack
+    ; is empty between statements, so nothing can be holding one; releasing
+    ; them all here is what keeps a concatenation from ever needing to be
+    ; freed on its own, and it costs one store on an op that was already
+    ; emitted once per statement.
+    mov word [bas_sttop], BAS_STR_MAX
     jmp .next
 
 ; --- OP_JF / OP_JMP: the branch (SPEC.md 126) -------------------------------
@@ -3690,6 +4316,177 @@ bas_exec:
     cmp di, bas_stk + BAS_SLOT
     jb .under
     sub di, BAS_SLOT
+    jmp .next
+
+; --- the string ops (SPEC.md 126.28) --------------------------------------
+; A string on the value stack is the slot's FIRST TWO WORDS: a DS offset and
+; a length. The other four bytes of the slot are not read, and no slot says
+; which kind it holds - the compiler knows every expression's type from the
+; names in it, so a numeric op and a string op never meet.
+.spushl:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    mov ax, [si]                    ; where it lies in the program text...
+    mov [di], ax
+    mov ax, [si + 2]                ; ...and how long it is
+    mov [di + 2], ax
+    add si, 4
+    add di, BAS_SLOT
+    jmp .next
+
+; **A READ TAKES A COPY**, and that is not an accident (SPEC.md 126.28).
+; Pushing the variable's own offset would put a reference to the VARIABLES'
+; region on the value stack - and an allocation later in the same expression
+; may compact that region and slide those bytes out from under it. Copying
+; here makes the invariant simple and checkable: every string on the value
+; stack is a literal in the program text or a temporary, and the variables'
+; region is referenced only by the variable table.
+.sload:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push bx
+    push si
+    mov bl, [si]
+    xor bh, bh
+    mov bl, [bas_alias + bx]        ; ...through the alias, as .vload does
+    call bas_varat
+    mov cx, [si + BAS_VAR_SLEN]     ; its length cannot change...
+    push cx
+    call bas_stmpalloc              ; AX = a temporary of its own
+    pop cx
+    jc .slpop
+    mov [di], ax
+    mov [di + 2], cx
+    push di
+    mov di, ax
+    ; **ITS OFFSET IS READ AFTER THE ALLOCATION, NOT BEFORE.** The
+    ; allocation may compact the variables' region and slide this very
+    ; string down - which is the hazard that made a read take a copy in the
+    ; first place, walked into again one line further in. A 200-iteration
+    ; `c$ = "y" + c$` is what found it.
+    call bas_varat
+    mov si, [si + BAS_VAR_SOFF]
+    call bas_scopy
+    pop di
+    pop si                          ; the op cursor
+    inc si                          ; ...past the index byte
+    pop bx
+    add di, BAS_SLOT
+    jmp .next
+.slpop:
+    pop si
+    pop bx
+    jmp .done
+
+; **THE STORE COPIES THE BYTES**, which is what gives every arena string
+; exactly one owner and makes compaction a slide (SPEC.md 126.28).
+.sstore:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT                ; DI = the slot holding the value
+    push bx
+    push si                         ; the op cursor, out of varat's way
+    mov bl, [si]
+    xor bh, bh
+    mov bl, [bas_alias + bx]
+    mov cx, [di + 2]                ; its length...
+    call bas_svaralloc              ; ...and room of its own
+    jc .sspop
+    push di
+    push ax
+    mov si, [di]                    ; the bytes, wherever they are
+    mov cx, [di + 2]
+    mov di, ax
+    call bas_scopy
+    pop ax
+    pop di
+    mov cx, [di + 2]
+    push di
+    call bas_varat                  ; SI = the entry; BX is still its index
+    mov [si + BAS_VAR_SOFF], ax
+    mov [si + BAS_VAR_SLEN], cx
+    pop di
+    pop si                          ; ...and the op cursor back
+    inc si                          ; past the index byte
+    pop bx
+    jmp .next
+.sspop:
+    pop si
+    pop bx
+    jmp .done
+
+.scat:
+    cmp di, bas_stk + 2*BAS_SLOT
+    jb .under
+    push bx
+    push si
+    sub di, 2*BAS_SLOT              ; DI = the left one's slot
+    mov cx, [di + 2]
+    add cx, [di + BAS_SLOT + 2]     ; the joined length
+    call bas_stmpalloc
+    jc .scpop
+    mov bx, ax                      ; BX = where it goes
+    push bx
+    mov si, [di]                    ; the left half
+    mov cx, [di + 2]
+    push di
+    mov di, bx
+    call bas_scopy
+    pop di
+    pop bx
+    push bx
+    add bx, [di + 2]                ; ...then the right half after it
+    mov si, [di + BAS_SLOT]
+    mov cx, [di + BAS_SLOT + 2]
+    push di
+    mov di, bx
+    call bas_scopy
+    pop di
+    pop bx
+    mov cx, [di + 2]
+    add cx, [di + BAS_SLOT + 2]
+    mov [di], bx
+    mov [di + 2], cx
+    add di, BAS_SLOT                ; ...one slot where two were
+    pop si
+    pop bx
+    jmp .next
+.scpop:
+    pop si
+    pop bx
+    jmp .done
+
+.sprint:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT
+    push bx
+    push si
+    mov cx, [di + 2]
+    mov si, [di]
+    call bas_sayrun                 ; CX bytes, which may hold a NUL
+    pop si
+    pop bx
+    jmp .next
+
+; **-1, 0 or 1 AS A NUMBER** (SPEC.md 126.28), so 126.18's six relations
+; serve strings with no second table and no second convention.
+.scmp:
+    cmp di, bas_stk + 2*BAS_SLOT
+    jb .under
+    push bx
+    push si
+    sub di, 2*BAS_SLOT
+    mov si, [di]
+    mov cx, [di + 2]
+    mov bx, [di + BAS_SLOT]
+    mov ax, [di + BAS_SLOT + 2]
+    call bas_scmpbytes              ; AX = -1 / 0 / 1
+    call fp_i2a
+    call fp_pack_a
+    add di, BAS_SLOT
+    pop si
+    pop bx
     jmp .next
 
 .localop:
@@ -3914,6 +4711,12 @@ bas_optab:
     dw bas_exec.vrefop              ; OP_VREF
     dw bas_exec.aliasop             ; OP_ALIAS
     dw bas_exec.dropop              ; OP_DROP
+    dw bas_exec.spushl              ; OP_SPUSHL
+    dw bas_exec.sload               ; OP_SLOAD
+    dw bas_exec.sstore              ; OP_SSTORE
+    dw bas_exec.scat                ; OP_SCAT
+    dw bas_exec.sprint              ; OP_SPRINT
+    dw bas_exec.scmp                ; OP_SCMP
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4061,6 +4864,15 @@ bas_word:
     ; dispatch had read `outer` and found `2` where it wanted `(`.
     or cx, cx
     jz .end
+    cmp al, '$'                     ; **A SIGIL ENDS A NAME AND IS PART OF
+    je .sigil                       ; IT** (SPEC.md 126.4, 126.28): `a$` and
+                                    ; `a` are different variables, and the
+                                    ; table interns a name by where it is in
+                                    ; the program text, so they are already
+                                    ; different entries - nothing else is
+                                    ; needed to give a name its type. The
+                                    ; other four sigils are wave 5's and are
+                                    ; not taken here yet.
     cmp al, '_'
     je .take
     cmp al, '0'
@@ -4071,6 +4883,9 @@ bas_word:
     inc si
     inc cx
     jmp .l
+.sigil:
+    inc si                          ; it closes the word
+    inc cx
 .end:
     or cx, cx
     jz .none
@@ -4393,4 +5208,8 @@ bas_e_wantfn:   db 'that is a PROCEDURE and returns no value', 0
 bas_e_wantprc:  db 'that is a FUNCTION - its value has nowhere to go', 0
 bas_e_varname:  db 'a VAR value wants a variable to point at', 0
 bas_e_varcall:  db 'VAR belongs in the definition, not in the call', 0
+bas_e_strfull:  db 'out of room for text - this wave holds 4096 bytes', 0
+bas_e_strquote: db 'a piece of text wants a closing quotation mark', 0
+bas_e_strtype:  db 'that mixes text and numbers', 0
+bas_e_strlong:  db 'one piece of text is longer than the arena', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

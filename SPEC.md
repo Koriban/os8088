@@ -241295,6 +241295,80 @@ With this, wave 2's list is complete: `IF`/`ELSEIF`, `SELECT`, `FOR`,
 `FUNCTION`, `LOCAL`, recursion, `@proc`, `~func` and `VAR` — with `STATIC`
 ruled out as not GFA's (§126.26).
 
+### 126.28 Strings: a value is an offset and a length
+
+Wave 3's first half. §126.4 names `$` as "a handle"; this is what the handle
+is, and the answer is smaller than GFA's because of where this interpreter
+keeps everything.
+
+**A string value is a (DS offset, length) pair — four bytes.** GFA's
+descriptor is six (entry at page 8030: a 4-byte address and a 2-byte length)
+because its address is 32-bit. Here every byte the interpreter can name is
+in its own `DS`, so two words say everything, and **the variable table does
+not grow**: a string variable's offset and length live in the same eight
+bytes a number's double occupies.
+
+**The type is the name's spelling, so nothing on the value stack carries a
+tag.** §126.4 already requires `a$` and `a` to be different variables, and
+the table interns a name by *where it is in the program text* (§126.17), so
+they are already different entries. Every expression's type is therefore
+known at compile time, which is the whole reason this needs no run-time
+type word: the compiler emits string ops or numeric ops and they never meet.
+The only change the scanner needs is to take a trailing sigil as part of a
+name.
+
+**The arena is in the package's own bss, not a heap claim.** Three reasons,
+in order of weight: a claim is a different segment, and the rule this
+project states twice is that a buffer a package reaches must live in the
+package's own segment, because `ES` is the kernel's on entry to every
+callback; the program text already lives in bss, so this is the pattern the
+package is built on; and a cap that is refused by name is better than a
+movable claim and a relocation proc on the one data structure every
+expression touches. **The growth path is a claim** and is recorded here as
+one, not ruled out — it is simply not what the first version should carry.
+The arena is one constant.
+
+**Two regions, growing towards each other.** Variables' strings from the
+bottom up; **temporaries from the top down**. Every temporary is released
+at once at each statement boundary, and that costs nothing to arrange
+because `OP_LINE` is already emitted once per statement (§126.19) and the
+value stack is empty between statements — so no temporary can be live across
+one. A concatenation allocates and nothing ever frees it individually.
+
+**A literal is not allocated at all.** The program text is stable for the
+whole of a run — the same fact §126.17's variable table already depends on —
+and a string value is any `DS` offset, so a literal points *into the program
+text* where the lexer found it. No copy, and the quotation marks are not
+part of the value.
+
+**Assignment copies the bytes** into the variable region. That is what gives
+every arena string exactly one owner, and one owner is what makes compaction
+a slide instead of a trace.
+
+**Compaction slides the variables' region only**, and the roots are the
+string variables, one each: walk them in arena order, move each down onto
+the end of the one before it, rewrite its offset. No marking, no sorting,
+no second arena. It runs when the two regions meet, and a program whose
+live strings genuinely do not fit is refused by name.
+
+**That is why reading a string variable TAKES A COPY** into the temporaries'
+region. Pushing the variable's own offset would put a reference to the
+variables' region on the value stack, and an allocation later in the same
+expression may compact that region and slide the bytes out from under it.
+With the copy, the invariant is one sentence and can be checked by reading
+six opcodes: **every string on the value stack is a literal in the program
+text or a temporary, and the variables' region is referenced only by the
+variable table.**
+
+**One compare opcode, not six.** `OP_SCMP` answers -1, 0 or 1 as an
+ordinary number, and the compiler then emits the numeric relation against
+zero — so `<`, `<=`, `>`, `>=`, `=` and `<>` on strings come free from
+§126.18's six, with the same TRUE-is--1 convention and no second table.
+
+**Byte order, not locale.** `"Z" < "a"` because `'Z'` is 90 and `'a'` is 97,
+and a shorter string that is a prefix of a longer one sorts first. That is
+QuickBASIC's rule and GFA's.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

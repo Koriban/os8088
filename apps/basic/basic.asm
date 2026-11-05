@@ -642,7 +642,11 @@ BAS_B_bas_forjin equ BAS_B_bas_forlim + 2
 BAS_B_bas_fortop equ BAS_B_bas_forjin + 2
 BAS_B_bas_forcmp equ BAS_B_bas_fortop + 2
 BAS_B_bas_casech equ BAS_B_bas_forcmp + 2
-BAS_B_bas_nlbl   equ BAS_B_bas_casech + 2
+BAS_B_bas_restype equ BAS_B_bas_casech + 2
+BAS_B_bas_svtop  equ BAS_B_bas_restype + 2
+BAS_B_bas_sttop  equ BAS_B_bas_svtop + 2
+BAS_B_bas_sarena equ BAS_B_bas_sttop + 2
+BAS_B_bas_nlbl   equ BAS_B_bas_sarena + BAS_STR_MAX
 BAS_B_bas_lbls   equ BAS_B_bas_nlbl + 2
 BAS_B_bas_nfwd   equ BAS_B_bas_lbls + BAS_LBL_MAX*BAS_LBL_SZ
 BAS_B_bas_fwds   equ BAS_B_bas_nfwd + 2
@@ -770,6 +774,23 @@ bas_casech      equ os88_image_end + BAS_B_bas_casech ; word: the chain of
                                          ; while ONE CASE line is compiled -
                                          ; a CASE cannot hold another, so one
                                          ; word serves, for bas_forcmp's reason
+bas_restype     equ os88_image_end + BAS_B_bas_restype; byte: 1 if the
+                                         ; expression bas_c_rel just compiled
+                                         ; leaves TEXT on the stack rather
+                                         ; than a number (SPEC.md 126.28) -
+                                         ; compile time only
+bas_svtop       equ os88_image_end + BAS_B_bas_svtop ; word: the top of the
+                                         ; VARIABLES' half of the string
+                                         ; arena, which grows up (126.28)
+bas_sttop       equ os88_image_end + BAS_B_bas_sttop ; word: the bottom of
+                                         ; the TEMPORARIES' half, which grows
+                                         ; down and is released whole at
+                                         ; every statement
+bas_sarena      equ os88_image_end + BAS_B_bas_sarena; ...and the arena, in
+                                         ; the package's OWN bss rather than
+                                         ; a heap claim: a claim is another
+                                         ; segment and ES belongs to the
+                                         ; kernel on every callback
 bas_nlbl        equ os88_image_end + BAS_B_bas_nlbl  ; word: labels seen
 bas_lbls        equ os88_image_end + BAS_B_bas_lbls  ; ...and the table of
                                          ; them (SPEC.md 126.22), keyed on

@@ -681,6 +681,43 @@ PART12 = [
     ("RETURN",                           None),
 ]
 
+PART18 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- text: a literal, a $ name, and the two kept apart (126.28) ------
+    ('PRINT "hello"',                    "hello"),
+    ('a$ = "world"',                     None),
+    ("PRINT a$",                         "world"),
+    ('PRINT "say " + a$',                "say world"),
+    ("b$ = a$",                          None),
+    ('a$ = "other"',                     None),
+    ("PRINT b$",                         "world"),    # ...a COPY, not a share
+    # ...an empty one, and a name that only LOOKS like another ------------
+    ('e$ = ""',                          None),
+    ('PRINT "<" + e$ + ">"',             "<>"),
+    ("a = 7",                            None),       # `a` and `a$` are two
+    ("PRINT a",                          "7"),        # different variables
+    ("PRINT a$",                         "other"),
+    # ...the six relations, from one compare op ---------------------------
+    ('PRINT "abc" = "abc"',              "-1"),
+    ('PRINT "abc" = "abd"',              "0"),
+    ('PRINT "abc" < "abd"',              "-1"),
+    ('PRINT "Z" < "a"',                  "-1"),       # byte order, not locale
+    ('PRINT "ab" < "abc"',               "-1"),       # a prefix sorts first
+    ('PRINT "abc" <> "ab"',              "-1"),
+    ('PRINT a$ >= "other"',              "-1"),
+    ('IF a$ = "other" THEN',             None),
+    ('PRINT "matched"',                  "matched"),
+    ("ENDIF",                            None),
+    # ...and the arena survives being filled and refilled ----------------
+    ('c$ = "x"',                         None),
+    ("FOR i = 1 TO 200",                 None),
+    ('c$ = "y" + c$',                    None),       # 200 assignments, each
+    ("NEXT",                             None),       # leaking its old bytes
+    ("PRINT c$ = c$",                    "-1"),
+    ('PRINT "still here"',               "still here"),
+]
+
 # TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -688,7 +725,7 @@ PART12 = [
 # the lot, which is what a developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
-        PART14, PART15, PART16, PART17)
+        PART14, PART15, PART16, PART17, PART18)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:
@@ -1025,8 +1062,23 @@ def main():
         print("      part %d: %d lines in %.1fs"
               % (pn + 1, len(part), time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
-        os88qemu.pace(m, 6.0)
-        got = console_lines(m)
+        # **WAIT FOR THE LAST ANSWER, NOT FOR A CLOCK.** A fixed pace was
+        # six seconds, which every part until SPEC.md 126.28's fitted inside
+        # - and a loop that reassigns a string 200 times does not. The row
+        # then read the console mid-run and reported the last two lines as
+        # missing, which looks exactly like a defect in the feature. Polling
+        # for the part's own last expectation is both faster when the part is
+        # quick and patient when it is not.
+        last = None
+        for _, e in part:
+            if e is not None:
+                last = e if not isinstance(e, (list, tuple)) else e[-1]
+        got = None
+        for _ in range(30):
+            os88qemu.pace(m, 2.0)
+            got = console_lines(m)
+            if last is None or (got and last in got):
+                break
         if got is None:
             check(False, "the console buffer is found by its shape",
                   why="no run can be read without it")
