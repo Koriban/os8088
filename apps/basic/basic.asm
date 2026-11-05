@@ -642,7 +642,11 @@ BAS_B_bas_forjin equ BAS_B_bas_forlim + 2
 BAS_B_bas_fortop equ BAS_B_bas_forjin + 2
 BAS_B_bas_forcmp equ BAS_B_bas_fortop + 2
 BAS_B_bas_casech equ BAS_B_bas_forcmp + 2
-BAS_B_bas_blk    equ BAS_B_bas_casech + 2
+BAS_B_bas_nlbl   equ BAS_B_bas_casech + 2
+BAS_B_bas_lbls   equ BAS_B_bas_nlbl + 2
+BAS_B_bas_nfwd   equ BAS_B_bas_lbls + BAS_LBL_MAX*BAS_LBL_SZ
+BAS_B_bas_fwds   equ BAS_B_bas_nfwd + 2
+BAS_B_bas_blk    equ BAS_B_bas_fwds + BAS_FWD_MAX*BAS_FWD_SZ
 BAS_B_bas_fp     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
@@ -751,6 +755,16 @@ bas_casech      equ os88_image_end + BAS_B_bas_casech ; word: the chain of
                                          ; while ONE CASE line is compiled -
                                          ; a CASE cannot hold another, so one
                                          ; word serves, for bas_forcmp's reason
+bas_nlbl        equ os88_image_end + BAS_B_bas_nlbl  ; word: labels seen
+bas_lbls        equ os88_image_end + BAS_B_bas_lbls  ; ...and the table of
+                                         ; them (SPEC.md 126.22), keyed on
+                                         ; where the name is in bas_prog for
+                                         ; bas_vars' reason
+bas_nfwd        equ os88_image_end + BAS_B_bas_nfwd  ; word: GOTOs still
+bas_fwds        equ os88_image_end + BAS_B_bas_fwds  ; owed a label, resolved
+                                         ; where the program's text ends -
+                                         ; the one question only the end of
+                                         ; the program can answer
 bas_blk         equ os88_image_end + BAS_B_bas_blk    ; ...and the stack of
                                          ; them, COMPILE TIME ONLY: a loop
                                          ; remembers where to jump back to and

@@ -138,6 +138,30 @@ BK_REPEAT equ 6
 BK_SELECT equ 7
 BK_DEFAULT equ 8
 
+; --- labels and GOTO (SPEC.md 126.22) --------------------------------------
+; A label's name is kept as WHERE IT IS in bas_prog, for bas_vars' reason -
+; the text is stable for the whole of a run, and a copy would be 16 more
+; names to store. LOOP is the innermost loop's own top offset, unique per
+; loop and 0 for none, which is what makes a jump into a DIFFERENT loop at
+; the same nesting depth refusable.
+BAS_LBL_MAX  equ 16
+BAS_LBL_SRC  equ 0
+BAS_LBL_LEN  equ 2
+BAS_LBL_OPS  equ 4                  ; word: where in the op stream it is
+BAS_LBL_LOOP equ 6
+BAS_LBL_SZ   equ 8
+
+; A GOTO that names a label not seen yet. LINE rides along so the refusal
+; names the GOTO's own line and not the program's last one - the resolution
+; happens where the text ends, long after [bas_line] has moved on.
+BAS_FWD_MAX  equ 8
+BAS_FWD_SRC  equ 0
+BAS_FWD_LEN  equ 2
+BAS_FWD_SLOT equ 4                  ; word: the placeholder to patch
+BAS_FWD_LOOP equ 6
+BAS_FWD_LINE equ 8
+BAS_FWD_SZ   equ 10
+
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
 ; AES/VDI calling convention. This OS passes in REGISTERS over one flat space
@@ -186,6 +210,10 @@ bas_run:
     mov word [bas_line], 1
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
+    mov word [bas_nlbl], 0          ; ...nor any label seen, for the reason
+    mov word [bas_nfwd], 0          ; the variables go below: an entry keys on
+                                    ; where its name is in a text that the
+                                    ; next RUN will have replaced
     mov word [bas_nvar], 0          ; **AND THE VARIABLES GO.** An entry keys
                                     ; on WHERE its name is in bas_prog, not on
                                     ; a copy of it, so an entry that outlives
@@ -226,6 +254,9 @@ bas_run:
 .fin:
     cmp word [bas_nblk], 0          ; ...and nothing may still be open
     jne .unclosed
+    call bas_fwdfix                 ; ...and every GOTO must have found its
+    cmp byte [bas_bad], 0           ; label (SPEC.md 126.22)
+    jne .done
     mov al, OP_END
     call bas_emit
     cmp byte [bas_bad], 0
@@ -248,6 +279,27 @@ bas_c_stmt:
     ; space before `PRINT` and the arm was refused as "not a statement".
     ; Making the entry point tolerant is what lets it be reentrant at all.
     call bas_skipsp
+    ; **A LABEL IS PROBED BEFORE THE KEYWORDS**, because its name may be
+    ; anything at all - it may even begin with a digit (SPEC.md 126.22) -
+    ; and what identifies it is the colon, not the name. The probe puts the
+    ; cursor back when there is no colon, so an ordinary statement pays one
+    ; scan of its first word for this.
+    call bas_lblmaybe
+    jc .nolabel
+    call bas_lbldef
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp                 ; ...and a label may share its line
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .lbldone
+    cmp al, 10
+    je .lbldone
+    jmp bas_c_stmt                  ; TAIL call, not a nested one: a line of
+.lbldone:                           ; eight labels must not be eight frames
+    ret
+.nolabel:
     call bas_word                   ; DI = the keyword, CX = its length
     jc .nokw
     mov si, bas_kw_print
@@ -325,6 +377,9 @@ bas_c_stmt:
     mov si, bas_kw_exit
     call bas_wordis
     je .exit
+    mov si, bas_kw_goto
+    call bas_wordis
+    je .goto
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -573,6 +628,38 @@ bas_c_stmt:
     ret
 .exitnoif:
     mov si, bas_e_exitif
+    jmp bas_err
+
+; --- GOTO <label> (SPEC.md 126.22) ----------------------------------------
+.goto:
+    call bas_skipsp
+    call bas_lblword                ; DI = the name, CX = its length
+    jc .gotonolbl
+    call bas_lblfind                ; BX = which label, CF=1 if not seen yet
+    jc .gotofwd
+    call bas_lblat
+    mov ax, [si + BAS_LBL_LOOP]
+    call bas_loopsame               ; ...and it must be THIS loop
+    jc .x
+    mov al, OP_JMP
+    call bas_emit
+    call bas_lblat
+    mov ax, [si + BAS_LBL_OPS]
+    jmp bas_emitw
+.gotofwd:
+    ; A LABEL BELOW THIS LINE IS NOT A SPECIAL CASE, it is the normal one:
+    ; the placeholder goes in the pending table with everything the refusal
+    ; will need, including the line, and the end of the program answers it.
+    mov al, OP_JMP
+    call bas_emit
+    mov bx, [bas_opn]
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .x
+    jmp bas_fwdadd                  ; BX = the slot, DI/CX = the name
+.gotonolbl:
+    mov si, bas_e_gotolbl
     jmp bas_err
 
 .do:
@@ -1592,13 +1679,68 @@ bas_exitshere:
 ; EXIT IF leaves the nearest LOOP, not the nearest block: written inside a
 ; block IF inside a WHILE it must still leave the WHILE, so the stack is
 ; searched downwards rather than its top being assumed.
+;
+; This is bas_findloop plus the refusal. GOTO asks the same question and must
+; NOT refuse on a no (SPEC.md 126.22: outside every loop is a legal place to
+; be), so the search itself is the shared part.
 bas_blkinloop:
+    call bas_findloop
+    jc .inone
+    ret
+.inone:
+    mov si, bas_e_exitloop
+    call bas_err
+    stc
+    ret
+
+; --- bas_loopid - AX = the innermost loop's own top offset, 0 if none ------
+; The IDENTITY of a loop, not a depth: two sibling loops nest equally deep
+; and a jump from one into the other must still be refused.
+bas_loopid:
+    push bx
+    push si
+    call bas_findloop
+    jc .lnone
+    call bas_blkat
+    mov ax, [si + BAS_BLK_TOP]
+    pop si
+    pop bx
+    ret
+.lnone:
+    xor ax, ax
+    pop si
+    pop bx
+    ret
+
+; --- bas_loopsame - refuse unless AX is the loop this line is in ----------
+; out: CF=1 and refused by name if it is not
+bas_loopsame:
+    push ax
+    push bx
+    push cx
+    mov cx, ax
+    call bas_loopid
+    cmp ax, cx
+    jne .lsno
+    clc
+.lsout:
+    pop cx
+    pop bx
+    pop ax
+    ret
+.lsno:
+    mov si, bas_e_lblloop
+    call bas_err
+    stc
+    jmp .lsout
+
+bas_findloop:
     push ax
     push si
     mov bx, [bas_nblk]
 .ilp:
     or bx, bx
-    jz .inone
+    jz .ifnone
     dec bx
     call bas_blkat
     mov ax, [si + BAS_BLK_KIND]
@@ -1616,9 +1758,7 @@ bas_blkinloop:
     pop si
     pop ax
     ret
-.inone:
-    mov si, bas_e_exitloop
-    call bas_err
+.ifnone:
     stc
     pop si
     pop ax
@@ -1643,6 +1783,309 @@ bas_blkexits:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; Labels and GOTO (SPEC.md 126.22)
+; -----------------------------------------------------------------------------
+
+; --- bas_lblat / bas_fwdat - SI = entry BX of each table ------------------
+; BAS_LBL_SZ is 8, so three shifts; BAS_FWD_SZ is 10, which is i*8 + i*2 -
+; and NEITHER uses `mul`, for bas_varat's reason: the callers hold their scan
+; bound in DX and `mul` writes DX:AX.
+bas_lblat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, bas_lbls
+    mov si, ax
+    pop ax
+    ret
+
+bas_fwdat:
+    push ax
+    push cx
+    mov ax, bx
+    shl ax, 1
+    mov cx, ax                      ; i*2
+    shl ax, 1
+    shl ax, 1                       ; i*8
+    add ax, cx
+    add ax, bas_fwds
+    mov si, ax
+    pop cx
+    pop ax
+    ret
+
+; --- bas_lblchar - is AL legal in a label name? ---------------------------
+; Letters, digits, '_' and '.', and a label MAY BEGIN WITH A DIGIT (GFA's
+; entry 249), which is why this is not bas_word's test.
+; out: CF=0 if it is
+bas_lblchar:
+    cmp al, '_'
+    je .yes
+    cmp al, '.'
+    je .yes
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    jbe .yes
+    cmp al, 'A'
+    jb .no
+    cmp al, 'Z'
+    jbe .yes
+    cmp al, 'a'
+    jb .no
+    cmp al, 'z'
+    jbe .yes
+.no:
+    stc
+    ret
+.yes:
+    clc
+    ret
+
+; --- bas_lblword - scan a label NAME at the cursor ------------------------
+; out: DI = where it starts, CX = how long, CF=1 if there is none at all.
+;      The cursor is left after the name.
+bas_lblword:
+    push ax
+    push si
+    mov di, [bas_src]
+    mov si, di
+    xor cx, cx
+.lwl:
+    mov al, [si]
+    call bas_lblchar
+    jc .lwend
+    inc si
+    inc cx
+    jmp .lwl
+.lwend:
+    or cx, cx
+    jz .lwno
+    mov [bas_src], si
+    clc
+    pop si
+    pop ax
+    ret
+.lwno:
+    stc
+    pop si
+    pop ax
+    ret
+
+; --- bas_lblmaybe - a label DEFINITION at the cursor? ---------------------
+; out: DI/CX = the name and CF=0 with the cursor past the colon, or CF=1 with
+;      the cursor exactly where it was.
+;
+; THE COLON IS WHAT IDENTIFIES IT, not the name: a label may be spelled like
+; a keyword or begin with a digit, so nothing about the word itself can
+; decide this. The restore is the whole reason this is a separate proc.
+bas_lblmaybe:
+    push ax
+    push si
+    mov ax, [bas_src]
+    push ax
+    call bas_lblword
+    jc .lmno
+    mov si, [bas_src]
+    cmp byte [si], ':'
+    jne .lmno
+    inc word [bas_src]
+    pop ax
+    clc
+    pop si
+    pop ax
+    ret
+.lmno:
+    pop ax
+    mov [bas_src], ax
+    stc
+    pop si
+    pop ax
+    ret
+
+; --- bas_lblfind - BX = the label named by DI/CX; CF=1 if there is none ---
+bas_lblfind:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    xor bx, bx
+    mov dx, [bas_nlbl]
+.scan:
+    cmp bx, dx
+    jae .miss
+    push bx
+    push cx
+    push di
+    call bas_lblat
+    cmp cx, [si + BAS_LBL_LEN]
+    jne .nextpop
+    mov si, [si + BAS_LBL_SRC]
+.cmp:
+    or cx, cx
+    jz .hitpop
+    mov al, [si]
+    call bas_upper
+    mov ah, al
+    mov al, [di]
+    call bas_upper
+    cmp al, ah
+    jne .nextpop
+    inc si
+    inc di
+    dec cx
+    jmp .cmp
+.nextpop:
+    pop di
+    pop cx
+    pop bx
+    inc bx
+    jmp .scan
+.hitpop:
+    pop di
+    pop cx
+    pop bx
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+.miss:
+    stc
+    jmp .out
+
+; --- bas_lbldef - define the label DI/CX here ----------------------------
+bas_lbldef:
+    push ax
+    push bx
+    push si
+    call bas_lblfind                ; ...and only once: the second one would
+    jnc .dup                        ; silently take every jump
+    mov bx, [bas_nlbl]
+    cmp bx, BAS_LBL_MAX
+    jae .lfull
+    call bas_lblat
+    mov [si + BAS_LBL_SRC], di
+    mov [si + BAS_LBL_LEN], cx
+    mov ax, [bas_opn]
+    mov [si + BAS_LBL_OPS], ax
+    push si
+    call bas_loopid
+    pop si
+    mov [si + BAS_LBL_LOOP], ax
+    inc word [bas_nlbl]
+.dout:
+    pop si
+    pop bx
+    pop ax
+    ret
+.lfull:
+    mov si, bas_e_lblmax
+    call bas_err
+    jmp .dout
+.dup:
+    mov si, bas_e_lbldup
+    call bas_err
+    jmp .dout
+
+; --- bas_fwdadd - a GOTO at slot BX still owed the label DI/CX -----------
+bas_fwdadd:
+    push ax
+    push bx
+    push si
+    mov ax, bx                      ; the slot, while BX indexes
+    mov bx, [bas_nfwd]
+    cmp bx, BAS_FWD_MAX
+    jae .ffull
+    call bas_fwdat
+    mov [si + BAS_FWD_SLOT], ax
+    mov [si + BAS_FWD_SRC], di
+    mov [si + BAS_FWD_LEN], cx
+    mov ax, [bas_line]              ; ...so the refusal names THIS line and
+    mov [si + BAS_FWD_LINE], ax     ; not the program's last one
+    push si
+    call bas_loopid
+    pop si
+    mov [si + BAS_FWD_LOOP], ax
+    inc word [bas_nfwd]
+.fout:
+    pop si
+    pop bx
+    pop ax
+    ret
+.ffull:
+    mov si, bas_e_fwdmax
+    call bas_err
+    jmp .fout
+
+; --- bas_fwdfix - resolve every GOTO still owed a label ------------------
+; Called where the program's TEXT ends, beside the unclosed-block refusal:
+; both are questions that only the end of the program can answer.
+;
+; THE LOOP CHECK IS THE SAME ONE A BACKWARD GOTO TAKES, but it cannot go
+; through bas_loopsame - no block is open any more by the time this runs, so
+; "this line's loop" is gone and the pending entry's own record is the only
+; copy left. That is what BAS_FWD_LOOP is for.
+bas_fwdfix:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor dx, dx
+.flp:
+    cmp dx, [bas_nfwd]
+    jae .fdone
+    mov bx, dx
+    call bas_fwdat
+    mov ax, [si + BAS_FWD_LINE]
+    mov [bas_line], ax              ; the refusals below name the GOTO's line
+    mov di, [si + BAS_FWD_SRC]
+    mov cx, [si + BAS_FWD_LEN]
+    mov ax, [si + BAS_FWD_LOOP]
+    push ax
+    call bas_lblfind                ; BX = the label
+    pop ax
+    jc .nolbl
+    push ax
+    call bas_lblat
+    mov cx, [si + BAS_LBL_LOOP]
+    mov bx, [si + BAS_LBL_OPS]
+    pop ax
+    cmp ax, cx
+    jne .wrongloop
+    mov ax, bx                      ; AX = where the label is...
+    mov bx, dx
+    call bas_fwdat
+    mov bx, [si + BAS_FWD_SLOT]     ; ...and BX = the placeholder
+    call bas_patch
+    inc dx
+    jmp .flp
+.fdone:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.nolbl:
+    mov si, bas_e_nolbl
+    call bas_err
+    jmp .fdone
+.wrongloop:
+    mov si, bas_e_lblloop
+    call bas_err
+    jmp .fdone
 
 ; --- bas_donejmp - a JMP onto the end of the construct, chained -----------
 ; in:  AX = the chain's head so far, 0 if this is the first
@@ -2526,9 +2969,11 @@ bas_sayfp:
     ret
 
 ; --- bas_sayint - AX = a signed 16-bit value, onto the console ---------------
-; QuickBASIC's PRINT puts a space where the sign would be on a positive
-; number, and this language keeps that (`STR$` does too - library.md says so
-; in as many words), so the two agree and a port's output lines up.
+; PLAIN DIGITS, no sign space and no separator. It had QuickBASIC's number
+; padding, copied from bas_sayfp above - and its ONLY caller is the refusal
+; line, where that padding reads as `Error at line  3 : ...`. PRINT's spacing
+; belongs to PRINT and bas_sayfp does it for itself; a future caller that
+; wants ` 42 ` can say so in two more con_says.
 bas_sayint:
     push ax
     push bx
@@ -2551,17 +2996,12 @@ bas_sayint:
     mov [si], dl
     or ax, ax
     jnz .l
-    dec si
-    mov byte [si], ' '              ; the sign's place, as QuickBASIC leaves it
     or cx, cx
     jns .go
+    dec si
     mov byte [si], '-'
 .go:
     call con_say
-    mov si, bas_s_sp                ; ...and the one AFTER it: QuickBASIC
-    call con_say                    ; separates numbers that way, and the
-                                    ; reference does it too - checked, not
-                                    ; assumed (` 42 `, trailing space and all)
     pop si
     pop dx
     pop cx
@@ -2617,12 +3057,13 @@ bas_kw_dflt:    db 'DEFAULT', 0
 bas_kw_othw:    db 'OTHERWISE', 0
 bas_kw_endsel:  db 'ENDSELECT', 0
 bas_kw_endsw:   db 'ENDSWITCH', 0
+bas_kw_goto:    db 'GOTO', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
 bas_s_minus:    db '-', 0
 bas_s_bar:      db '| ', 0
-bas_s_errat:    db 'Error at line', 0
+bas_s_errat:    db 'Error at line ', 0
 bas_s_colon:    db ': ', 0
 
 bas_e_stmt:     db 'not a statement this wave knows', 0
@@ -2650,4 +3091,10 @@ bas_e_exitloop: db 'EXIT IF is not inside a loop', 0
 bas_e_elifelse: db 'ELSEIF cannot come after ELSE', 0
 bas_e_caseaft:  db 'CASE cannot come after DEFAULT', 0
 bas_e_defagain: db 'this SELECT already has a DEFAULT', 0
+bas_e_lblmax:   db 'too many labels - this wave holds 16', 0
+bas_e_fwdmax:   db 'too many GOTOs waiting for their labels - eight', 0
+bas_e_lbldup:   db 'that label is already defined', 0
+bas_e_nolbl:    db 'GOTO names a label the program does not have', 0
+bas_e_lblloop:  db 'GOTO cannot jump into or out of a loop', 0
+bas_e_gotolbl:  db 'GOTO wants a label', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

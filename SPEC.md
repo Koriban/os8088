@@ -241053,6 +241053,43 @@ packed into a number) need strings, which are wave 3.
 `CASE` after `DEFAULT`, a second `DEFAULT`, and an `ENDIF` closing a `SELECT`
 or an `ENDSELECT` closing an `IF`.
 
+### 126.22 Labels and `GOTO`, and the one place the oracle is not followed
+
+**A label is a name followed by a colon, at the start of a statement.** Its
+characters are letters, digits, `_` and `.`, and it **may begin with a
+digit** — GFA's rule (entry 249), deliberately looser than a variable name,
+and the colon is what makes it unambiguous against everything else on a
+line. The colon is left off at the reference: `GOTO jump_point`.
+
+**A backward reference resolves at once; a forward one waits.** The label
+table holds 16 and the pending forward references 8, each refused by name
+when full, and the pending ones are resolved where the program's text ends —
+in the same place the unclosed-block refusal lives, because both are
+questions that only the end of the program can answer.
+
+**An undefined label is REFUSED**, and this is the one place in this chapter
+where the oracle is deliberately not followed. GFA's own manual records what
+its compiler does instead: *"If the label used with GOTO is undefined the
+compiler will not issue an error message. Instead the compiler writes a bad
+binary where GOTO is translated into JMP 0."* That is a defect its own
+documentation apologises for, and a program that jumps to the top of itself
+instead of being refused is the hardest kind of thing to debug on a machine
+with no debugger.
+
+**The jump must stay inside the same innermost LOOP.** GFA's table forbids
+jumping out of a `FOR` or a procedure and allows one *within* the same loop,
+and the reason is run-time state: a loop holds a variable and a limit, and a
+procedure will hold a return address, while a block `IF` holds nothing at
+all. So the rule is about loops and procedures, not about blocks generally —
+a jump between the two arms of one `IF` maintains nothing and is allowed.
+
+Identity is the loop's **own top offset**, which is unique per loop, with 0
+meaning "not inside one". It is recorded at the label, at every `GOTO`, and
+in a pending forward reference, and checked when the two meet — so a jump
+into a *different* loop at the same nesting depth is caught, which a depth
+count alone would not catch. When procedures arrive they extend this one
+word rather than adding a second rule.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

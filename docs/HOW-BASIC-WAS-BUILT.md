@@ -978,9 +978,55 @@ with a range in the middle.
 the row itself — a keystroke map that duplicated `os88qemu`'s and had never
 been used — which went.
 
+## Labels, `GOTO`, and declining to copy the oracle
+
+GFA's manual is the authority for this chapter, and here it documents a
+defect: *"If the label used with GOTO is undefined the compiler will not
+issue an error message. Instead the compiler writes a bad binary where GOTO
+is translated into JMP 0."* A program that silently jumps to its own top
+instead of being refused is the worst thing to hand someone on a machine
+with no debugger, so this is the one place the oracle is deliberately not
+followed. Everything else about labels is GFA's, including the rule that a
+label may **begin with a digit** and hold `.` and `_` — which is why the
+probe for one is not `bas_word` and why the **colon**, not the name, is what
+identifies it.
+
+The interesting part was the legality rule. GFA's table forbids jumping out
+of a `FOR` or a procedure and allows a jump *within* the same loop, and the
+reason is run-time state: a loop holds a variable and a limit, a procedure
+will hold a return address, and a block `IF` holds nothing at all — so a
+jump between the two arms of one `IF` is harmless and allowed, and the rule
+is about loops, not blocks. I nearly implemented it as a **depth** count,
+which would have let a jump from one `FOR` into a sibling `FOR` through:
+both are depth 1. The loop's own top offset is unique per loop, so that is
+the identity recorded at the label, at every `GOTO`, and in a pending
+forward reference.
+
+A forward reference is the normal case rather than the exception, so the
+pending table carries everything its refusal will need — including the
+**line**, because resolution happens where the program's text ends and
+`[bas_line]` has long since moved on. Without that the refusal names the
+last line of the program.
+
+Writing the row's refusal cases turned up two more things. The error
+sentence read `Error at line  3 : ...`, and the cause was not the missing
+space I first assumed: `bas_sayint` was padding the number the way
+QuickBASIC's `PRINT` pads one, a sign space before and a separator after.
+That padding was copied from `bas_sayfp`, which does the same thing *and
+needs to* — and `bas_sayint`'s only caller in the whole package is the
+refusal line, where it reads as a typo. Four waves of refusals carried it,
+because no row had ever read an error message. And a part that tests a
+compile-time refusal **cannot print the row's sentinel**: the whole program
+is compiled before any of it runs, so a refused program prints nothing at
+all, not even its own `CLS`. Those parts read the buffer at the address an
+earlier part found, which is sound because the console is in the package's
+bss and the package does not move while its window is open.
+
+855 bytes and 212 of bss (16 labels, 8 pending references).
+
 ## Next
 
-`GOTO`/`GOSUB` and **procedures** with `LOCAL`/`STATIC` and recursion,
+**Procedures** with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes

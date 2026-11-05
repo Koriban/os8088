@@ -68,6 +68,9 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     the row had no range in the MIDDLE of a list - the only shape where the
     two targets differ - so `CASE 5 TO 9, 1` was added and the mutant loses
     exactly it (80), while `CASE 1, 5 TO 9, 20` (78) still passes.
+  * GOTO: making every loop identity 0 (what a DEPTH count would effectively
+    do for two loops at the same depth) - the jump out of a FOR stops being
+    refused and that one sentence disappears from the console.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -390,7 +393,60 @@ PART5 = [
     ("PRINT s",                          "221"),    # 1 + 10 + 100 + 10 + 100
 ]
 
-PARTS = (PART1, PART2, PART3, PART4, PART5)
+PART6 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- GOTO forwards, over a line that must not run ---------------------
+    ("GOTO skip",                        None),
+    ("PRINT 91",                         None),
+    ("skip:",                            None),
+    ("PRINT 82",                         "82"),
+    # ...and backwards, which is a loop made out of a jump ----------------
+    ("n = 0",                            None),
+    ("again:",                           None),
+    ("n = n + 1",                        None),
+    ("IF n < 3 THEN GOTO again",         None),
+    ("PRINT n",                          "3"),
+    # ...a label spelled the way only a LABEL may be: a leading digit, a
+    # dot and an underscore (SPEC.md 126.22, GFA's entry 249)
+    ("GOTO 2nd.step_a",                  None),
+    ("PRINT 92",                         None),
+    ("2nd.step_a:",                      None),
+    ("PRINT 83",                         "83"),
+    # ...and a jump WITHIN a loop, which is the one GFA's table allows ----
+    ("q = 0",                            None),
+    ("FOR k = 1 TO 3",                   None),
+    ("q = q + 1",                        None),
+    ("GOTO inside",                      None),
+    ("q = q + 10",                       None),
+    ("inside:",                          None),
+    ("NEXT",                             None),
+    ("PRINT q",                          "3"),     # ...not 33
+    # ...a label sharing its line with a statement ------------------------
+    ("GOTO together",                    None),
+    ("together: PRINT 84",               "84"),
+]
+
+# --- the refusals, one program each, because a refusal ends the program ---
+# NOTHING IS PRINTED BY THESE, not even their CLS: the whole program is
+# compiled before any of it runs, so the console holds the refusal alone.
+PART7 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      None),
+    ("GOTO nowhere",
+     "Error at line 3: GOTO names a label the program does not have"),
+]
+
+PART8 = [
+    ("CLS",                              None),
+    ("FOR k = 1 TO 3",                   None),
+    ("GOTO outside",                     None),
+    ("NEXT",                             None),
+    ("outside:",
+     "Error at line 3: GOTO cannot jump into or out of a loop"),
+]
+
+PARTS = (PART1, PART2, PART3, PART4, PART5, PART6, PART7, PART8)
 
 FAILED = []
 
@@ -561,6 +617,9 @@ def typ(m, text):
 SEED = "31415"          # ...printed first by every part; see console_lines
 
 
+_BUF = [None]                   # where a part last found the console
+
+
 def console_lines(m):
     """Every non-blank line of the console BUFFER, in order.
 
@@ -577,6 +636,15 @@ def console_lines(m):
     it away, and it is written by the very console being looked for. From
     it the region is bounded by the attribute byte its own cells carry -
     whatever that turns out to be - rather than by a guess about it.
+
+    **A PART THAT TESTS A REFUSAL CANNOT PRINT IT.** The whole program is
+    compiled before any of it runs (SPEC.md 126.19), so a program refused
+    at compile time prints nothing at all - not the sentinel, not even its
+    own CLS. Those parts are read at the address a previous part found: the
+    buffer is in the package's bss and the package does not move while the
+    window stays open. The fallback is only taken when the scan fails, the
+    attribute-shape check still applies to it, and a refusal's expectation
+    is an exact sentence - so a stale address cannot pass quietly.
     """
     img = m.read(0, 0x100000)
     pat = SEED.encode()
@@ -587,9 +655,12 @@ def console_lines(m):
             at = i
             break
     if at < 0:
-        print("      no buffer: the sentinel %s is not in memory as cells"
-              % SEED)
-        return None
+        if _BUF[0] is None:
+            print("      no buffer: the sentinel %s is not in memory as cells"
+                  % SEED)
+            return None
+        at = _BUF[0]
+        print("      no sentinel: reading the buffer a part before it found")
     attr = img[at + 1]
     # back up to the row this sits on, then to the first row sharing its
     # attribute - SEED is at column 1 (PRINT's sign space is column 0)
@@ -604,6 +675,7 @@ def console_lines(m):
         rows += 1
     print("      console buffer: 0x%X, %d rows, attr 0x%02X"
           % (start, rows, attr))
+    _BUF[0] = at
     out = []
     for base in range(start, start + rows * ROW, ROW):
         txt = "".join(chr(img[base + 2 * c])
