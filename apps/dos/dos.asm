@@ -285,16 +285,26 @@ section .text
   %endif
  %endmacro
  %macro WIN_ONLYF 0
+  ; **STRICT NEAR, OR THE BRACKET IS INVISIBLE TO THE CHECKER.** `near` alone
+  ; is a HINT: nasm 3.01 shortens a resolved `jmp near` to the two-byte form,
+  ; which also moves %%in from +3 to +2 - so the pair assembles as
+  ; `74 02 EB rr` where tools/doswtail.py reads `74 03 E9 rrrr` (its own
+  ; header spells that shape out). The bracket then does not exist as far as
+  ; the gate is concerned and every tail reference inside it is reported as
+  ; a stray, which is a RED BUILD on a correctly bracketed program. nasm
+  ; 2.16 and 3.02 do not shorten it, so this is invisible on most boxes.
+  ; apps/dos/doscall.inc and kerndos/kdos.asm carry `strict` for the same
+  ; reason, one object along.
   %push dwonly
   %assign DOS_WBN DOS_WBN + 1
   %ifndef DOS_WBREAK
     call dos_hq
     je short %%in
-    jmp near %$end
+    jmp strict near %$end
   %elif DOS_WBN != DOS_WBREAK
     call dos_hq
     je short %%in
-    jmp near %$end
+    jmp strict near %$end
   %endif
 %%in:
  %endmacro
