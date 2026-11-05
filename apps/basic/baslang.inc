@@ -135,6 +135,8 @@ BK_WHILE equ 3
 BK_FOR   equ 4
 BK_DO    equ 5
 BK_REPEAT equ 6
+BK_SELECT equ 7
+BK_DEFAULT equ 8
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -284,6 +286,27 @@ bas_c_stmt:
     mov si, bas_kw_elseif           ; BEFORE or after ELSE makes no
     call bas_wordis                 ; difference: bas_wordis compares the
     je .selseif                     ; whole word, never a prefix
+    mov si, bas_kw_select           ; SELECT, and SWITCH is GFA's own second
+    call bas_wordis                 ; spelling of it (the compendium's entry
+    je .select                      ; 228), not a synonym invented here
+    mov si, bas_kw_switch
+    call bas_wordis
+    je .select
+    mov si, bas_kw_case
+    call bas_wordis
+    je .case
+    mov si, bas_kw_dflt
+    call bas_wordis
+    je .sdefault
+    mov si, bas_kw_othw             ; ...which GFA accepts and rewrites to
+    call bas_wordis                 ; DEFAULT for other BASICs' sake
+    je .sdefault
+    mov si, bas_kw_endsel
+    call bas_wordis
+    je .sendsel
+    mov si, bas_kw_endsw
+    call bas_wordis
+    je .sendsel
     mov si, bas_kw_endif
     call bas_wordis
     je .sendif
@@ -607,6 +630,196 @@ bas_c_stmt:
 .btmpop:
     pop bx
     ret
+
+; --- SELECT <expr> / CASE / DEFAULT / ENDSELECT (SPEC.md 126.21) -----------
+; GFA's multi-way branch, and it needs NO NEW OPCODE: the subject is kept in
+; a variable no program can name and every test is the comparison ops the
+; expression compiler already emits. What it needs instead is a SECOND chain
+; beside 126.20's - a CASE may list several values and any of them enters the
+; one body, whose address is not known until the last of them is parsed.
+.select:
+    call bas_c_expr                 ; the subject, evaluated ONCE - a SELECT
+    cmp byte [bas_bad], 0           ; over `f(x)` must not call it per arm
+    jne .x
+    call bas_varhidden              ; ...and kept where FOR keeps its limit
+    jc .x
+    push ax
+    mov al, OP_STORE
+    call bas_emit
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .x
+    push ax
+    call bas_emit                   ; AL = which variable
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .x
+    mov [bas_blkv], ax              ; ...and it rides in the entry's V, the
+    xor cx, cx                      ; field FOR uses for the same purpose
+    xor bx, bx
+    mov ax, BK_SELECT
+    jmp bas_blkpush
+
+; --- CASE <v>[,<v>...] | CASE <a> TO <b> | CASE TO <b> | CASE <a> TO -------
+.case:
+    call bas_blkpop                 ; AX = kind, CX = the open arm's no-match
+    jc .x                           ; jump, V = the subject, chain in blkex
+    cmp ax, BK_DEFAULT
+    je .caseaft
+    cmp ax, BK_SELECT
+    jne .wrongblk
+    call bas_armclose               ; CX = the arm above's no-match jump
+    cmp byte [bas_bad], 0
+    jne .x
+    xor ax, ax
+    mov [bas_casech], ax            ; no value of this CASE has matched yet
+.casealt:
+    call bas_skipsp
+    call bas_word                   ; CASE TO <b>, an open LOWER end?
+    jc .casea
+    mov si, bas_kw_to
+    call bas_wordis
+    je .caseupper
+    mov [bas_src], di               ; not TO, so hand it to the expression
+.casea:
+    call bas_emitsubj
+    call bas_c_expr                 ; the value, or the range's lower end
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    call bas_word                   ; ...TO, making it a range?
+    jc .caseeq
+    mov si, bas_kw_to
+    call bas_wordis
+    je .caserange
+    mov [bas_src], di
+.caseeq:
+    mov al, OP_EQ
+    call bas_emit
+    jmp .casematch
+.caseupper:
+    call bas_emitsubj
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_LE
+    call bas_emit
+    jmp short .casematch
+.caserange:
+    ; An upper end that is not there is `CASE <a> TO`, an open UPPER end.
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .caselower
+    cmp al, 10
+    je .caselower
+    cmp al, ','
+    je .caselower
+    ; <a> TO <b> IS TWO TESTS AND NOT ONE, because there is no AND yet: the
+    ; lower end is tested first and a failure skips the upper end's test
+    ; rather than this whole CASE - the alternatives after a comma are still
+    ; owed their turn.
+    mov al, OP_GE
+    call bas_emit
+    mov al, OP_JF
+    call bas_emit
+    mov cx, [bas_opn]
+    push cx
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .casepop
+    call bas_emitsubj
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .casepop
+    mov al, OP_LE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .casepop
+    mov ax, [bas_casech]
+    call bas_casejt
+    mov [bas_casech], ax
+    pop bx                          ; ...and the lower end's failure lands
+    mov ax, [bas_opn]               ; on the next alternative, HERE
+    call bas_patch
+    jmp short .casemore
+.caselower:
+    mov al, OP_GE
+    call bas_emit
+.casematch:
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_casech]            ; a match leaves the tests for the body
+    call bas_casejt
+    mov [bas_casech], ax
+.casemore:
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .casedone
+    inc word [bas_src]
+    jmp .casealt
+.casedone:
+    mov al, OP_JMP                  ; nothing matched: on to the next CASE,
+    call bas_emit                   ; which is this arm's one PAT slot
+    mov cx, [bas_opn]
+    push cx
+    xor ax, ax
+    call bas_emitw
+    pop cx
+    cmp byte [bas_bad], 0
+    jne .x
+    push cx
+    mov bx, [bas_casech]            ; ...and every match lands HERE, on the
+    mov ax, [bas_opn]               ; body, which is only now known
+    call bas_blkexits
+    pop cx
+    xor bx, bx
+    mov ax, BK_SELECT
+    call bas_blkpush
+    jc .x
+    mov ax, [bas_blkex]
+    jmp bas_blksetex
+.casepop:
+    pop bx
+    ret
+.caseaft:
+    mov si, bas_e_caseaft
+    jmp bas_err
+
+.sdefault:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_DEFAULT
+    je .defagain
+    cmp ax, BK_SELECT
+    jne .wrongblk
+    call bas_armclose
+    cmp byte [bas_bad], 0
+    jne .x
+    xor cx, cx                      ; DEFAULT opens no no-match jump, and
+    xor bx, bx                      ; 126.20's zero says so
+    mov ax, BK_DEFAULT
+    call bas_blkpush
+    jc .x
+    mov ax, [bas_blkex]
+    jmp bas_blksetex
+.defagain:
+    mov si, bas_e_defagain
+    jmp bas_err
+
+.sendsel:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_SELECT               ; ...and ENDIF cannot close either of
+    je .endifok                     ; them, nor ENDSELECT an IF: the tail is
+    cmp ax, BK_DEFAULT              ; shared, the kind test is not
+    je .endifok
+    jmp .wrongblk
 
 .sendif:
     call bas_blkpop
@@ -1438,17 +1651,72 @@ bas_blkexits:
 ; The old head rides IN the placeholder, so the pending jumps are a list in
 ; the op stream and no table pays for them.
 bas_donejmp:
-    push bx
     push cx
-    mov cx, ax
-    mov al, OP_JMP
+    mov cl, OP_JMP
+    call bas_chainj
+    pop cx
+    ret
+
+; --- bas_casejt - the same, as a jump-if-TRUE -----------------------------
+; A CASE's matched-jumps are a chain for 126.20's reason one construct along:
+; several of them, one destination, and the destination not known yet.
+bas_casejt:
+    push cx
+    mov cl, OP_JT
+    call bas_chainj
+    pop cx
+    ret
+
+; in:  CL = the opcode, AX = the chain's head so far
+; out: AX = the new head
+bas_chainj:
+    push bx
+    push dx
+    mov dx, ax                      ; the old head, out of AL's way
+    mov al, cl
     call bas_emit
     mov bx, [bas_opn]
-    mov ax, cx
+    mov ax, dx
     call bas_emitw
     mov ax, bx
+    pop dx
+    pop bx
+    ret
+
+; --- bas_armclose - finish the arm above a CASE or DEFAULT ----------------
+; in:  CX = the arm above's pending no-match jump, 0 if there is no arm
+;      above at all (the first CASE of a SELECT, whose tests the subject's
+;      store falls straight into)
+; out: [bas_blkex] extended by this arm's finished-jump
+bas_armclose:
+    push ax
+    push bx
+    push cx
+    or cx, cx
+    jz .acout
+    mov ax, [bas_blkex]
+    call bas_donejmp                ; the arm above is finished: to ENDSELECT
+    mov [bas_blkex], ax
+    cmp byte [bas_bad], 0
+    jne .acout
+    pop bx                          ; ...and its no-match jump lands HERE,
+    push bx                         ; on the first of this arm's tests
+    mov ax, [bas_opn]
+    call bas_patch
+.acout:
     pop cx
     pop bx
+    pop ax
+    ret
+
+; --- bas_emitsubj - push the SELECT subject, whichever variable it is -----
+bas_emitsubj:
+    push ax
+    mov al, OP_LOAD
+    call bas_emit
+    mov ax, [bas_blkv]
+    call bas_emit
+    pop ax
     ret
 
 ; --- bas_blksetex - the top block's chain head is AX ----------------------
@@ -2342,6 +2610,13 @@ bas_kw_repeat:  db 'REPEAT', 0
 bas_kw_until:   db 'UNTIL', 0
 bas_kw_exit:    db 'EXIT', 0
 bas_kw_elseif:  db 'ELSEIF', 0
+bas_kw_select:  db 'SELECT', 0
+bas_kw_switch:  db 'SWITCH', 0
+bas_kw_case:    db 'CASE', 0
+bas_kw_dflt:    db 'DEFAULT', 0
+bas_kw_othw:    db 'OTHERWISE', 0
+bas_kw_endsel:  db 'ENDSELECT', 0
+bas_kw_endsw:   db 'ENDSWITCH', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -2373,4 +2648,6 @@ bas_e_nextvar:  db 'NEXT names a different variable from its FOR', 0
 bas_e_exitif:   db 'EXIT wants IF and a condition', 0
 bas_e_exitloop: db 'EXIT IF is not inside a loop', 0
 bas_e_elifelse: db 'ELSEIF cannot come after ELSE', 0
+bas_e_caseaft:  db 'CASE cannot come after DEFAULT', 0
+bas_e_defagain: db 'this SELECT already has a DEFAULT', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

@@ -944,6 +944,40 @@ all skipped entirely with the line after it still running. The last case is
 an `ELSEIF` chain inside a `FOR`, where the arms' jumps and the loop's share
 one op stream and must not cross: `t` sums to 112 over four iterations.
 
+## `SELECT`, and reading the oracle before guessing
+
+I nearly wrote QuickBASIC's `SELECT CASE x` / `CASE ELSE` / `END SELECT`
+from memory. The plan's own wave list says "SELECT CASE", which is where
+that would have come from, and GFA's manual — held at
+`_LIBRARY/languages/basic/gfa-basic/gfabasic.txt`, entry 228 — says
+something different: `SELECT x` with no `CASE` after it, `DEFAULT` rather
+than `CASE ELSE`, `ENDSELECT` as one word, and three pairs of synonyms
+(`SWITCH`, `OTHERWISE`, `ENDSWITCH`) that the interpreter itself normalised.
+Ten minutes of reading, and the difference is every line of a real GFA
+listing.
+
+It also showed what the shape is *for*: ranges and lists, `CASE 2 TO 4` and
+`CASE 5,6`, which is most of why a `SELECT` beats an `ELSEIF` chain.
+
+**It needed no new opcode.** The subject goes in the hidden variable `FOR`
+keeps its limit in; a test is `LOAD subject`, the value, and one of the
+comparisons that were already there. What it needed was a THIRD kind of
+pending jump: a list has several ways into one body, and the body's address
+is not known until the last value is parsed — so another chain in the op
+stream, this one local to a single `CASE` line and never seen by
+`ENDSELECT`.
+
+The sharp edge was the range. `<a> TO <b>` is two tests, there being no
+`AND` yet, and the lower end's failure must jump to the **next alternative**
+rather than out of the arm — `CASE 1, 5 TO 9, 20` is one arm with four tests
+and three ways in, and a lower end that fails still owes `20` its turn. That
+is one `jc`'s worth of difference and nothing would have shown it but a list
+with a range in the middle.
+
+759 bytes and two of bss. The build also turned up a dead `QCHAR` table in
+the row itself — a keystroke map that duplicated `os88qemu`'s and had never
+been used — which went.
+
 ## Next
 
 `GOTO`/`GOSUB` and **procedures** with `LOCAL`/`STATIC` and recursion,

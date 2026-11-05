@@ -63,6 +63,11 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
   * ELSEIF: taking ENDIF's walk of the finished-jump chain out - every arm
     then falls into the one below it, and part 3's ELSE case goes wrong
     before part 4 is reached.
+  * SELECT: sending a range's FAILED LOWER END out of the arm instead of on
+    to the next value after the comma. Writing that mutation is what showed
+    the row had no range in the MIDDLE of a list - the only shape where the
+    two targets differ - so `CASE 5 TO 9, 1` was added and the mutant loses
+    exactly it (80), while `CASE 1, 5 TO 9, 20` (78) still passes.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -299,11 +304,93 @@ PART4 = [
     ("PRINT t",                          "112"),     # 1 + 10 + 100 + 1
 ]
 
-PARTS = (PART1, PART2, PART3, PART4)
+PART5 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- SELECT: a range arm, among a single value and a list -------------
+    ("x = 3",                            None),
+    ("SELECT x",                         None),
+    ("CASE 1",                           None),
+    ("PRINT 61",                         None),
+    ("CASE 2 TO 4",                      None),
+    ("PRINT 62",                         "62"),
+    ("CASE 5,6",                         None),
+    ("PRINT 63",                         None),
+    ("DEFAULT",                          None),
+    ("PRINT 64",                         None),
+    ("ENDSELECT",                        None),
+    # ...the SECOND value of a list, which is the matched-jump chain --------
+    ("x = 6",                            None),
+    ("SELECT x",                         None),
+    ("CASE 1",                           None),
+    ("PRINT 65",                         None),
+    ("CASE 5,6",                         None),
+    ("PRINT 66",                         "66"),
+    ("DEFAULT",                          None),
+    ("PRINT 67",                         None),
+    ("ENDSELECT",                        None),
+    # ...the DEFAULT, when nothing matches ---------------------------------
+    ("x = 9",                            None),
+    ("SELECT x",                         None),
+    ("CASE 1",                           None),
+    ("PRINT 68",                         None),
+    ("DEFAULT",                          None),
+    ("PRINT 69",                         "69"),
+    ("ENDSELECT",                        None),
+    # ...no DEFAULT and no match: the whole thing is skipped ---------------
+    ("SELECT x",                         None),
+    ("CASE 1",                           None),
+    ("PRINT 70",                         None),
+    ("ENDSELECT",                        None),
+    ("PRINT 71",                         "71"),     # ...and the line after
+    # ...the open ends, over an EXPRESSION subject -------------------------
+    ("x = 2",                            None),
+    ("SELECT x + 3",                     None),
+    ("CASE TO 4",                        None),
+    ("PRINT 72",                         None),
+    ("CASE 5 TO",                        None),
+    ("PRINT 73",                         "73"),
+    ("ENDSELECT",                        None),
+    # ...SWITCH, OTHERWISE and ENDSWITCH, which are GFA's own spellings ----
+    ("SWITCH x",                         None),
+    ("CASE 1",                           None),
+    ("PRINT 76",                         None),
+    ("OTHERWISE",                        None),
+    ("PRINT 77",                         "77"),
+    ("ENDSWITCH",                        None),
+    # ...a range IN THE MIDDLE of a list, which is the only place a failed
+    # end's jump target can be told apart: it owes the values after the
+    # comma their turn, and must not leave the arm
+    ("x = 20",                           None),
+    ("SELECT x",                         None),
+    ("CASE 1, 5 TO 9, 20",               None),     # the UPPER end fails...
+    ("PRINT 78",                         "78"),
+    ("DEFAULT",                          None),
+    ("PRINT 79",                         None),
+    ("ENDSELECT",                        None),
+    ("x = 1",                            None),
+    ("SELECT x",                         None),
+    ("CASE 5 TO 9, 1",                   None),     # ...and the LOWER end,
+    ("PRINT 80",                         "80"),     # which is a jump and not
+    ("DEFAULT",                          None),     # a fall-through
+    ("PRINT 81",                         None),
+    ("ENDSELECT",                        None),
+    # ...inside a FOR, where the arms' jumps and the loop's share a stream
+    ("s = 0",                            None),
+    ("FOR k = 1 TO 5",                   None),
+    ("SELECT k",                         None),
+    ("CASE 2,4",                         None),
+    ("s = s + 10",                       None),
+    ("CASE 3 TO 5",                      None),
+    ("s = s + 100",                      None),
+    ("DEFAULT",                          None),
+    ("s = s + 1",                        None),
+    ("ENDSELECT",                        None),
+    ("NEXT",                             None),
+    ("PRINT s",                          "221"),    # 1 + 10 + 100 + 10 + 100
+]
 
-QCHAR = {" ": "spc", "=": "equal", "+": "shift-equal", "-": "minus",
-         "*": "shift-8", "/": "slash", "\\": "backslash",
-         "(": "shift-9", ")": "shift-0", "\n": "ret"}
+PARTS = (PART1, PART2, PART3, PART4, PART5)
 
 FAILED = []
 

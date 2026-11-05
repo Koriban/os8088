@@ -240993,6 +240993,66 @@ chain of `n` arms is `n` tests at worst and not `n` nested blocks. `ELSE` is
 the same code with the condition and the new `PAT` left out, which is how it
 came to be rewritten onto the chain rather than keeping its own patch slot.
 
+### 126.21 `SELECT`, which needed no new opcode
+
+**The authority is GFA's own entry 228**, held locally at
+`_LIBRARY/languages/basic/gfa-basic/gfabasic.txt`, and the shape is its:
+
+```
+SELECT <expr>              ' SWITCH is GFA's own second spelling
+CASE <v>[,<v>...]          ' a list: any of them
+CASE <a> TO <b>            ' a range, both ends
+CASE TO <b>                ' ...an open lower end
+CASE <a> TO                ' ...an open upper end
+DEFAULT                    ' OTHERWISE is GFA's, which it rewrites to this
+ENDSELECT                  ' ENDSWITCH likewise
+```
+
+The three pairs of synonyms are **GFA's, not invented here**: the manual
+lists both halves of each and says the interpreter rewrites `OTHERWISE` to
+`DEFAULT` itself, so a listing from the oracle may carry either spelling and
+refusing one would refuse real GFA source. That is a different argument from
+§126.19's "one spelling is enough" for a bare `EXIT`, which no GFA program
+can have been written against, because GFA has no bare `EXIT`.
+
+**It adds no opcode.** The subject goes into a variable no program can name —
+the same `bas_varhidden` entry `FOR` keeps its limit in — and every test is
+then `OP_LOAD`, the value's own ops, and one of `OP_EQ`/`OP_LE`/`OP_GE`.
+The branching is `OP_JT`, `OP_JF` and `OP_JMP`, all of which §126.19 and
+§126.20 already needed. **It costs one of the sixteen variables**, which is
+the one resource a `SELECT` spends that an `IF` chain does not.
+
+**The subject is evaluated ONCE**, which is the whole reason it is stored at
+all: `SELECT f(x)` over five arms must not call `f` five times, and that is
+a behavioural promise rather than an optimisation.
+
+**Two chains, for §126.20's two reasons.** An arm's no-match jump has one
+destination — the next arm — so it lives in the entry's single `PAT` slot and
+each arm patches the one before it, with `DEFAULT` leaving it at 0. An arm's
+finished-jump goes to the `ENDSELECT` and there is one per arm, so those are
+§126.20's chain, walked by the same code. And a `CASE` adds a **third** kind:
+a list has several matched-jumps with ONE destination, the body, which is not
+known until the last value has been parsed — so those are a chain too, local
+to the one `CASE` line, and `ENDSELECT` never sees it.
+
+**`<a> TO <b>` is two tests and not one**, because there is no `AND` yet; and
+the lower end's failure jumps to the **next alternative**, not out of the
+`CASE`, because the values after a comma are still owed their turn.
+`CASE 1, 5 TO 9, 20` is one arm with four tests and three ways in.
+
+**The arms are tried in order and the first match wins.** `CASE 2,4` before
+`CASE 3 TO 5` takes 4, which is what every BASIC of this line does and the
+row asserts.
+
+**Not here.** `CONT` — GFA's fall-through into the next arm's body — wants a
+fourth chain patched by each arm's body start, and is left out until a
+program wants it. The string forms (`CASE "a" TO "z"`, four characters
+packed into a number) need strings, which are wave 3.
+
+**Refused by name**, each with its own words: `CASE` outside a `SELECT`,
+`CASE` after `DEFAULT`, a second `DEFAULT`, and an `ENDIF` closing a `SELECT`
+or an `ENDSELECT` closing an `IF`.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
