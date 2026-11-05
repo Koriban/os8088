@@ -653,7 +653,11 @@ BAS_B_bas_cals   equ BAS_B_bas_ncal + 2
 BAS_B_bas_prcp   equ BAS_B_bas_cals + BAS_CAL_MAX*BAS_CAL_SZ
 BAS_B_bas_inprc  equ BAS_B_bas_prcp + BAS_PRC_PMAX
 BAS_B_bas_calfn  equ BAS_B_bas_inprc + 2
-BAS_B_bas_nfrm   equ BAS_B_bas_calfn + 2
+BAS_B_bas_prcnv  equ BAS_B_bas_calfn + 2
+BAS_B_bas_prcvar equ BAS_B_bas_prcnv + 2
+BAS_B_bas_argsl  equ BAS_B_bas_prcvar + 2
+BAS_B_bas_alias  equ BAS_B_bas_argsl + BAS_PRC_PMAX*2
+BAS_B_bas_nfrm   equ BAS_B_bas_alias + BAS_VAR_MAX
 BAS_B_bas_frms   equ BAS_B_bas_nfrm + 2
 BAS_B_bas_nsav   equ BAS_B_bas_frms + BAS_FRM_MAX*BAS_FRM_SZ
 BAS_B_bas_savs   equ BAS_B_bas_nsav + 2
@@ -797,6 +801,23 @@ bas_calfn       equ os88_image_end + BAS_B_bas_calfn ; byte: whether the
                                          ; call site being compiled can use a
                                          ; value (SPEC.md 126.25) - compile
                                          ; time only
+bas_prcnv       equ os88_image_end + BAS_B_bas_prcnv ; word: which
+                                         ; parameter VAR began at, while ONE
+                                         ; definition is being compiled
+bas_prcvar      equ os88_image_end + BAS_B_bas_prcvar; byte: whether it had
+                                         ; a VAR at all
+bas_argsl       equ os88_image_end + BAS_B_bas_argsl ; where each of a
+                                         ; call's arguments put its OPCODE
+                                         ; byte, 0 if it was not a bare
+                                         ; variable name - the byte a VAR
+                                         ; parameter rewrites (SPEC.md
+                                         ; 126.26). Compile time only
+bas_alias       equ os88_image_end + BAS_B_bas_alias ; which variable each
+                                         ; variable really IS: identity
+                                         ; except where a VAR parameter
+                                         ; points one at the caller's. RUN
+                                         ; time, saved per frame beside the
+                                         ; value it shadows
 bas_nfrm        equ os88_image_end + BAS_B_bas_nfrm  ; word: frames in hand
 bas_frms        equ os88_image_end + BAS_B_bas_frms  ; ...the return offset
                                          ; and the save mark of each, which

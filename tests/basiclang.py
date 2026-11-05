@@ -80,6 +80,11 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     Writing it showed that both two-value calls in the part were symmetric -
     3*4 and 4*3 are one number - so `order(10, 3)` printing `a - b` was
     added, and it is the single difference the mutant makes: 7 against -7.
+  * VAR: leaving a by-reference argument's OP_LOAD alone instead of
+    rewriting the byte to OP_VREF. The alias then points at whatever
+    variable number the VALUE rounds to - which for GFA's own entry-238
+    example is variable 0, so `a` collects both answers (16) and `b` keeps
+    0. A plausible-looking wrong answer, which is what this row is for.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -587,6 +592,58 @@ PART13 = [
     ("ENDFUNC",                          None),
 ]
 
+PART16 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- VAR: the variable itself, not its value (SPEC.md 126.26) --------
+    ("a = 0",                            None),
+    ("b = 0",                            None),
+    ("sum(13, 12, a)",                   None),
+    ("sum(7, 9, b)",                     None),
+    ("PRINT a",                          "25"),     # GFA's own entry-238
+    ("PRINT b",                          "16"),     # example, and its answers
+    # ...and a reference reaches through a SECOND call ---------------------
+    ("c = 1",                            None),
+    ("outer2(c)",                        None),
+    ("PRINT c",                          "9"),
+    # ...each frame's own, under recursion --------------------------------
+    ("e = 0",                            None),
+    ("climb(3, e)",                      None),
+    ("PRINT e",                          "3"),
+    # ...a value parameter beside it is still a COPY ----------------------
+    ("f = 5",                            None),
+    ("both(f, f)",                       None),
+    ("PRINT f",                          "11"),     # the VAR one won, not 5
+    ("END",                              None),
+    ("PROCEDURE sum(x, y, VAR z)",       None),
+    ("z = x + y",                        None),
+    ("RETURN",                           None),
+    ("PROCEDURE outer2(VAR q)",          None),
+    ("inner2(q)",                        None),
+    ("RETURN",                           None),
+    ("PROCEDURE inner2(VAR r)",          None),
+    ("r = r + 8",                        None),
+    ("RETURN",                           None),
+    ("PROCEDURE climb(n, VAR acc)",      None),
+    ("IF n > 0 THEN",                    None),
+    ("acc = acc + 1",                    None),
+    ("climb(n - 1, acc)",                None),
+    ("ENDIF",                            None),
+    ("RETURN",                           None),
+    ("PROCEDURE both(v, VAR w2)",        None),
+    ("v = 99",                           None),
+    ("w2 = 11",                          None),
+    ("RETURN",                           None),
+]
+
+PART17 = [
+    ("CLS",                              None),
+    ("sum(1, 2, 3 + 4)",
+     "Error at line 2: a VAR value wants a variable to point at"),
+    ("PROCEDURE sum(x, y, VAR z)",       None),
+    ("RETURN",                           None),
+]
+
 PART14 = [
     ("CLS",                              None),
     ("PRINT @aproc(1)",
@@ -619,7 +676,7 @@ PART12 = [
 # the lot, which is what a developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
-        PART14, PART15)
+        PART14, PART15, PART16, PART17)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:

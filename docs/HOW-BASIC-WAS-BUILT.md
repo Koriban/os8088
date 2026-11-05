@@ -1158,9 +1158,78 @@ never be `jmp`ed to, with the three legitimate tail-call targets listed and
 judged, and the docstring saying it is a ratchet on names rather than a
 proof.
 
+## `VAR`, and a forward call corrected one byte at a time
+
+Call by reference had one real problem and it was not the referencing. A
+call is compiled **before** its procedure is seen — procedures live below
+their callers — so the call site cannot know which of its arguments are by
+reference, and the two cases need different code: a value parameter wants
+the variable's *contents* pushed and a `VAR` parameter wants its *index*.
+
+The way out is that both are **one opcode and one index byte**. A bare
+variable argument is emitted as `OP_LOAD idx`, and where that opcode byte
+went is remembered — in the pending record when the procedure is unknown.
+Resolving the name rewrites the byte to `OP_VREF`, which pushes the index
+instead of the value. Nothing moves, there is no second pass over the
+stream, and the four slots are the only new storage.
+
+Recognising "a bare variable" needed no parser change either, which was the
+nicest part: compile the argument, then ask what it **emitted**. Two bytes
+whose first is `OP_LOAD` is a variable and nothing else can produce that
+shape. A `VAR` position handed anything else is refused by name — there is
+nothing for it to point at.
+
+The referencing itself is a 16-byte **alias table**, identity except where a
+parameter points at the caller's variable, which `OP_LOAD` and `OP_STORE`
+resolve through in one byte-read each. It is saved and restored beside the
+value in each save record, so `OP_LOCAL` resets it and recursion through a
+`VAR` parameter costs nothing extra. True reference semantics rather than
+copy-in-copy-out, which would differ observably the moment a callee's callee
+also reads the caller's variable — easy to do under §126.23's dynamic scope,
+and the row has that case.
+
+The first run of it got `25` and `16` — GFA's own entry-238 example and its
+own answers — and failed the next two cases: a reference **passed on** to a
+second procedure, and a reference carried down a recursion. One cause.
+`OP_VREF` was pushing the parameter's own index, so the inner procedure
+aliased the *middle* procedure's parameter rather than the caller's
+variable: the chain was one link long. It pushes what the name already
+resolves to now, which both fixes it and keeps the table exactly one deep,
+so `OP_LOAD` and `OP_STORE` still resolve with a single byte-read and never
+a loop.
+
+Both cases were in the row because I wrote them deliberately, not because
+anything suggested them — a reference that reaches one level is correct for
+every example in the manual's entry.
+
+### A name could not contain a digit, for eight waves
+
+The row's `outer2` was refused as *"not a statement this wave knows"*.
+`bas_word` took **letters only** — it has since wave 1 — so the dispatch had
+read `outer`, found `2` where it wanted `(`, and said the only thing it
+could. Every variable in every test until now had been a single letter or a
+plain word, so nothing had ever asked.
+
+A digit is legal after the first character and not as it, because
+`bas_c_fact` tells a name from a number by the first character alone: a word
+that could begin with a digit would swallow every literal in the language.
+`_` joined it at the same time.
+
+The same read also found an inconsistency worth fixing while it was open.
+A procedure's name was read with the **label** scanner at its definition and
+with `bas_word` at a bare call, so `a.b` would have been one name in the
+definition and another at the call site. Labels keep the loose spelling —
+`.`, `_` and a leading digit, which is GFA's entry 249 — and a procedure's
+name is an identifier at the definition and at all four call spellings.
+
+`STATIC` turns out not to be GFA's at all: entry 239 has no such keyword,
+and the plan's wave list had paired it with `LOCAL` from the wider survey.
+Its effect is this language's default anyway — a variable a procedure does
+not declare `LOCAL` is the global one.
+
 ## Next
 
-`VAR` by reference, `STATIC`, and `~name(...)` with `LOCAL`/`STATIC` and recursion,
+`~name(...)`, `ON GOSUB`, then wave 3's strings with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes

@@ -95,7 +95,13 @@ OP_RET      equ 26                  ; ...and come back out of one
 OP_LOCAL    equ 27                  ; + an index byte: save that variable on
                                     ; the frame's share of the save stack and
                                     ; zero it (SPEC.md 126.23)
-OP_N        equ 28                  ; how many there are, table included
+OP_VREF     equ 28                  ; + an index byte: push the INDEX, not the
+                                    ; value - what a bare-variable argument's
+                                    ; OP_LOAD is rewritten to when the
+                                    ; parameter turns out to be VAR
+OP_ALIAS    equ 29                  ; + an index byte: pop an index and point
+                                    ; that variable at it (SPEC.md 126.26)
+OP_N        equ 30                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -176,7 +182,8 @@ BAS_PRC_LEN  equ 2
 BAS_PRC_OPS  equ 4                  ; word: where its body begins
 BAS_PRC_NP   equ 6                  ; word: how many values it takes
 BAS_PRC_FN   equ 8                  ; word: 1 if it RETURNS one
-BAS_PRC_SZ   equ 10
+BAS_PRC_NV   equ 10                 ; word: how many of its values are BY
+BAS_PRC_SZ   equ 12                 ; REFERENCE, which are the last ones
 BAS_PRC_PMAX equ 4                  ; ...and the most it may take
 
 ; A call whose procedure has not been seen yet. LINE rides along for
@@ -188,7 +195,10 @@ BAS_CAL_SLOT equ 4
 BAS_CAL_LINE equ 6
 BAS_CAL_NARG equ 8                  ; word: so the count is checked even when
 BAS_CAL_FN   equ 10                 ; the procedure is seen later - and the
-BAS_CAL_SZ   equ 12                 ; KIND the call site wanted, likewise
+BAS_CAL_SL   equ 12                 ; KIND the call site wanted, likewise;
+BAS_CAL_SZ   equ 20                 ; then one slot per argument, holding
+                                    ; where its OPCODE byte is so a VAR
+                                    ; parameter can rewrite it (126.26)
 
 ; A FRAME is two words and nothing else: where to come back to, and where
 ; this frame's saved variables begin. Thirty-two of them is the recursion
@@ -203,7 +213,8 @@ BAS_FRM_SZ   equ 4
 BAS_SAV_MAX  equ 64
 BAS_SAV_IDX  equ 0
 BAS_SAV_VAL  equ 2
-BAS_SAV_SZ   equ 10
+BAS_SAV_ALI  equ 10                 ; ...and what it was pointing AT
+BAS_SAV_SZ   equ 12
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -259,6 +270,12 @@ bas_run:
     mov word [bas_inprc], 0
     mov word [bas_nfrm], 0          ; ...and no call is in progress
     mov word [bas_nsav], 0
+    xor bx, bx                      ; ...and every variable is itself
+.alid:
+    mov [bas_alias + bx], bl
+    inc bx
+    cmp bx, BAS_VAR_MAX
+    jb .alid
     mov word [bas_nfwd], 0          ;
                                     ; where its name is in a text that the
                                     ; next RUN will have replaced
@@ -727,8 +744,12 @@ bas_c_stmt:
 ; (SPEC.md 126.23)
 .gosub:
     call bas_skipsp
-    call bas_lblword                ; a procedure's name is a label's name
-    jc .gosnoname
+    call bas_word                   ; A PROCEDURE'S NAME IS AN IDENTIFIER,
+    jc .gosnoname                   ; not a label's looser spelling: a bare
+                                    ; call reads it with bas_word, so the
+                                    ; definition and the other three
+                                    ; spellings must read it the same way or
+                                    ; `a.b` is two different names
     xor al, al                      ; a STATEMENT, so no value may come back
     jmp bas_callemit
 .gosnoname:
@@ -736,7 +757,7 @@ bas_c_stmt:
     jmp bas_err
 .atcall:
     inc word [bas_src]              ; over the '@'
-    call bas_lblword
+    call bas_word
     jc .gosnoname
     xor al, al                      ; ...and @name HERE is a procedure call;
     jmp bas_callemit                ; @name in an EXPRESSION is a function's,
@@ -751,7 +772,7 @@ bas_c_stmt:
     cmp word [bas_inprc], 0         ; ...and not inside another one
     jne .procin
     call bas_skipsp
-    call bas_lblword
+    call bas_word
     jc .procnoname
     ; **THE JUMP OVER THE BODY COMES FIRST.** A main program that runs off
     ; its own end must step over every procedure rather than fall into the
@@ -1672,13 +1693,13 @@ bas_c_fact:
     jmp bas_emit                    ; ...the index byte after it
 .atfn:
     inc word [bas_src]
-    call bas_lblword
+    call bas_word
     jc .bad
     mov al, 1                       ; ...and a value must come back
     jmp bas_callemit
 .fnword:
     call bas_skipsp
-    call bas_lblword
+    call bas_word
     jc .bad
     mov al, 1
     jmp bas_callemit
@@ -2408,17 +2429,17 @@ bas_prcat:
     push cx
     mov ax, bx
     shl ax, 1
-    mov cx, ax                      ; i*2
-    shl ax, 1
+    shl ax, 1                       ; i*4
+    mov cx, ax
     shl ax, 1                       ; i*8
-    add ax, cx                      ; ...+ i*2 = i*10
+    add ax, cx                      ; ...+ i*4 = i*12
     add ax, bas_prcs
     mov si, ax
     pop cx
     pop ax
     ret
-    times BAS_PRC_SZ - 10 db 0
-    times 10 - BAS_PRC_SZ db 0
+    times BAS_PRC_SZ - 12 db 0
+    times 12 - BAS_PRC_SZ db 0
 
 bas_calat:
     push ax
@@ -2427,15 +2448,16 @@ bas_calat:
     shl ax, 1
     shl ax, 1
     mov cx, ax                      ; i*4
-    shl ax, 1                       ; i*8
-    add ax, cx                      ; ...+ i*4 = i*12
+    shl ax, 1
+    shl ax, 1                       ; i*16
+    add ax, cx                      ; ...+ i*4 = i*20
     add ax, bas_cals
     mov si, ax
     pop cx
     pop ax
     ret
-    times BAS_CAL_SZ - 12 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE and
-    times 12 - BAS_CAL_SZ db 0      ; nothing else ties them to it: widening
+    times BAS_CAL_SZ - 20 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE and
+    times 20 - BAS_CAL_SZ db 0      ; nothing else ties them to it: widening
                                     ; BAS_CAL_SZ to 10 for the value count
                                     ; and leaving three shifts here put entry
                                     ; 1's first word on entry 0's last, so
@@ -2608,9 +2630,17 @@ bas_callemit:
     mov ax, [si + BAS_PRC_FN]       ; ...and be the kind this site can use
     cmp al, [bas_calfn]
     jne .cwrongk
+    mov cx, [si + BAS_PRC_NV]       ; ...and its references point, not copy
+    push si
+    call bas_varrefs
+    pop si
+    jc .cvpop
     mov ax, [si + BAS_PRC_OPS]
     pop bx
     call bas_emitw
+    jmp .cout
+.cvpop:
+    pop bx
     jmp .cout
 .cwrongn:
     pop bx
@@ -2639,6 +2669,13 @@ bas_callemit:
     mov al, [bas_calfn]
     xor ah, ah
     mov [si + BAS_CAL_FN], ax       ; ...and so is the kind
+    xor bx, bx                      ; ...and where each argument's opcode is
+.cslot:
+    mov ax, [bas_argsl + bx]
+    mov [si + BAS_CAL_SL + bx], ax
+    add bx, 2
+    cmp bx, BAS_PRC_PMAX*2
+    jb .cslot
     mov ax, [bas_line]
     mov [si + BAS_CAL_LINE], ax
     inc word [bas_ncal]
@@ -2667,6 +2704,8 @@ bas_prcparams:
     push si
     push di
     xor dx, dx                      ; DX = how many
+    mov byte [bas_prcvar], 0        ; ...and none of them by reference yet
+    mov [bas_prcnv], dx
     call bas_skipsp
     mov si, [bas_src]
     cmp byte [si], '('
@@ -2680,6 +2719,15 @@ bas_prcparams:
     call bas_skipsp
     call bas_word
     jc .pnoname
+    mov si, bas_kw_var              ; VAR, and EVERYTHING AFTER IT is by
+    call bas_wordis                 ; reference - GFA's entry 238, whose own
+    jne .pnotvar                    ; note is that they come last
+    mov [bas_prcnv], dx             ; ...so this is where they start
+    inc byte [bas_prcvar]
+    call bas_skipsp
+    call bas_word
+    jc .pnoname
+.pnotvar:
     call bas_varfind                ; AX = its index, created if new
     jc .pout
     cmp dx, BAS_PRC_PMAX
@@ -2714,6 +2762,18 @@ bas_prcparams:
     dec bx                          ; 1-based while it is live
     call bas_prcat
     mov [si + BAS_PRC_NP], dx
+    push dx
+    cmp byte [bas_prcvar], 0
+    je .pnovar
+    sub dx, [bas_prcnv]             ; the ones from VAR onwards
+    mov [si + BAS_PRC_NV], dx
+    pop dx
+    jmp short .pproi
+.pnovar:
+    xor ax, ax
+    mov [si + BAS_PRC_NV], ax
+    pop dx
+.pproi:
     ; ...and now the prologue, last parameter first
     mov bx, dx
 .elp:
@@ -2729,7 +2789,13 @@ bas_prcparams:
     push bx
     mov al, [bas_prcp + bx]
     call bas_emit
-    mov al, OP_STORE
+    mov al, OP_STORE                ; by value: take what was pushed...
+    cmp byte [bas_prcvar], 0
+    je .pbyval
+    cmp bx, [bas_prcnv]
+    jb .pbyval
+    mov al, OP_ALIAS                ; ...by reference: point at it instead
+.pbyval:
     call bas_emit
     pop bx
     cmp byte [bas_bad], 0
@@ -2776,6 +2842,12 @@ bas_callargs:
     push si
     push di
     xor dx, dx
+    xor bx, bx
+.aclr:
+    mov word [bas_argsl + bx], 0
+    add bx, 2
+    cmp bx, BAS_PRC_PMAX*2
+    jb .aclr
     call bas_skipsp
     mov si, [bas_src]
     cmp byte [si], '('
@@ -2788,11 +2860,38 @@ bas_callargs:
 .alp:
     cmp dx, BAS_PRC_PMAX
     jae .atoomany
+    call bas_skipsp                 ; VAR here is GFA's own error
+    call bas_word
+    jc .anotvar
+    mov si, bas_kw_var
+    call bas_wordis
+    je .avarcall
+    mov [bas_src], di               ; ...put the word back
+.anotvar:
     push dx
-    call bas_c_rel                  ; the value
-    pop dx
+    mov bx, [bas_opn]               ; **WHAT THE ARGUMENT EMITS IS HOW A
+    push bx                         ; BARE VARIABLE IS RECOGNISED**: two
+    call bas_c_rel                  ; bytes, the first an OP_LOAD. No
+    pop bx                          ; parser change, and nothing else can
+    pop dx                          ; produce that shape (SPEC.md 126.26)
     cmp byte [bas_bad], 0
     jne .aout
+    push bx
+    mov ax, [bas_opn]
+    sub ax, bx
+    cmp ax, 2
+    jne .anotbare
+    cmp byte [bas_ops + bx], OP_LOAD
+    jne .anotbare
+    jmp short .akeep
+.anotbare:
+    xor bx, bx                      ; ...nothing to point at
+.akeep:
+    mov ax, bx
+    pop bx
+    mov bx, dx
+    shl bx, 1
+    mov [bas_argsl + bx], ax
     inc dx
     call bas_skipsp
     mov si, [bas_src]
@@ -2819,10 +2918,72 @@ bas_callargs:
     mov si, bas_e_prcargs
     call bas_err
     jmp .aout
+.avarcall:
+    mov si, bas_e_varcall
+    call bas_err
+    jmp .aout
 .anopar:
     mov si, bas_e_argpar
     call bas_err
     jmp .aout
+
+; --- bas_argsfrom - bas_argsl <- the call record at SI ------------------
+bas_argsfrom:
+    push ax
+    push bx
+    xor bx, bx
+.aflp:
+    mov ax, [si + BAS_CAL_SL + bx]
+    mov [bas_argsl + bx], ax
+    add bx, 2
+    cmp bx, BAS_PRC_PMAX*2
+    jb .aflp
+    pop bx
+    pop ax
+    ret
+
+; --- bas_varrefs - the last CX arguments of DX become references -------
+; in:  DX = how many values the call hands over, CX = how many of them the
+;      procedure takes BY REFERENCE (the LAST ones, GFA's entry 238), and
+;      bas_argsl holding where each argument's opcode byte went.
+; out: CF=1 and refused by name if one of them has nothing to point at.
+;
+; ONE BYTE EACH. OP_LOAD and OP_VREF are both an opcode and an index byte,
+; so a call compiled before its procedure was seen is corrected in place
+; with nothing moved and no second pass over the stream.
+bas_varrefs:
+    push ax
+    push bx
+    push cx
+    push dx
+    or cx, cx
+    jz .vok
+    mov ax, dx
+    sub ax, cx                      ; where the by-reference ones start
+.vlp:
+    cmp ax, dx
+    jae .vok
+    mov bx, ax
+    shl bx, 1
+    mov bx, [bas_argsl + bx]
+    or bx, bx
+    jz .vnone
+    mov byte [bas_ops + bx], OP_VREF
+    inc ax
+    jmp .vlp
+.vok:
+    clc
+.vout:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.vnone:
+    mov si, bas_e_varname
+    call bas_err
+    stc
+    jmp .vout
 
 ; --- bas_kinderr - refuse a call whose kind is wrong --------------------
 ; in:  [bas_calfn] = what the site wanted. The two sentences are different
@@ -2853,30 +3014,41 @@ bas_calfix:
     push dx
     push si
     push di
-    xor dx, dx
+    xor dx, dx                      ; DX = which pending call, all the way
 .flp:
     cmp dx, [bas_ncal]
     jae .fdone
     mov bx, dx
-    call bas_calat
+    call bas_calat                  ; SI = the call's own record
     mov ax, [si + BAS_CAL_LINE]
-    mov [bas_line], ax
+    mov [bas_line], ax              ; every refusal below names ITS line
     mov di, [si + BAS_CAL_SRC]
     mov cx, [si + BAS_CAL_LEN]
-    mov bx, [si + BAS_CAL_NARG]     ; what the call hands over...
-    push bx
-    mov bx, [si + BAS_CAL_FN]
-    push bx
-    call bas_prcfind
-    jc .noprcpop2
-    call bas_prcat
-    mov ax, [si + BAS_PRC_OPS]
-    pop bx
-    cmp bx, [si + BAS_PRC_FN]       ; ...the kind the site can use...
-    jne .nkindpop
-    pop bx
-    cmp bx, [si + BAS_PRC_NP]       ; ...and what it takes
+    mov al, [si + BAS_CAL_FN]
+    mov [bas_calfn], al             ; ...which bas_kinderr reads
+    call bas_argsfrom               ; bas_argsl <- the slots it recorded
+    call bas_prcfind                ; BX = the procedure
+    jc .noprc
+    call bas_prcat                  ; SI = the PROCEDURE's record now
+    mov al, [si + BAS_PRC_FN]
+    cmp al, [bas_calfn]             ; ...the kind the site can use
+    jne .nkind
+    push si
+    mov bx, dx
+    call bas_calat
+    mov ax, [si + BAS_CAL_NARG]
+    pop si
+    cmp ax, [si + BAS_PRC_NP]       ; ...and how many it takes
     jne .nargs
+    mov cx, [si + BAS_PRC_NV]       ; ...and which of them point
+    mov bx, [si + BAS_PRC_OPS]      ; (the target, before SI is needed again)
+    push bx
+    push dx
+    mov dx, ax
+    call bas_varrefs
+    pop dx
+    pop ax                          ; AX = the body's offset
+    jc .fdone
     mov bx, dx
     push ax
     call bas_calat
@@ -2893,21 +3065,12 @@ bas_calfix:
     pop bx
     pop ax
     ret
-.nkindpop:
-    pop bx                          ; drop the value count
-    mov bx, dx                      ; ...and read the CALL's kind back: SI is
-    call bas_calat                  ; the PROCEDURE's entry by now
-    mov al, [si + BAS_CAL_FN]
-    mov [bas_calfn], al
-    call bas_kinderr
-    jmp .fdone
-.noprcpop2:
-    pop bx
-.noprcpop:
-    pop bx
 .noprc:
     mov si, bas_e_noprc
     call bas_err
+    jmp .fdone
+.nkind:
+    call bas_kinderr
     jmp .fdone
 .nargs:
     mov si, bas_e_argcount
@@ -2928,21 +3091,23 @@ bas_frmat:
     times 4 - BAS_FRM_SZ db 0
 
 ; --- bas_savat - DI = save record CX -------------------------------------
-; i*10 as ((i*4)+i)*2, which needs the index still in CX - it is, both
-; callers holding the count there.
+; i*12 as i*8 + i*4, the index being in CX in both callers.
 bas_savat:
     push ax
+    push bx
     mov ax, cx
     shl ax, 1
     shl ax, 1
-    add ax, cx                      ; i*5
-    shl ax, 1                       ; ...*2
+    mov bx, ax                      ; i*4
+    shl ax, 1                       ; i*8
+    add ax, bx                      ; ...+ i*4 = i*12
     add ax, bas_savs
     mov di, ax
+    pop bx
     pop ax
     ret
-    times BAS_SAV_SZ - 10 db 0
-    times 10 - BAS_SAV_SZ db 0
+    times BAS_SAV_SZ - 12 db 0
+    times 12 - BAS_SAV_SZ db 0
 
 ; --- bas_dosave - BX = a variable: push it on the save stack and zero it --
 ; A LOCAL is exactly this (SPEC.md 126.23): the old value goes where RETURN
@@ -2961,6 +3126,10 @@ bas_dosave:
     add si, BAS_VAR_VAL
     call bas_savat                  ; DI = the save record
     mov [di + BAS_SAV_IDX], bx
+    mov al, [bas_alias + bx]        ; the alias is saved BESIDE the value and
+    mov [di + BAS_SAV_ALI], al      ; restored with it, so a local inside a
+    mov [bas_alias + bx], bl        ; procedure called by reference is its
+                                    ; own again (SPEC.md 126.26)
     xor bx, bx                      ; ...and BX is the byte counter now: it
 .cp:                                ; is the only index register an 8086 can
     mov ax, [si + bx]               ; add to SI or DI, which is why vload and
@@ -2999,6 +3168,8 @@ bas_unsave:
     mov [bas_nsav], cx
     call bas_savat                  ; DI = the record
     mov bx, [di + BAS_SAV_IDX]
+    mov al, [di + BAS_SAV_ALI]
+    mov [bas_alias + bx], al
     call bas_varat                  ; SI = the variable it belongs to
     add si, BAS_VAR_VAL
     xor bx, bx
@@ -3454,6 +3625,53 @@ bas_exec:
     pop bx
     jmp .done
 
+; --- OP_VREF: push the INDEX of a variable, not its value ---------------
+; An ordinary number, so the value stack needs no second kind of slot and
+; nothing else in the interpreter learns about references (SPEC.md 126.26).
+.vrefop:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    mov bl, [bas_alias + bx]        ; **WHAT THE NAME ALREADY RESOLVES TO**,
+                                    ; not the name's own index: passing a VAR
+                                    ; parameter ON to a second call must hand
+                                    ; over the ORIGINAL variable, or the
+                                    ; chain is one link long and the inner
+                                    ; procedure writes the outer's parameter
+                                    ; instead of the caller's variable. It
+                                    ; also keeps the table one deep, so
+                                    ; OP_LOAD and OP_STORE resolve with one
+                                    ; byte-read and never a loop.
+    push si
+    mov ax, bx
+    call fp_i2a
+    call fp_pack_a                  ; A -> DS:DI, which is the stack's top
+    pop si
+    pop bx
+    add di, BAS_SLOT
+    jmp .next
+
+; --- OP_ALIAS: point a variable at the one whose index is on the stack --
+.aliasop:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    mov bl, [si]                    ; the parameter...
+    inc si
+    xor bh, bh
+    push si
+    sub di, BAS_SLOT
+    mov si, di
+    call fp_unpack_a
+    call fp_a2i                     ; ...and the variable it points at
+    mov [bas_alias + bx], al
+    pop si
+    pop bx
+    jmp .next
+
 .localop:
     push bx
     mov bl, [si]                    ; which variable...
@@ -3515,6 +3733,10 @@ bas_exec:
     mov bl, [si]                    ; the index...
     inc si
     xor bh, bh
+    mov bl, [bas_alias + bx]        ; ...which variable that REALLY is: the
+                                    ; table is identity but where a VAR
+                                    ; parameter points at the caller's
+                                    ; (SPEC.md 126.26)
     push si                         ; ...and the op cursor, out of the way
     call bas_varat                  ; SI = the entry
     add si, BAS_VAR_VAL
@@ -3537,6 +3759,7 @@ bas_exec:
     mov bl, [si]
     inc si
     xor bh, bh
+    mov bl, [bas_alias + bx]        ; ...through the alias, as .vload does
     push si
     call bas_varat
     add si, BAS_VAR_VAL
@@ -3668,6 +3891,8 @@ bas_optab:
     dw bas_exec.callop              ; OP_CALL
     dw bas_exec.retop               ; OP_RET
     dw bas_exec.localop             ; OP_LOCAL
+    dw bas_exec.vrefop              ; OP_VREF
+    dw bas_exec.aliasop             ; OP_ALIAS
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3798,12 +4023,28 @@ bas_word:
 .l:
     mov al, [si]
     cmp al, 'A'
-    jb .end
+    jb .after
     cmp al, 'Z'
     jbe .take
     cmp al, 'a'
-    jb .end
+    jb .after
     cmp al, 'z'
+    jbe .take
+.after:
+    ; **A DIGIT OR AN UNDERSCORE IS LEGAL AFTER THE FIRST CHARACTER** and
+    ; not as it: `i2` is a name and `2` is a number, and bas_c_fact tells
+    ; them apart by the first character alone, so a word that could start
+    ; with a digit would swallow every literal in the language. Letters only
+    ; is what this read until SPEC.md 126.26's row wanted a procedure called
+    ; `outer2`, which was refused as "not a statement this wave knows" - the
+    ; dispatch had read `outer` and found `2` where it wanted `(`.
+    or cx, cx
+    jz .end
+    cmp al, '_'
+    je .take
+    cmp al, '0'
+    jb .end
+    cmp al, '9'
     ja .end
 .take:
     inc si
@@ -4068,6 +4309,7 @@ bas_kw_local:   db 'LOCAL', 0
 bas_kw_func:    db 'FUNCTION', 0
 bas_kw_endfunc: db 'ENDFUNC', 0
 bas_kw_fn:      db 'FN', 0
+bas_kw_var:     db 'VAR', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -4127,4 +4369,6 @@ bas_e_fnval:    db 'RETURN inside a FUNCTION wants a value', 0
 bas_e_prcval:   db 'RETURN inside a PROCEDURE takes no value', 0
 bas_e_wantfn:   db 'that is a PROCEDURE and returns no value', 0
 bas_e_wantprc:  db 'that is a FUNCTION - its value has nowhere to go', 0
+bas_e_varname:  db 'a VAR value wants a variable to point at', 0
+bas_e_varcall:  db 'VAR belongs in the definition, not in the call', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

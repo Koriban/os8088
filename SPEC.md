@@ -241061,6 +241061,14 @@ digit** — GFA's rule (entry 249), deliberately looser than a variable name,
 and the colon is what makes it unambiguous against everything else on a
 line. The colon is left off at the reference: `GOTO jump_point`.
 
+**A label's spelling is the loose one and nothing else uses it.** A
+variable or a procedure name is an ordinary identifier: a letter, then
+letters, digits or `_`. A digit may not lead one, because an expression
+tells a name from a number by the first character alone and a word that
+could begin with a digit would swallow every literal in the language. A
+procedure's name is read by that same rule at its definition and at all
+four of its call spellings, so `a.b` cannot be two different names.
+
 **A backward reference resolves at once; a forward one waits.** The label
 table holds 16 and the pending forward references 8, each refused by name
 when full, and the pending ones are resolved where the program's text ends —
@@ -241214,6 +241222,54 @@ resolved later is checked the same way.
 
 **Not here**: `~name(...)`, GFA's "call this function and throw the value
 away", and `DEFFN`'s single-line functions.
+
+### 126.26 `VAR`, and the one byte a forward call gets patched
+
+```
+sum(13, 12, a)                  ' the CALL looks ordinary - GFA's entry 238
+PROCEDURE sum(x, y, VAR z)      ' ...and VAR is in the DEFINITION only
+  z = x + y
+RETURN
+```
+
+**By reference, truly, not copy-in-copy-out.** A variable index is pushed in
+place of a value, and the callee's prologue points the parameter AT it: a
+16-entry **alias table**, identity by default, which `OP_LOAD` and
+`OP_STORE` resolve through in one byte-read each. Copy-out would differ
+observably the moment a callee's callee also reads the caller's variable,
+which §126.23's dynamic scope makes easy to do.
+
+**A reference passed ON hands over the ORIGINAL.** `OP_VREF` pushes what
+the name already resolves to, not the name's own index, so a `VAR`
+parameter handed to a second procedure points at the caller's variable and
+not at the middle procedure's parameter. That also keeps the table exactly
+one deep, so `OP_LOAD` and `OP_STORE` resolve with a single byte-read and
+never a loop.
+
+**The alias is saved and restored exactly like a value**, so each save
+record carries both and recursion through a `VAR` parameter costs nothing
+extra. `OP_LOCAL` saves the pair and resets the alias to identity, which is
+what makes an ordinary local inside a procedure called by reference behave.
+
+**The hard part is that a call is compiled before the procedure is seen**,
+procedures living below their callers (§126.23), so the call site cannot
+know which of its arguments are by reference. It does not have to: an
+argument that is a **bare variable name** is emitted as `OP_LOAD idx`, and
+the position of that opcode byte is remembered — in the pending record when
+the procedure is unknown. Resolving the name rewrites the byte to
+`OP_VREF`, which pushes the index instead of the value. **Both are one
+opcode and one index byte, so the rewrite is a single byte** and no code
+moves.
+
+**`VAR` parameters come last**, which is GFA's own note, and everything
+after the keyword is by reference. A `VAR` position handed anything but a
+bare variable name is refused by name: there is nothing for it to point at.
+`VAR` in a *calling* line is GFA's error too.
+
+**`STATIC` is not GFA's** — the plan's wave list pairs it with `LOCAL` from
+the wider survey of dialects, and entry 239 has no such keyword. Its effect
+is this language's default anyway: a variable a procedure does not declare
+`LOCAL` is the global one, and keeps its value between calls.
 
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
