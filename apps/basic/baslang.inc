@@ -51,18 +51,30 @@ OP_PUSHN    equ 1                   ; + EIGHT bytes: a packed double, pushed
 ; ride in the op stream. The alternative - keeping the text and converting on
 ; every execution - would put a decimal parse inside a FOR loop.
 BAS_SLOT    equ 8
-OP_ADD      equ 2
-OP_SUB      equ 3
-OP_MUL      equ 4
-OP_IDIV     equ 5                   ; `\`, integer division
-OP_DIV      equ 11                  ; `/`, real division
-OP_NEG      equ 6
-OP_PRINT    equ 7                   ; pop and print it
-OP_NEWL     equ 8                   ; end the print line
-OP_OSAPI    equ 9                   ; + a count byte: the tier C gateway
-OP_REG      equ 10                  ; pop an index, push that register
-OP_LOAD     equ 12                  ; + an index byte: push that variable
-OP_STORE    equ 13                  ; + an index byte: pop into that variable
+; THE NUMBERS ARE THE DISPATCH TABLE'S INDICES, so they are contiguous and
+; the five BINARIES ARE LAST AND TOGETHER. The binaries share one prologue -
+; unpack the top two slots into fp's A and B - and a table that sent each of
+; them straight to its own body would have to repeat that prologue five
+; times. Instead they all enter `.binary`, which runs the prologue once and
+; then indexes a second, five-entry table by the same opcode. Both tables are
+; checked against OP_N and OP_BIN_N at assembly time (see bas_optab), so
+; adding an op and forgetting its row is a build error rather than a jump
+; into whatever word follows the table.
+OP_NEG      equ 2
+OP_PRINT    equ 3                   ; pop and print it
+OP_NEWL     equ 4                   ; end the print line
+OP_OSAPI    equ 5                   ; + a count byte: the tier C gateway
+OP_REG      equ 6                   ; pop an index, push that register
+OP_LOAD     equ 7                   ; + an index byte: push that variable
+OP_STORE    equ 8                   ; + an index byte: pop into that variable
+; --- the binaries, contiguous and last --------------------------------------
+OP_ADD      equ 9
+OP_SUB      equ 10
+OP_MUL      equ 11
+OP_DIV      equ 12                  ; `/`, real division
+OP_IDIV     equ 13                  ; `\`, integer division
+OP_N        equ 14                  ; how many there are, table included
+OP_BIN_N    equ 5                   ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
 ; An entry does NOT hold the name. It holds where the name IS - an offset into
@@ -581,49 +593,33 @@ bas_exec:
     mov si, bas_ops
     mov di, bas_stk                 ; DI = the stack pointer, growing up
 .next:
-    mov al, [si]
+    ; ONE INDEXED JUMP (SPEC.md 126.5), not a run of compares. The chain this
+    ; replaces tested in emission order, so OP_ADD and OP_MUL - which every
+    ; expression runs - were reached last, after seven compares and then the
+    ; operand prologue. This is the same cost whichever op it is.
+    mov bl, [si]
     inc si
-    cmp al, OP_END
-    je .done
-    cmp al, OP_PUSHN
-    je .pushn
-    cmp al, OP_PRINT
-    je .print
-    cmp al, OP_NEWL
-    je .newl
-    cmp al, OP_NEG
-    je .neg
-    cmp al, OP_OSAPI
-    je .osapi
-    cmp al, OP_REG
-    je .reg
-    cmp al, OP_LOAD
-    je .vload
-    cmp al, OP_STORE
-    je .vstore
+    cmp bl, OP_N
+    jae .done                       ; an op nothing emits: stop, as before
+    xor bh, bh
+    shl bx, 1
+    jmp [bas_optab + bx]
+.binary:
     ; --- the binaries: A is the slot below the top, B is the top ------------
+    ; BX still holds the op's slot in bas_optab, which is also its slot in
+    ; bas_bintab once the first OP_ADD*2 entries are stepped over - so the
+    ; second dispatch costs an add and no compare.
     cmp di, bas_stk + 2*BAS_SLOT
     jb .under
-    push si
-    push ax
+    push si                         ; the op cursor
+    push bx
     mov si, di
     sub si, 2*BAS_SLOT
     call fp_unpack_a                ; A = the left operand
     add si, BAS_SLOT
     call fp_unpack_b                ; B = the right
-    pop ax
-    cmp al, OP_ADD
-    je .add
-    cmp al, OP_SUB
-    je .sub
-    cmp al, OP_MUL
-    je .mul
-    cmp al, OP_DIV
-    je .div
-    cmp al, OP_IDIV
-    je .idiv
-    pop si
-    jmp .done                       ; an op nothing emits
+    pop bx
+    jmp [bas_bintab + bx - OP_ADD*2]
 .add:
     call fp_add
     jmp .store
@@ -875,17 +871,78 @@ bas_exec:
     mov si, bas_e_deep
     jmp bas_err
 
+; --- the dispatch tables (SPEC.md 126.5) ------------------------------------
+; One row per opcode, IN OPCODE ORDER, and the two `times` pairs under each
+; make a missing or spare row a build error: add an op, forget its row, and
+; the jump would otherwise land on whatever word follows the table - which
+; assembles cleanly and runs somewhere.
+;
+; READ THE LINE NUMBER, NOT THE SIGN: each pair reports the same mismatch
+; with opposite signs, and which line fired is what says whether the table is
+; short or long.
+bas_optab:
+    dw bas_exec.done                ; OP_END
+    dw bas_exec.pushn               ; OP_PUSHN
+    dw bas_exec.neg                 ; OP_NEG
+    dw bas_exec.print               ; OP_PRINT
+    dw bas_exec.newl                ; OP_NEWL
+    dw bas_exec.osapi               ; OP_OSAPI
+    dw bas_exec.reg                 ; OP_REG
+    dw bas_exec.vload               ; OP_LOAD
+    dw bas_exec.vstore              ; OP_STORE
+    dw bas_exec.binary              ; OP_ADD  - all five share the operand
+    dw bas_exec.binary              ; OP_SUB    prologue, so every one of them
+    dw bas_exec.binary              ; OP_MUL    enters .binary and is sorted
+    dw bas_exec.binary              ; OP_DIV    out by bas_bintab below.
+    dw bas_exec.binary              ; OP_IDIV   (NO TRAILING BACKSLASH IN A
+                                    ; COMMENT: nasm continues the line on one
+                                    ; even there, and an ASCII brace drawn up
+                                    ; the right margin silently merged two of
+                                    ; these rows into one. The table was 13
+                                    ; long and the assertion below said so.)
+BAS_OPTAB_N equ ($ - bas_optab) / 2
+    times BAS_OPTAB_N - OP_N db 0
+    times OP_N - BAS_OPTAB_N db 0
+
+bas_bintab:
+    dw bas_exec.add                 ; OP_ADD
+    dw bas_exec.sub                 ; OP_SUB
+    dw bas_exec.mul                 ; OP_MUL
+    dw bas_exec.div                 ; OP_DIV
+    dw bas_exec.idiv                ; OP_IDIV
+BAS_BINTAB_N equ ($ - bas_bintab) / 2
+    times BAS_BINTAB_N - OP_BIN_N db 0
+    times OP_BIN_N - BAS_BINTAB_N db 0
+
 ; -----------------------------------------------------------------------------
 ; fp_b2i_bas - B as a signed 16-bit integer in AX. CF=1 if it will not fit.
 ; os88fp.inc has fp_a2i and no fp_b2i, so B goes through A and is put back.
 ; -----------------------------------------------------------------------------
 fp_b2i_bas:
+    ; **NOTHING MAY BE PUSHED BETWEEN fp_push_a AND fp_pop_a.** They bank A on
+    ; the CALLER'S STACK - six words - so a `pushf` in the middle is the first
+    ; thing fp_pop_a takes off, as A's (sign, sign) pair; it then restores the
+    ; whole of A one word shifted, and the `popf` afterwards pops A's last
+    ; mantissa word as FLAGS. The depth balances, which is why nothing caught
+    ; it: what is wrong is the DATA and a carry flag that is now a mantissa
+    ; bit. `PRINT 10\3` refused as "outside an INTEGER" from wave 1c until the
+    ; wave 2a dispatch work ran the first `\` this language had ever executed.
+    ;
+    ; So the value and the carry ride in REGISTERS, saved before the bank:
+    ; `sbb dx, dx` is 0 or -1 for the carry and `add dx, dx` puts it back, and
+    ; neither `mov` nor `pop` disturbs a flag in between.
+    push cx
+    push dx
     call fp_push_a
     call fp_b_to_a
     call fp_a2i
-    pushf
+    mov cx, ax                      ; the value (fp_pop_a clobbers AX - its
+    sbb dx, dx                      ; own header says so) and the carry
     call fp_pop_a
-    popf
+    mov ax, cx
+    add dx, dx                      ; CF = what fp_a2i said
+    pop dx                          ; (pops do not touch the flags)
+    pop cx
     ret
 
 ; =============================================================================
@@ -1181,4 +1238,4 @@ bas_e_long:     db 'line too long to compile', 0
 bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
 bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
 bas_e_vars:     db 'too many variables - this wave holds 16', 0
-bas_e_wide:     db "'\\' truncates to an INTEGER and this is outside it", 0
+bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

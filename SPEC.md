@@ -240213,17 +240213,19 @@ steps; the budget does not survive the fiction, but the flat array does, for a
 better reason: on an 8086 a tree walk is a recursive descent through far
 pointers at run time, and a linear op stream is a dispatch on one byte.
 
-**The dispatch is a COMPARE CHAIN, not yet an indexed jump.** This section
-said `jmp [table + bx]` for three waves and `bas_exec` has never done it: the
-twelve ops are a run of `cmp al, OP_x` / `je`, with the five binary ones
-grouped behind the operand-unpack prologue they share. At twelve ops that is
-defensible - and the grouping is what makes the table non-trivial, since a
-table would either duplicate that prologue twelve times or jump into a second
-test - but it is not what was written down, and `OP_ADD` and `OP_MUL`, which
-every expression runs, sit at the BACK of the chain behind seven compares.
-The indexed jump is owed when the op count grows: wave 2's control flow and
-procedures are where a chain stops being defensible, and the table should
-arrive with them rather than after a measurement nobody took.
+**The dispatch IS that indexed jump**, built in wave 2a. It was a run of
+`cmp al, OP_x` / `je` for three waves while this section said otherwise, and
+the chain tested in emission order, so `OP_ADD` and `OP_MUL` - which every
+expression runs - were reached last, behind seven compares.
+
+Two things make the table work. **The opcode numbers ARE the table's
+indices**, so they are contiguous and the five binaries are last and
+together; and the binaries all enter one `.binary` entry that runs the shared
+operand prologue once and then indexes a second, five-entry table by the same
+opcode, rather than the prologue being repeated per binary. **Both tables are
+checked against their counts at assembly time**, so adding an op and
+forgetting its row is a build error and not a jump into whatever word follows
+the table. It is also 29 bytes SMALLER than the chain it replaced.
 
 ### 126.6 The seam
 

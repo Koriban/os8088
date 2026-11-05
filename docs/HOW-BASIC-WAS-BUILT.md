@@ -650,9 +650,76 @@ row that runs a program and compares the answer — which would have caught
 all three of the above without a human driving QEMU — still waits on a
 system disk.
 
+## Wave 2b — the indexed jump, and the first `\` this language ever ran
+
+SPEC.md 126.5 promised `jmp [table + bx]` for three waves and `bas_exec` was
+a run of compares the whole time; wave 2a added two more ops to it. So the
+table came before the control-flow ops rather than after, as its own step.
+
+The shape that makes it work: **the opcode numbers ARE the indices**, so they
+were renumbered contiguous with the five binaries last and together. A table
+sending each binary straight to its body would have to repeat the shared
+operand prologue five times, so instead all five point at one `.binary` entry
+which runs the prologue once and then indexes a second five-entry table by
+the same opcode — an add and no compare. Both tables are size-checked against
+`OP_N` and `OP_BIN_N` by `times` pairs, so a new op without a row is a build
+error. It came out **29 bytes smaller** than the chain.
+
+The assertion earned itself immediately, on something I would not have
+guessed: I drew an ASCII brace up the right margin of the table's comments,
+and **nasm continues a line on a trailing backslash even inside a comment**,
+so two `dw` rows merged and the table was 13 long. The build failed on the
+pair rather than on a jump into the word after the table.
+
+### `PRINT 10\3` had never been executed
+
+Verifying the table meant running every op, which is how `\` got its first
+run since wave 1c shipped it. It refused: *"outside an INTEGER"* for `10\3`.
+
+The cause is three lines in this file's own `fp_b2i_bas`. **`fp_push_a` banks
+A on the CALLER'S STACK** — six words — and `fp_b2i_bas` had a `pushf`
+between the bank and the unbank. So `fp_pop_a`'s first `pop` took the FLAGS
+word as A's sign pair, restored the whole of A one word shifted, and the
+`popf` afterwards popped A's last mantissa word as flags. **The depth
+balances**, which is why nothing caught it: what is wrong is the data, and a
+carry flag that is now a mantissa bit. The value and the carry ride in
+registers now, saved before the bank — `sbb dx, dx` / `add dx, dx` — and
+nothing is pushed in between.
+
+The A/B, same kernel and the same keystrokes, against the previous commit
+rebuilt from git:
+
+| `PRINT 10\3` | |
+| --- | --- |
+| wave 2a and every wave before it | *Error: outside an INTEGER* |
+| with the fix | ` 3` |
+
+Verified on the glass across the whole operator set: `13`, `7`, `30`,
+`3.333333`, `3`, `-10` for `a+b`, `a-b`, `a*b`, `a/b`, `a\b` and `-a` with
+`a=10, b=3`.
+
+### Found, not fixed: the console blanks when it scrolls
+
+Running six `PRINT`s in one program overflows the eight-row pane, and the
+console goes **empty** — and stays empty through a full `W_PAINT`, so it is
+the buffer and not the pixels. It reproduces with nothing but `PRINT -10`
+run ten times, so it is not about variables, the table or `\`.
+
+**It is pre-existing**: the same ten runs blank the console on the previous
+commit's build too, and the merge did not touch `con_scrollup` or
+`con_scroll1`. BASIC is a VIEWPORT user — `con_vtop` is 17 of 25 rows
+(SPEC.md 70.8) and `bas_conreset` parks the cursor there by poking
+`con_cy` — and that is the part of os88con.inc this is most likely to be
+about. It is the next thing to chase, and it wants its own A/B against a
+full-height carrier like Telnet before anything is changed in a shared
+include.
+
+**12,109 image + 7,950 bss = 20,059 of 65,024, 30.8%.**
+
 ## Next
 
-The rest of wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
+The console-scroll defect above, then the rest of wave 2: **control flow and
+procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.
