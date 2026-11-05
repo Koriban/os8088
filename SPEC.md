@@ -241176,6 +241176,45 @@ table so the check happens where the name is resolved — the same place the
 undefined-procedure refusal lives. A procedure that takes none may still be
 called as `name()`.
 
+### 126.25 `FUNCTION`, which needed no opcode either
+
+```
+FUNCTION fact(n)
+  IF n < 2 THEN
+    RETURN 1
+  ENDIF
+  RETURN n * @fact(n - 1)
+ENDFUNC
+```
+
+**`@name(...)` in an expression, `FN name(...)` as well**, both GFA's
+(entry 240). `@name` as a *statement* is a procedure call and `@name` inside
+an expression is a function call: the context decides, which is what GFA's
+two entries describe between them.
+
+**`OP_RETV` was predicted in §126.23 and is not needed.** A function's value
+is pushed by the expression after `RETURN`, and `OP_RET` touches the value
+stack not at all — so the value is simply still there when the caller's
+expression continues. The frame mechanism was already exactly right for a
+value-returning call, which is worth recording because the fourth opcode had
+been pinned before it was written.
+
+**`RETURN exp` may appear several times and does not close the body**;
+`ENDFUNC` does. A body that falls off its end returns **0** rather than
+whatever was on the stack — GFA's manual says of that case only *"expect
+unpredictable results if you reach this point"*, which is the second place
+this chapter declines to follow it (§126.22 is the first).
+
+**A `RETURN` with no value inside a `FUNCTION` is refused, and one WITH a
+value inside a `PROCEDURE` is refused too.** So is calling a procedure in an
+expression, and calling a function as a statement: each would leave the
+value stack one slot wrong, which is the silent kind of defect this language
+has already paid for once. The kind is recorded with the name, so a call
+resolved later is checked the same way.
+
+**Not here**: `~name(...)`, GFA's "call this function and throw the value
+away", and `DEFFN`'s single-line functions.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

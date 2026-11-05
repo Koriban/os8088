@@ -143,6 +143,7 @@ BK_REPEAT equ 6
 BK_SELECT equ 7
 BK_DEFAULT equ 8
 BK_PROC  equ 9
+BK_FUNC  equ 10
 
 ; --- labels and GOTO (SPEC.md 126.22) --------------------------------------
 ; A label's name is kept as WHERE IT IS in bas_prog, for bas_vars' reason -
@@ -174,7 +175,8 @@ BAS_PRC_SRC  equ 0
 BAS_PRC_LEN  equ 2
 BAS_PRC_OPS  equ 4                  ; word: where its body begins
 BAS_PRC_NP   equ 6                  ; word: how many values it takes
-BAS_PRC_SZ   equ 8
+BAS_PRC_FN   equ 8                  ; word: 1 if it RETURNS one
+BAS_PRC_SZ   equ 10
 BAS_PRC_PMAX equ 4                  ; ...and the most it may take
 
 ; A call whose procedure has not been seen yet. LINE rides along for
@@ -185,7 +187,8 @@ BAS_CAL_LEN  equ 2
 BAS_CAL_SLOT equ 4
 BAS_CAL_LINE equ 6
 BAS_CAL_NARG equ 8                  ; word: so the count is checked even when
-BAS_CAL_SZ   equ 10                 ; the procedure is seen later
+BAS_CAL_FN   equ 10                 ; the procedure is seen later - and the
+BAS_CAL_SZ   equ 12                 ; KIND the call site wanted, likewise
 
 ; A FRAME is two words and nothing else: where to come back to, and where
 ; this frame's saved variables begin. Thirty-two of them is the recursion
@@ -449,6 +452,12 @@ bas_c_stmt:
     mov si, bas_kw_local
     call bas_wordis
     je .slocal
+    mov si, bas_kw_func
+    call bas_wordis
+    je .func
+    mov si, bas_kw_endfunc
+    call bas_wordis
+    je .sendfunc
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -472,6 +481,7 @@ bas_c_stmt:
     je .barecall
     jmp .nostmt
 .barecall:
+    xor al, al
     jmp bas_callemit                ; DI/CX = the name
 .assign:
     inc word [bas_src]
@@ -719,6 +729,7 @@ bas_c_stmt:
     call bas_skipsp
     call bas_lblword                ; a procedure's name is a label's name
     jc .gosnoname
+    xor al, al                      ; a STATEMENT, so no value may come back
     jmp bas_callemit
 .gosnoname:
     mov si, bas_e_gosname
@@ -727,9 +738,16 @@ bas_c_stmt:
     inc word [bas_src]              ; over the '@'
     call bas_lblword
     jc .gosnoname
-    jmp bas_callemit
+    xor al, al                      ; ...and @name HERE is a procedure call;
+    jmp bas_callemit                ; @name in an EXPRESSION is a function's,
+                                    ; which is how GFA's two entries read
 
+.func:
+    mov dx, 1                       ; ...the one difference between them
+    jmp short .proc0
 .proc:
+    xor dx, dx
+.proc0:
     cmp word [bas_inprc], 0         ; ...and not inside another one
     jne .procin
     call bas_skipsp
@@ -752,12 +770,19 @@ bas_c_stmt:
     call bas_prcdef                 ; ...the body begins HERE, after the jump
     cmp byte [bas_bad], 0
     jne .procpop
+    push dx
+    call bas_prckind                ; which of the two it is
     call bas_prcparams              ; (w, h) - the prologue, if there is one
+    pop dx
     cmp byte [bas_bad], 0
     jne .procpop
-    pop cx                          ; CX = the jump to patch at RETURN
+    pop cx                          ; CX = the jump to patch at the end
     xor bx, bx
     mov ax, BK_PROC
+    or dx, dx
+    jz .procpush
+    mov ax, BK_FUNC                 ; ...and ENDFUNC closes this one
+.procpush:
     jmp bas_blkpush
 .procpop:
     pop bx
@@ -772,6 +797,18 @@ bas_c_stmt:
 .sreturn:
     cmp word [bas_inprc], 0
     je .retout
+    call bas_isfn                   ; AX = 1 inside a FUNCTION
+    or ax, ax
+    jnz .retfn
+    ; --- a PROCEDURE's RETURN: nothing after it, and it closes the body --
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .retbare
+    cmp al, 10
+    jne .retvalue
+.retbare:
     call bas_blkpop                 ; AX = kind, CX = the jump over the body
     jc .x
     cmp ax, BK_PROC
@@ -786,9 +823,56 @@ bas_c_stmt:
     call bas_patch                  ; ...and the jump over lands after it
     mov word [bas_inprc], 0
     ret
+.retfn:
+    ; --- a FUNCTION's RETURN: a value, and it does NOT close the body.
+    ; **NO OP_RETV** (SPEC.md 126.25): the value is on the stack where the
+    ; expression left it and OP_RET touches the stack not at all, so it is
+    ; still there when the caller's expression goes on.
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .retnoval
+    cmp al, 10
+    je .retnoval
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_RET
+    jmp bas_emit
+.retnoval:
+    mov si, bas_e_fnval
+    jmp bas_err
+.retvalue:
+    mov si, bas_e_prcval
+    jmp bas_err
 .retout:
     mov si, bas_e_retout
     jmp bas_err
+
+.sendfunc:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_FUNC
+    jne .wrongblk
+    push cx
+    ; A BODY THAT FALLS OFF ITS END RETURNS 0, where GFA's manual offers
+    ; only "expect unpredictable results if you reach this point".
+    call bas_emitzero
+    cmp byte [bas_bad], 0
+    jne .efpop
+    mov al, OP_RET
+    call bas_emit
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]
+    call bas_patch
+    mov word [bas_inprc], 0
+    ret
+.efpop:
+    pop bx
+    ret
 
 .slocal:
     cmp word [bas_inprc], 0         ; a LOCAL outside a procedure would save
@@ -1542,6 +1626,8 @@ bas_c_fact:
     je .neg
     cmp al, '('
     je .paren
+    cmp al, '@'                     ; @name(...) is a FUNCTION call here
+    je .atfn
     cmp al, 'A'                     ; a word here is a function call, and in
     jb .notword                     ; wave 1b there is exactly one
     cmp al, 'z'
@@ -1567,6 +1653,9 @@ bas_c_fact:
     mov al, OP_REG
     jmp bas_emit
 .nofn:
+    mov si, bas_kw_fn               ; FN name(...), GFA's other spelling
+    call bas_wordis
+    je .fnword
     ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
     ; never assigned reads 0, which is what every BASIC of this line does -
@@ -1581,6 +1670,18 @@ bas_c_fact:
     cmp byte [bas_bad], 0
     jne .x
     jmp bas_emit                    ; ...the index byte after it
+.atfn:
+    inc word [bas_src]
+    call bas_lblword
+    jc .bad
+    mov al, 1                       ; ...and a value must come back
+    jmp bas_callemit
+.fnword:
+    call bas_skipsp
+    call bas_lblword
+    jc .bad
+    mov al, 1
+    jmp bas_callemit
 .noopen:
     mov si, bas_e_paren
     jmp bas_err
@@ -2304,19 +2405,6 @@ bas_fwdfix:
 ; -----------------------------------------------------------------------------
 bas_prcat:
     push ax
-    mov ax, bx
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1
-    add ax, bas_prcs
-    mov si, ax
-    pop ax
-    ret
-    times BAS_PRC_SZ - 8 db 0
-    times 8 - BAS_PRC_SZ db 0
-
-bas_calat:
-    push ax
     push cx
     mov ax, bx
     shl ax, 1
@@ -2324,13 +2412,30 @@ bas_calat:
     shl ax, 1
     shl ax, 1                       ; i*8
     add ax, cx                      ; ...+ i*2 = i*10
+    add ax, bas_prcs
+    mov si, ax
+    pop cx
+    pop ax
+    ret
+    times BAS_PRC_SZ - 10 db 0
+    times 10 - BAS_PRC_SZ db 0
+
+bas_calat:
+    push ax
+    push cx
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    mov cx, ax                      ; i*4
+    shl ax, 1                       ; i*8
+    add ax, cx                      ; ...+ i*4 = i*12
     add ax, bas_cals
     mov si, ax
     pop cx
     pop ax
     ret
-    times BAS_CAL_SZ - 10 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE and
-    times 10 - BAS_CAL_SZ db 0      ; nothing else ties them to it: widening
+    times BAS_CAL_SZ - 12 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE and
+    times 12 - BAS_CAL_SZ db 0      ; nothing else ties them to it: widening
                                     ; BAS_CAL_SZ to 10 for the value count
                                     ; and leaving three shifts here put entry
                                     ; 1's first word on entry 0's last, so
@@ -2427,7 +2532,55 @@ bas_prcdef:
     call bas_err
     jmp .dout
 
+; --- bas_prckind - the procedure being compiled returns a value if DX -----
+bas_prckind:
+    push bx
+    push si
+    mov bx, [bas_inprc]
+    dec bx
+    call bas_prcat
+    mov [si + BAS_PRC_FN], dx
+    pop si
+    pop bx
+    ret
+
+; --- bas_isfn - AX = 1 if the procedure being compiled is a FUNCTION -----
+bas_isfn:
+    push bx
+    push si
+    mov bx, [bas_inprc]
+    dec bx
+    call bas_prcat
+    mov ax, [si + BAS_PRC_FN]
+    pop si
+    pop bx
+    ret
+
+; --- bas_emitzero - PUSHN 0.0 -------------------------------------------
+bas_emitzero:
+    push ax
+    push di
+    mov al, OP_PUSHN
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .zout
+    xor ax, ax
+    call fp_i2a
+    mov di, bas_ops
+    add di, [bas_opn]
+    call fp_pack_a
+    add word [bas_opn], 8
+    cmp word [bas_opn], BAS_OPS_MAX - 10
+    jb .zout
+    mov si, bas_e_long
+    call bas_err
+.zout:
+    pop di
+    pop ax
+    ret
+
 ; --- bas_callemit - emit a call to the procedure named by DI/CX ----------
+; in:  AL = 1 if the call site wants a VALUE back (SPEC.md 126.25)
 ; A name not yet seen is the NORMAL case, so this looks exactly like GOTO's
 ; forward reference and shares its shape (SPEC.md 126.23).
 bas_callemit:
@@ -2435,6 +2588,7 @@ bas_callemit:
     push bx
     push dx
     push si
+    mov [bas_calfn], al             ; ...which kind this site can accept
     ; **THE VALUES ARE EMITTED FIRST**, before the OP_CALL, so they are on
     ; the stack when the callee's backwards prologue stores them
     ; (SPEC.md 126.24). bas_callargs preserves the NAME in DI/CX.
@@ -2451,6 +2605,9 @@ bas_callemit:
     call bas_prcat
     cmp dx, [si + BAS_PRC_NP]       ; ...and it must want that many
     jne .cwrongn
+    mov ax, [si + BAS_PRC_FN]       ; ...and be the kind this site can use
+    cmp al, [bas_calfn]
+    jne .cwrongk
     mov ax, [si + BAS_PRC_OPS]
     pop bx
     call bas_emitw
@@ -2459,6 +2616,10 @@ bas_callemit:
     pop bx
     mov si, bas_e_argcount
     call bas_err
+    jmp .cout
+.cwrongk:
+    pop bx
+    call bas_kinderr
     jmp .cout
 .fwd:
     mov bx, [bas_opn]
@@ -2475,6 +2636,9 @@ bas_callemit:
     mov [si + BAS_CAL_SRC], di
     mov [si + BAS_CAL_LEN], cx
     mov [si + BAS_CAL_NARG], dx     ; ...checked where the name is resolved
+    mov al, [bas_calfn]
+    xor ah, ah
+    mov [si + BAS_CAL_FN], ax       ; ...and so is the kind
     mov ax, [bas_line]
     mov [si + BAS_CAL_LINE], ax
     inc word [bas_ncal]
@@ -2660,6 +2824,26 @@ bas_callargs:
     call bas_err
     jmp .aout
 
+; --- bas_kinderr - refuse a call whose kind is wrong --------------------
+; in:  [bas_calfn] = what the site wanted. The two sentences are different
+;      facts and a program is helped by which one it is.
+;
+; **IT RETURNS, so it is CALLED.** bas_err ends in a `ret`, so `jmp bas_err`
+; from inside a proc returns to that proc's own CALLER - which is right for
+; a statement body with nothing pushed, and wrong for one holding six
+; registers. Both of this routine's callers hold some: reached by `jmp`, the
+; refusal printed correctly and then returned into the caller's saved
+; registers, which left the whole package wedged - the NEXT program typed
+; after it never ran, and the row read the previous one's console.
+bas_kinderr:
+    cmp byte [bas_calfn], 0
+    je .wantsnone
+    mov si, bas_e_wantfn            ; an expression, and it returns nothing
+    jmp bas_err
+.wantsnone:
+    mov si, bas_e_wantprc           ; a statement, and its value is stranded
+    jmp bas_err
+
 ; --- bas_calfix - resolve every call still owed a procedure --------------
 ; Beside bas_fwdfix, where the program's text ends, for its reason.
 bas_calfix:
@@ -2681,12 +2865,17 @@ bas_calfix:
     mov cx, [si + BAS_CAL_LEN]
     mov bx, [si + BAS_CAL_NARG]     ; what the call hands over...
     push bx
+    mov bx, [si + BAS_CAL_FN]
+    push bx
     call bas_prcfind
-    jc .noprcpop
+    jc .noprcpop2
     call bas_prcat
     mov ax, [si + BAS_PRC_OPS]
     pop bx
-    cmp bx, [si + BAS_PRC_NP]       ; ...against what it takes
+    cmp bx, [si + BAS_PRC_FN]       ; ...the kind the site can use...
+    jne .nkindpop
+    pop bx
+    cmp bx, [si + BAS_PRC_NP]       ; ...and what it takes
     jne .nargs
     mov bx, dx
     push ax
@@ -2704,6 +2893,16 @@ bas_calfix:
     pop bx
     pop ax
     ret
+.nkindpop:
+    pop bx                          ; drop the value count
+    mov bx, dx                      ; ...and read the CALL's kind back: SI is
+    call bas_calat                  ; the PROCEDURE's entry by now
+    mov al, [si + BAS_CAL_FN]
+    mov [bas_calfn], al
+    call bas_kinderr
+    jmp .fdone
+.noprcpop2:
+    pop bx
 .noprcpop:
     pop bx
 .noprc:
@@ -3866,6 +4065,9 @@ bas_kw_return:  db 'RETURN', 0
 bas_kw_endproc: db 'ENDPROC', 0
 bas_kw_endsub:  db 'ENDSUB', 0
 bas_kw_local:   db 'LOCAL', 0
+bas_kw_func:    db 'FUNCTION', 0
+bas_kw_endfunc: db 'ENDFUNC', 0
+bas_kw_fn:      db 'FN', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -3921,4 +4123,8 @@ bas_e_prcargs:  db 'a procedure takes at most four values here', 0
 bas_e_prcpdup:  db 'that parameter name is used twice', 0
 bas_e_argpar:   db 'a list of values wants )', 0
 bas_e_argcount: db 'that call hands over the wrong number of values', 0
+bas_e_fnval:    db 'RETURN inside a FUNCTION wants a value', 0
+bas_e_prcval:   db 'RETURN inside a PROCEDURE takes no value', 0
+bas_e_wantfn:   db 'that is a PROCEDURE and returns no value', 0
+bas_e_wantprc:  db 'that is a FUNCTION - its value has nowhere to go', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

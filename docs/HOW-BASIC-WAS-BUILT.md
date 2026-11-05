@@ -1098,9 +1098,69 @@ constant. They do now: every one of the six indexers carries the project's
 copies of the arithmetic became one `bas_savat` on the way, which is where
 the duplication would have bitten next.
 
+## `FUNCTION`, and an opcode that had been pinned before it was written
+
+§126.23 promised four opcodes and three were enough. `OP_RETV` was going to
+pop the value, restore the frame and push the value back — and `OP_RET`
+touches the value stack **not at all**, so a function's value is simply
+still there when the caller's expression continues. The frame mechanism was
+already exactly right for a value-returning call. Worth writing down
+because the fourth opcode had been pinned in the contract a wave before
+anyone tried to use it, and the contract now says so.
+
+`RETURN exp` does not close the body, several are allowed, and `ENDFUNC`
+closes it — which fell out of the block stack without argument: a `RETURN`
+inside a block `IF` inside a `FUNCTION` pops nothing, so the `IF` is still
+open and `ENDFUNC` with one open is refused by the check that was already
+there.
+
+The part worth the care was the **kind**. Calling a procedure in an
+expression leaves the value stack one slot short, and calling a function as
+a statement leaves one slot too many; both go wrong somewhere else entirely,
+which is the shape of the first defect this chapter ever had
+(`-2.668453E+307` for an expression whose answer was 36). So the kind is
+recorded with the name and checked at the call — and, for a call to a
+procedure defined further down, carried in the pending record and checked
+where the name resolves, with two different sentences because "it returns
+nothing" and "its value has nowhere to go" are different facts.
+
+`@name` means both things depending on where it is: a procedure call as a
+statement, a function call inside an expression. That reading is not a
+choice made here — it is what GFA's entries 237 and 240 say between them.
+
+A body that falls off its end answers **0**. GFA's manual offers only
+"expect unpredictable results if you reach this point", which is the second
+place this chapter declines to follow its oracle.
+
+### The bug that arrived as a wrong message
+
+The kind check worked and said the wrong sentence: calling a function as a
+statement reported *that is a PROCEDURE and returns no value*. I spent a
+while reading the two branches, which were right.
+
+`bas_err` **returns**. That makes `jmp bas_err` correct for a statement body
+— the `ret` lands in `bas_c_stmt`'s own caller, which is where a refused
+statement belongs — and wrong for a helper that another routine *calls*:
+`jmp bas_kinderr` from a routine holding six pushed registers printed the
+refusal correctly and then returned **into the saved registers**. The
+package was wedged from that moment, so the next program typed into the
+editor never ran, and the row read the *previous* program's console. Hence a
+right sentence in the wrong place, looking like a wording bug.
+
+`tests/unit/t_basrefuse.py` holds it now, and what it is *not* is the
+interesting part. The tempting check — track the push depth at every
+`jmp bas_err` — is **unsound**: a linear walk crosses the pop runs of blocks
+it never flows through, and the version I wrote first caught this defect in
+`bas_callemit` and missed the identical one in `bas_calfix`. A gate that
+catches one of two is worse than one that says plainly what it covers. So
+the row holds the sound part instead: a helper that is ever `call`ed must
+never be `jmp`ed to, with the three legitimate tail-call targets listed and
+judged, and the docstring saying it is a ratchet on names rather than a
+proof.
+
 ## Next
 
-`FUNCTION`, then `VAR` by reference and `STATIC` with `LOCAL`/`STATIC` and recursion,
+`VAR` by reference, `STATIC`, and `~name(...)` with `LOCAL`/`STATIC` and recursion,
 which close wave 2. Procedures want a call stack and a frame convention
 pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes

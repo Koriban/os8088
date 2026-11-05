@@ -550,6 +550,60 @@ PART11 = [
      "Error at line 2: RETURN is not inside a procedure"),
 ]
 
+PART13 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- FUNCTION: a value comes back, in an expression (SPEC.md 126.25) --
+    ("PRINT @twice(21)",                 "42"),
+    ("PRINT FN twice(5)",                "10"),     # ...GFA's other spelling
+    ("v = @twice(3) + @twice(4)",        None),
+    ("PRINT v",                          "14"),
+    # ...several RETURNs, and recursion through one -----------------------
+    ("PRINT @fac(5)",                    "120"),
+    ("PRINT @sgn3(0)",                   "0"),
+    ("PRINT @sgn3(-7)",                  "-1"),
+    ("PRINT @sgn3(9)",                   "1"),
+    # ...a body that falls off its end answers 0, not whatever was there --
+    ("PRINT @nothing(1)",                "0"),
+    ("END",                              None),
+    ("FUNCTION twice(n)",                None),
+    ("RETURN n + n",                     None),
+    ("ENDFUNC",                          None),
+    ("FUNCTION fac(n)",                  None),
+    ("IF n < 2 THEN",                    None),
+    ("RETURN 1",                         None),
+    ("ENDIF",                            None),
+    ("RETURN n * @fac(n - 1)",           None),
+    ("ENDFUNC",                          None),
+    ("FUNCTION sgn3(n)",                 None),
+    ("IF n > 0 THEN",                    None),
+    ("RETURN 1",                         None),
+    ("ELSEIF n < 0 THEN",                None),
+    ("RETURN 0 - 1",                     None),
+    ("ENDIF",                            None),
+    ("RETURN 0",                         None),
+    ("ENDFUNC",                          None),
+    ("FUNCTION nothing(n)",              None),
+    ("ENDFUNC",                          None),
+]
+
+PART14 = [
+    ("CLS",                              None),
+    ("PRINT @aproc(1)",
+     "Error at line 2: that is a PROCEDURE and returns no value"),
+    ("PROCEDURE aproc(n)",               None),
+    ("RETURN",                           None),
+]
+
+PART15 = [
+    ("CLS",                              None),
+    ("afunc(1)",
+     "Error at line 2: that is a FUNCTION - its value has nowhere to go"),
+    ("FUNCTION afunc(n)",                None),
+    ("RETURN n",                         None),
+    ("ENDFUNC",                          None),
+]
+
 PART12 = [
     ("CLS",                              None),
     ("area(1)",
@@ -564,7 +618,8 @@ PART12 = [
 # through SELECT and `--late` is GOTO, labels and procedures; no flag runs
 # the lot, which is what a developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
-LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12)
+LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
+        PART14, PART15)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:

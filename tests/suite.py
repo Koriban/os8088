@@ -255,6 +255,19 @@ FAST = [
         "repo', and was tests/kerndos.py's `-l /dev/null` on every soak, with "
         "eleven more sites one failed assembly away. The argument is gated "
         "and not the device, so it is caught at the edit"),
+    Row("basrefuse", "fast", py("tests/unit/t_basrefuse.py"), 0.3,
+        "SPEC.md 126.7: bas_err prints the reason and RETURNS, which makes "
+        "`jmp bas_err` right for a statement body holding nothing and WRONG "
+        "for a helper another routine calls - there the ret goes into the "
+        "caller's saved registers. The refusal still prints, correctly and "
+        "with the right line, so every visible symptom says the feature "
+        "works while the package is wedged: `jmp bas_kinderr` in 126.25's "
+        "kind check made the NEXT program typed never run, so the row read "
+        "the previous program's console and the bug arrived as a wrong "
+        "MESSAGE. A ratchet on names, not a proof - three tail-call targets "
+        "are listed with their reason and the row says what it does not "
+        "cover.",
+        needs=()),
     Row("fpscratch", "fast", py("tests/unit/t_fpscratch.py"), 0.3,
         "os88fp.inc DECLARES NO STORAGE (SPEC.md 84.3) and its four carriers "
         "- SHEET, CHART, FPTEST and BASIC/8088 - each write the fp_* scratch "
@@ -20004,8 +20017,8 @@ SOAK = [
         "file, two rows, because thirteen minutes of typing is too slow to "
         "iterate against and holds a soak slot while others sit idle.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 460.0,
-        "SPEC.md 126.22 and 126.23: labels, GOTO and PROCEDURE. The half of "
+    Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 620.0,
+        "SPEC.md 126.22-126.25: labels, GOTO, PROCEDURE and FUNCTION. The half of "
         "basiclang whose constructs span the WHOLE program rather than a "
         "line - a GOTO's label and a call's procedure are both normally "
         "below the line that names them, so both wait in a pending table "

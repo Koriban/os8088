@@ -652,7 +652,8 @@ BAS_B_bas_ncal   equ BAS_B_bas_prcs + BAS_PRC_MAX*BAS_PRC_SZ
 BAS_B_bas_cals   equ BAS_B_bas_ncal + 2
 BAS_B_bas_prcp   equ BAS_B_bas_cals + BAS_CAL_MAX*BAS_CAL_SZ
 BAS_B_bas_inprc  equ BAS_B_bas_prcp + BAS_PRC_PMAX
-BAS_B_bas_nfrm   equ BAS_B_bas_inprc + 2
+BAS_B_bas_calfn  equ BAS_B_bas_inprc + 2
+BAS_B_bas_nfrm   equ BAS_B_bas_calfn + 2
 BAS_B_bas_frms   equ BAS_B_bas_nfrm + 2
 BAS_B_bas_nsav   equ BAS_B_bas_frms + BAS_FRM_MAX*BAS_FRM_SZ
 BAS_B_bas_savs   equ BAS_B_bas_nsav + 2
@@ -792,6 +793,10 @@ bas_prcp        equ os88_image_end + BAS_B_bas_prcp  ; the parameter indices
 bas_inprc       equ os88_image_end + BAS_B_bas_inprc ; word: which procedure
                                          ; is being compiled, 0 for none -
                                          ; COMPILE time only
+bas_calfn       equ os88_image_end + BAS_B_bas_calfn ; byte: whether the
+                                         ; call site being compiled can use a
+                                         ; value (SPEC.md 126.25) - compile
+                                         ; time only
 bas_nfrm        equ os88_image_end + BAS_B_bas_nfrm  ; word: frames in hand
 bas_frms        equ os88_image_end + BAS_B_bas_frms  ; ...the return offset
                                          ; and the save mark of each, which
