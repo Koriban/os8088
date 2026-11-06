@@ -727,6 +727,42 @@ def build():
         w("| `apps/%s` | §%s | %s |" % (name, sec, blurb))
     w("")
 
+    # --- every shared entry point, by name --------------------------------
+    # THE BLURBS ABOVE NAMED 55 OF 789. That is 7%, and it is how a facility
+    # gets reinvented by somebody who DID read this file: BASIC/8088 wrote a
+    # `div 10` loop with os88dec.inc's own entry three screens up, and
+    # os88ui.inc's 134 entry points - the widgets, which are the most
+    # reusable code in the tree - were named here not once.
+    #
+    # Derived from the source, so it cannot drift. Prose cannot do this job:
+    # a blurb is a paragraph somebody wrote once, and what a reader has is a
+    # NOUN - "list", "dropdown", "decimal" - which they need to be able to
+    # grep for.
+    w("### Every shared entry point")
+    w("")
+    w("Generated from the includes themselves, so it is complete by "
+      "construction where the table above is a summary. **Grep this section "
+      "for the noun before writing a helper.** A family is named by its "
+      "prefix: `dec_*` is decimal text, `os88ui_sb*` the scroll bar, "
+      "`os88ui_dr*` the dropdown, `fp_*` double arithmetic, `fx_*` the "
+      "same arithmetic in fixed point.")
+    w("")
+    w("| include | entry points |")
+    w("|---|---|")
+    for name, _sec, _blurb in INCLUDES:
+        path = os.path.join(ROOT, "apps", name)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+        except OSError:
+            continue
+        labs = sorted(set(re.findall(r"(?m)^([a-z][a-z0-9_]{2,}):", src)))
+        if not labs:
+            continue
+        w("| `%s` (%d) | %s |"
+          % (name, len(labs), " ".join("`%s`" % l for l in labs)))
+    w("")
+
     w("## Packages, and what to read them for")
     w("")
     w("The tree's own worked examples. When a convention is unclear, the "
