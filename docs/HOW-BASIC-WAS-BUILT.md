@@ -1353,6 +1353,38 @@ genuinely need a number — a condition, a loop bound, a numeric store. The
 alternative there is a string's offset read as a double, which is a
 plausible-looking number.
 
+## The index I never read
+
+CLAUDE.md's first instruction, before any of the above, is **"Read
+`docs/INDEX.md` before writing a mechanism of your own."** Across ten waves
+of this chapter I did not open it once.
+
+The cost, found when somebody asked: `bas_sayint` was a hand-written
+`div 10` loop, and `apps/os88dec.inc` (§20.5.2) exists, is used by ten other
+packages, and its index entry ends with the sentence **"Reach for it before
+writing a `div 10` loop."** I did not merely miss the facility — I edited
+that loop twice in this session, once to strip the padding off it, and still
+did not go looking.
+
+It is now `dec_s16` into a buffer and a `con_say`. That is **14 bytes
+larger**, so the argument is not size: it is that the shared one is covered
+by `tests/decfmt.py`, which runs every arm under Unicorn against Python's
+own formatting, and the loop I wrote was covered by nothing.
+
+A sweep of the rest of the chapter's hand-rolled pieces against the index
+found no second case — the DS-to-DS byte copy, the counted console write
+(`con_say` stops at a NUL and a BASIC string may contain one), the
+byte-order compare and the chained-jump patching have no shared equivalent,
+and `OSAPI_XMEM_COPY` is for memory above 1 MB. One reinvention in ten
+waves, and it was the one the index names explicitly.
+
+**The second half of the lesson is about the gates.** `docs/INDEX.md` is
+generated and `make` fails when a regeneration would change a byte — so it
+cannot drift. It had drifted by one line anyway, because I had been running
+`checkdocs.py` and `os88test.py fast` *directly* for ten commits instead of
+running `make`, and it is `make` that runs `os88index.py --check`. Running
+the gate tools by hand is not running the gates.
+
 ## Next
 
 **Wave 3: strings and arrays** — the string heap, `DIM`, and the string

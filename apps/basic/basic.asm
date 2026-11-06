@@ -580,6 +580,11 @@ bas_ab4:        db 'SPEC.md 126', 0
 %define OS88FP_NOTRANS
 %define FP_NO_SQRT
 %define FP_NO_POW
+%define DEC_S16                             ; number -> decimal text, 0 resident
+%include "os88dec.inc"                      ; (SPEC.md 20.5.2) - docs/INDEX.md
+                                            ; says of it "reach for it before
+                                            ; writing a `div 10` loop", which
+                                            ; is exactly what bas_sayint was
 %include "os88fp.inc"
 
 %define CON_TTY
@@ -742,7 +747,10 @@ bas_stk         equ os88_image_end + BAS_B_bas_stk   ; the evaluation stack, BAS
                                          ; (wave 1c widened a slot to hold a
                                          ; double, and bas_exec's bound check
                                          ; counts in slots)
-bas_numbuf      equ os88_image_end + BAS_B_bas_numbuf   ; 8 bytes: ' -32768', 0
+bas_numbuf      equ os88_image_end + BAS_B_bas_numbuf   ; 8 bytes: '-32768', 0
+                                         ; - os88dec.inc's dec_s16 writes it,
+                                         ; and the leading space the old
+                                         ; hand-rolled loop put there is gone
 bas_reg         equ os88_image_end + BAS_B_bas_reg   ; the tier C register file, R_N words
 bas_nvar        equ os88_image_end + BAS_B_bas_nvar   ; word: how many of the
                                          ; table below are in use this RUN

@@ -5046,44 +5046,20 @@ bas_sayfp:
     ret
 
 ; --- bas_sayint - AX = a signed 16-bit value, onto the console ---------------
-; PLAIN DIGITS, no sign space and no separator. It had QuickBASIC's number
-; padding, copied from bas_sayfp above - and its ONLY caller is the refusal
-; line, where that padding reads as `Error at line  3 : ...`. PRINT's spacing
-; belongs to PRINT and bas_sayfp does it for itself; a future caller that
-; wants ` 42 ` can say so in two more con_says.
+; **os88dec.inc DOES THE DIGITS** (SPEC.md 20.5.2). This was a hand-written
+; `div 10` loop, which is the one thing docs/INDEX.md's entry for that
+; include tells you not to write - and the index was never read. `dec_s16`
+; writes NUL-ended text at DS:DI and keeps every register but DI, so the
+; whole of this is a buffer and a con_say.
 bas_sayint:
-    push ax
-    push bx
-    push cx
-    push dx
+    push di
     push si
-    mov si, bas_numbuf + 7          ; build it backwards from the end
-    mov byte [si], 0
-    mov cx, ax
-    or ax, ax
-    jns .pos
-    neg ax
-.pos:
-    mov bx, 10
-.l:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    dec si
-    mov [si], dl
-    or ax, ax
-    jnz .l
-    or cx, cx
-    jns .go
-    dec si
-    mov byte [si], '-'
-.go:
+    mov di, bas_numbuf
+    call dec_s16
+    mov si, bas_numbuf
     call con_say
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    pop di
     ret
 
 ; --- bas_err - SI = a NUL reason. Say it with the line number and stop -------

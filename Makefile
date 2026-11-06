@@ -6614,6 +6614,7 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 # nothing until the empty frame has been measured.
 $(BUILD)/basic.bin: apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
                     apps/os88con.inc apps/os88cp437.inc apps/os88text.inc apps/basic/baslang.inc apps/os88fp.inc \
+                    apps/os88dec.inc \
                     | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/basic/basic.asm
 	@echo "basic:  $(call FILESIZE,$@) bytes"
