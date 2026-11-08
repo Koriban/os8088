@@ -90,6 +90,13 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     length as 32767 (SPEC.md 126.29), so without the clamp the slice asks
     the arena for 32767 bytes: `Error at line 9: one piece of text is longer
     than the arena`, which is the clamp's whole job stated as a refusal.
+  * arrays: taking the UPPER bound out of bas_aelem's check. `PRINT a(5)`
+    on a `DIM a(4)` stops being refused and answers `0` - a plausible number
+    read from past the end of the array, which is the one thing an 8086
+    cannot catch for itself. One exact difference, at index 107.
+  * arrays: restoring DI in OP_ASTORE, which leaks a slot per assignment -
+    found by reading rather than by running, so it is listed for the shape
+    and not as a verified mutation.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -783,6 +790,74 @@ PART22 = [
      "Error at line 2: that many characters is a negative number"),
 ]
 
+PART23 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- DIM a(8) is 0..8, NINE slots (SPEC.md 126.31) -------------------
+    ("DIM rows(8)",                      None),
+    ("rows(0) = 1",                      None),
+    ("rows(8) = 9",                      None),
+    ("PRINT rows(0)",                    "1"),
+    ("PRINT rows(8)",                    "9"),
+    ("PRINT LBOUND(rows)",               "0"),
+    ("PRINT UBOUND(rows)",               "8"),
+    ("PRINT rows(4)",                    "0"),       # never stored: born 0
+    # ...explicit bounds ---------------------------------------------------
+    ("DIM sq(1 TO 5)",                   None),
+    ("FOR i = 1 TO 5",                   None),
+    ("sq(i) = i * i",                    None),
+    ("NEXT",                             None),
+    ("PRINT sq(1)",                      "1"),
+    ("PRINT sq(5)",                      "25"),
+    ("PRINT LBOUND(sq)",                 "1"),
+    ("PRINT UBOUND(sq)",                 "5"),
+    # ...two dimensions, row-major ----------------------------------------
+    ("DIM grid(1 TO 3, 1 TO 3)",         None),
+    ("grid(2, 2) = 5",                   None),
+    ("grid(1, 3) = 7",                   None),
+    ("PRINT grid(2, 2)",                 "5"),
+    ("PRINT grid(1, 3)",                 "7"),
+    ("PRINT grid(3, 1)",                 "0"),       # ...and not aliased
+    # ...TWENTY stores in a loop, which is what a stack leak would break
+    ("DIM many(1 TO 20)",                None),
+    ("t = 0",                            None),
+    ("FOR i = 1 TO 20",                  None),
+    ("many(i) = i",                      None),
+    ("NEXT",                             None),
+    ("FOR i = 1 TO 20",                  None),
+    ("t = t + many(i)",                  None),
+    ("NEXT",                             None),
+    ("PRINT t",                          "210"),
+    # ...an element in an expression, and as a subscript -------------------
+    ("PRINT many(3) + many(4)",          "7"),
+    ("PRINT many(many(2))",              "2"),
+]
+
+PART24 = [
+    ("CLS",                              None),
+    ("DIM a(4)",                         None),
+    ("PRINT a(5)",
+     "Error at line 3: that subscript is outside the array"),
+]
+
+PART25 = [
+    ("CLS",                              None),
+    ("DIM a(4)",                         None),
+    ("OPTION BASE 1",
+     "Error at line 3: OPTION BASE must come before any DIM"),
+]
+
+PART26 = [
+    ("CLS",                              None),
+    ("OPTION BASE 1",                    None),
+    ("DIM a(5)",                         None),
+    ("a(1) = 7",                         None),
+    ("PRINT LBOUND(a)",                  "1"),       # the base moved
+    ("PRINT UBOUND(a)",                  "5"),
+    ("PRINT a(1)",                       "7"),
+    ("PRINT 31415",                      "31415"),
+]
+
 # TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -791,7 +866,7 @@ PART22 = [
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
-        PART22)
+        PART22, PART23, PART24, PART25, PART26)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:
@@ -969,6 +1044,8 @@ SEED = "31415"          # ...printed first by every part; see console_lines
 
 
 _BUF = [None]                   # where a part last found the console
+_MIN_ROWS = 20                  # a console is 25; a coincidence in the BIOS
+                                # data area is one or two
 
 
 def console_lines(m):
@@ -988,6 +1065,14 @@ def console_lines(m):
     it the region is bounded by the attribute byte its own cells carry -
     whatever that turns out to be - rather than by a guess about it.
 
+    **AND EVERY MATCH IS A CANDIDATE, NOT THE FIRST ONE.** The third design
+    of this anchor. Taking the first match in memory order found 0x42E -
+    five bytes of the BIOS data area reading as the sentinel's cells - with
+    0 rows and attribute 0x04, so the part answered nothing and looked
+    exactly like a program that had hung. The shape decides now: a console
+    is 25 rows of one attribute, and a candidate that is not at least 20 is
+    not it. The language was correct in that run; the fixture was not.
+
     **A PART THAT TESTS A REFUSAL CANNOT PRINT IT.** The whole program is
     compiled before any of it runs (SPEC.md 126.19), so a program refused
     at compile time prints nothing at all - not the sentinel, not even its
@@ -999,31 +1084,50 @@ def console_lines(m):
     """
     img = m.read(0, 0x100000)
     pat = SEED.encode()
-    at = -1
+
+    def _shape(at):
+        """(start, rows, attr) for a candidate, or None if it is not one."""
+        attr = img[at + 1]
+        # back up to the row this sits on, then to the first row sharing its
+        # attribute - SEED is at column 1 (PRINT's sign space is column 0)
+        start = at - 2
+        while start - ROW >= 0 and all(img[start - ROW + 2 * c + 1] == attr
+                                       for c in range(CON_COLS)):
+            start -= ROW
+        rows = 0
+        while (start + (rows + 1) * ROW <= len(img) and rows < CON_ROWS
+               and all(img[start + rows * ROW + 2 * c + 1] == attr
+                       for c in range(CON_COLS))):
+            rows += 1
+        return (start, rows, attr) if rows >= _MIN_ROWS else None
+
+    # **EVERY MATCH IS A CANDIDATE AND THE SHAPE DECIDES**, which is this
+    # anchor's third design. Taking the FIRST match in memory order put the
+    # buffer at 0x42E - five bytes of the BIOS data area that happen to read
+    # as the sentinel's cells - with 0 rows and attribute 0x04, so the part
+    # answered nothing and looked exactly like a program that had hung. A
+    # console is 25 rows of one attribute; anything that is not is not it.
+    hit = None
     for i in range(len(img) - 2 * len(pat)):
         if img[i] == pat[0] and all(img[i + 2 * k] == pat[k]
                                     for k in range(len(pat))):
-            at = i
-            break
-    if at < 0:
+            shape = _shape(i)
+            if shape:
+                hit = (i, shape)
+                break
+    if hit is None:
         if _BUF[0] is None:
             print("      no buffer: the sentinel %s is not in memory as cells"
                   % SEED)
             return None
-        at = _BUF[0]
+        shape = _shape(_BUF[0])
+        if shape is None:
+            print("      no buffer: the address a part before it found no "
+                  "longer has a console's shape")
+            return None
+        hit = (_BUF[0], shape)
         print("      no sentinel: reading the buffer a part before it found")
-    attr = img[at + 1]
-    # back up to the row this sits on, then to the first row sharing its
-    # attribute - SEED is at column 1 (PRINT's sign space is column 0)
-    start = at - 2
-    while start - ROW >= 0 and all(img[start - ROW + 2 * c + 1] == attr
-                                   for c in range(CON_COLS)):
-        start -= ROW
-    rows = 0
-    while (start + (rows + 1) * ROW <= len(img) and rows < CON_ROWS
-           and all(img[start + rows * ROW + 2 * c + 1] == attr
-                   for c in range(CON_COLS))):
-        rows += 1
+    at, (start, rows, attr) = hit
     print("      console buffer: 0x%X, %d rows, attr 0x%02X"
           % (start, rows, attr))
     _BUF[0] = at

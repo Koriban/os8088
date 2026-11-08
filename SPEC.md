@@ -243600,6 +243600,72 @@ be moved by a compaction because compaction only ever slides the variables'
 region. `LEN` is the companion the convention needs, which is why it is in
 §126.29 and not in wave 5 with the rest of the library.
 
+### 126.31 Arrays
+
+```basic
+DIM rows(8)                ' 0..8 - NINE slots, the index running from 0
+DIM rows(1 TO 5)           ' ...or say what you mean
+DIM grid(1 TO 3, 1 TO 3)   ' two dimensions
+OPTION BASE 1              ' changes the default, before any DIM
+PRINT LBOUND(rows), UBOUND(rows)
+```
+
+**Status: numeric arrays shipped; string arrays are the second half** and
+carry §126.32's consequence with them.
+
+**From the reference, as §126.29 was.** `DIM rows(8)` gives nine slots
+because the index runs from 0 — and the reference's own advice about that is
+worth keeping where an implementer will read it: *"Find out once, per
+language, and then write loops that say what they mean."* `LBOUND` and
+`UBOUND` exist so a program never has to remember.
+
+**`OPTION BASE` must come before any `DIM`** and is refused after one,
+because an array already laid out cannot change where its index starts and a
+program with two different bases is a program nobody can read.
+
+**A subscript out of range is REFUSED BY NAME**, with the bound and the
+index in the message. The array knows how big it is; this is the one place
+where a wrong answer would be indistinguishable from a right one, and an
+8086 has no bounds check of its own.
+
+**`DIM` before use, so the compiler always knows.** The name decides
+everything at compile time: `a(3)` is an element where `a` has been
+`DIM`med and a procedure call where it has not (§126.23's three call
+spellings). A second `DIM` of one name is refused. That is what makes
+arrays cost no run-time type word, exactly as §126.28's strings do.
+
+**One arena, eight bytes an element**, whatever the element is — a packed
+double uses all eight and a string uses the first four (§126.28's offset and
+length). One size means one indexer and one bound; the four bytes a string
+element wastes buy the absence of a second allocator. 4,096 bytes, so 512
+elements across every array in a program, refused by name when the next
+`DIM` will not fit.
+
+**Not here, and in this order when it is:** `REDIM` (which the reference
+says loses the contents) and `ERASE` (which clears in place), a third
+dimension, `SWAP`, `LSET`/`RSET`, and `TYPE` records with their dotted
+names.
+
+### 126.32 A string array element is a second kind of root
+
+§126.28's compaction walks the string variables, one owner per string, and
+slides the variables' region down over its garbage. **A string array element
+holds an arena offset too**, so it is a root of exactly the same kind and
+the walk has to cover it — an uncovered root is a string whose bytes move
+out from under it, which is the defect class that cost three of this
+chapter's waves.
+
+The design already allows for it: assignment copies, so an element owns its
+bytes alone, and the walk's rule — *repeatedly take the lowest root at or
+above the write pointer* — is indifferent to where a root lives. What
+changes is only the iteration, and §126.28's zero-length rule applies
+unchanged: an element that owns no bytes is skipped, or the walk never
+terminates.
+
+**This is written down before the code**, because the alternative is finding
+it the way the variables' version was found — a program that fills the arena
+and then reads a string that has moved.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

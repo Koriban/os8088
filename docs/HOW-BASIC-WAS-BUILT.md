@@ -1429,6 +1429,101 @@ failure arrived as *four expected answers missing and everything after them
 shifted up by four* rather than as a wrong value. Reading the body against
 `.scat` found it; guessing at it did not.
 
+## Arrays, and two defects I have now written three times
+
+`DIM rows(8)` is nine slots because the index runs from 0; `DIM rows(1 TO 5)`
+says what it means; `OPTION BASE 1` moves the default and is refused after
+any `DIM`; two dimensions, row-major; `LBOUND`/`UBOUND`. From the
+reference's `data.md`, including the advice worth repeating where an
+implementer reads it: *"Find out once, per language, and then write loops
+that say what they mean."*
+
+**The name decides, at compile time.** `a(3)` is an element where `a` has
+been `DIM`med and a procedure call where it has not — which is only
+decidable because `DIM` must precede use, and which is what lets arrays cost
+no run-time type word, exactly as the strings do.
+
+**One arena, eight bytes an element** whatever it holds: a double uses all
+eight, a string will use the first four. One size means one indexer and one
+bound, and the four bytes a string element will waste buy the absence of a
+second allocator.
+
+**The bounds check is the feature.** An 8086 has none of its own, so a
+subscript one past the end would read or write whatever the arena holds
+next — another array, or the string region. It is refused by name with
+nothing plausible returned.
+
+### Three defects, and I had already written two of them
+
+**`.astore` restored `DI`.** Caught by reading it back before the first run
+rather than by the run. The value's slot sits above the subscripts, so the
+store pops the value, then `bas_aelem` pops the subscripts and leaves `DI`
+where the stack must end — and the first version then restored `DI` to the
+value's slot, leaving the evaluation stack *n* slots high per assignment.
+Sixteen assignments in a loop and it is full. This is the same `DI`
+convention I misread for the string slices one commit ago; that one answered
+`""` and this one would have answered "expression too deep" on the
+seventeenth iteration.
+
+**`bas_c_subs` was not reentrant.** `PRINT many(many(2))` compiles an inner
+subscript list inside the outer one, and the two compile-time words I had
+used instead of stack juggling are shared between them — so the outer list
+counted the inner's subscripts and was refused for disagreeing with its own
+`DIM`. The words are saved across the whole routine now. **I made this exact
+mistake in wave 2c**, when re-entering the statement compiler for an `IF`
+arm broke on a cursor that skipped nothing; the lesson generalises and I had
+not generalised it: *a compile-time scratch global is a bug the first time
+the compiler recurses, and an expression compiler always recurses.*
+
+**And a register I read before the line that loads it.** `rows(0) = 1` was
+read as a procedure call, because the element-assignment test I inserted
+does `cmp al, '('` and the `mov al, [si]` that loads it for the bare-call
+test is *below* the insertion point. So it tested whatever `bas_wordis` had
+left in AL. A stale register has no name — the same shape as the orphaned
+`jc` this project has a standing note about — and the fix is one line put
+where it should always have been.
+
+**And the array table was not reset per run**, so the second part to `DIM a`
+was refused as a duplicate. §126.17 says this about the variable table in as
+many words — an entry keys on where its name is in a text the next `RUN`
+will have replaced — and the array table is the same shape. Four words
+added beside the four that were already there.
+
+### The gate that caught what the row could not
+
+With all 113 answers green, `fpscratch` went red — the fast-tier row that
+holds, among other things, that **no two fields of BASIC's bss chain share
+an address**. Two did: I had inserted `bas_acur` and `bas_asubs` after
+`bas_adimd` and never re-chained `bas_atop` onto them, so the chain
+**forked** and `bas_atop` claimed `adimd + 2` as well.
+
+The consequence is that the array arena's top and the compile-time array
+index were **the same word**, and the behaviour row — a program that DIMs
+four arrays, fills twenty elements and reads them back — passed through it
+without a wrong answer.
+
+That is the whole argument for the chain gate, which was written in wave 1
+for a value stack that reserved four slots where sixteen were allowed. A
+behaviour test samples; a structural one does not. Four bytes of bss is what
+the fix cost, and the 113 answers had to be run again afterwards, because
+the green before it was on a binary with overlapping fields.
+
+### And a fourth failure that was the fixture
+
+`OPTION BASE 1`'s part answered nothing — no values and no refusal, which
+reads exactly like a hang. It was the anchor: the row finds its console by
+searching memory for the sentinel the program prints, and it took the
+**first** match in address order. That was `0x42E` — five bytes of the BIOS
+data area that happen to read as the sentinel's cells — with 0 rows and
+attribute 0x04.
+
+The language was right in that run and the fixture was wrong, which is this
+project's standing rule about mutations seen from the other side. The anchor
+now treats every match as a *candidate* and lets the shape decide: a console
+is 25 rows of one attribute, and anything under 20 is not one. That is its
+third design, and the row's docstring says so along with why the two before
+it failed.
+
 ## Next
 
 **Wave 3: strings and arrays** — the string heap, `DIM`, and the string

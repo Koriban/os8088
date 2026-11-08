@@ -20285,7 +20285,7 @@ SOAK = [
         "file, two rows, because thirteen minutes of typing is too slow to "
         "iterate against and holds a soak slot while others sit idle.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 780.0,
+    Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 980.0,
         "SPEC.md 126.22-126.25: labels, GOTO, PROCEDURE and FUNCTION. The half of "
         "basiclang whose constructs span the WHOLE program rather than a "
         "line - a GOTO's label and a call's procedure are both normally "

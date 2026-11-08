@@ -121,7 +121,14 @@ OP_NSTR     equ 41                  ; pop a number, push it as text
 OP_SLEFT    equ 42                  ; pop n and text, push the first n
 OP_SRIGHT   equ 43                  ; ...the last n
 OP_SMID     equ 44                  ; pop n, start and text, push the slice
-OP_N        equ 45                  ; how many there are, table included
+; --- arrays (SPEC.md 126.31) ----------------------------------------------
+OP_ALOAD    equ 45                  ; + an index byte: pop the subscripts,
+                                    ; push that element
+OP_ASTORE   equ 46                  ; + an index byte: pop a value and the
+                                    ; subscripts, store it
+OP_ABOUND   equ 47                  ; + an index byte and a which byte: push
+                                    ; LBOUND or UBOUND
+OP_N        equ 48                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -148,6 +155,23 @@ BAS_VAR_SZ  equ 12
 ; The string arena, and the one constant that sizes it. 4096 against a 2048
 ; program, and it is REFUSED BY NAME when it fills rather than wrapping.
 BAS_STR_MAX equ 4096
+
+; --- arrays (SPEC.md 126.31) ----------------------------------------------
+; A name, its two dimensions' lower bound and count, how many dimensions it
+; has, and where its elements start in bas_arena. TWO is the limit here; a
+; third is 126.31's "not here, and in this order when it is".
+BAS_ARR_MAX   equ 8
+BAS_ARR_SRC   equ 0
+BAS_ARR_LEN   equ 2
+BAS_ARR_LO0   equ 4
+BAS_ARR_N0    equ 6
+BAS_ARR_LO1   equ 8
+BAS_ARR_N1    equ 10
+BAS_ARR_DIM   equ 12               ; word: 1 or 2
+BAS_ARR_AT    equ 14               ; word: its first element, arena-relative
+BAS_ARR_SZ    equ 16               ; a POWER OF TWO, so the indexer shifts
+
+BAS_ARR_BYTES equ 4096             ; 512 elements across the whole program
 
 ; --- the OPEN BLOCKS, at compile time only (SPEC.md 126) --------------------
 ; WHILE..WEND, FOR..NEXT and the block IF all need two things remembered
@@ -292,6 +316,13 @@ bas_run:
     mov word [bas_line], 1
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
+    mov word [bas_narr], 0          ; ...no array DIMmed (SPEC.md 126.31),
+    mov word [bas_atop], 0          ; for the reason the variables go: an
+    mov word [bas_abase], 0         ; entry keys on where its name is in a
+    mov word [bas_adimd], 0         ; text the next RUN will have replaced,
+                                    ; and a second DIM of one name is
+                                    ; refused - so a program run twice
+                                    ; refused itself the second time
     mov word [bas_svtop], 0         ; ...and no text held (SPEC.md 126.28)
     mov word [bas_sttop], BAS_STR_MAX
     mov word [bas_nlbl], 0          ; ...nor any label seen, for the reason
@@ -508,6 +539,12 @@ bas_c_stmt:
     mov si, bas_kw_void             ; VOID <expr>, and `~<expr>` below: GFA
     call bas_wordis                 ; has both and they differ there only in
     je .void                        ; arithmetic (SPEC.md 126.27)
+    mov si, bas_kw_dim
+    call bas_wordis
+    je .dim
+    mov si, bas_kw_option
+    call bas_wordis
+    je .option
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -519,6 +556,20 @@ bas_c_stmt:
     mov si, [bas_src]
     cmp byte [si], '='
     je .assign
+    ; **AN ARRAY ELEMENT ASSIGNMENT COMES FIRST**, because `a(3) = 5` and a
+    ; call `a(3)` are the same shape and only the name tells them apart
+    ; (SPEC.md 126.31).
+    mov al, [si]                    ; ...and AL IS LOADED HERE, not inherited:
+                                    ; the line that loaded it for the bare-call
+                                    ; test is BELOW this block, so the first
+                                    ; version tested whatever bas_wordis had
+                                    ; left and `rows(0) = 1` was read as a call
+    cmp al, '('
+    jne .notelemst
+    call bas_arrfind
+    jc .notelemst
+    jmp .elemstore
+.notelemst:
     ; **A BARE NAME IS A CALL ONLY IF NOTHING ELSE FOLLOWS IT**, which keeps
     ; `PRIN 3` the refusal it was rather than a call to a procedure called
     ; PRIN with a stray 3 after it (SPEC.md 126.23).
@@ -533,6 +584,36 @@ bas_c_stmt:
 .barecall:
     xor al, al
     jmp bas_callemit                ; DI/CX = the name
+.elemstore:
+    push bx
+    call bas_c_subs                 ; the subscripts first...
+    pop bx
+    jc .x
+    push bx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '='
+    jne .elemnoeq
+    inc word [bas_src]
+    call bas_c_rel                  ; ...then the value
+    cmp byte [bas_bad], 0
+    jne .elempop
+    call bas_wantnum
+    jc .elempop
+    mov al, OP_ASTORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .elempop
+    pop ax
+    jmp bas_emit
+.elemnoeq:
+    pop bx
+    mov si, bas_e_stmt
+    jmp bas_err
+.elempop:
+    pop bx
+    ret
+
 .assign:
     inc word [bas_src]
     ; **THE TARGET'S SPELLING DECIDES** (SPEC.md 126.28), so `a$ = ...` reads
@@ -1491,6 +1572,116 @@ bas_c_stmt:
 .rem:
     call bas_toeol                  ; the rest of the line is a comment
     ret
+; --- DIM name(size[,size]) (SPEC.md 126.31) ----------------------------
+; THE ENTRY IS ALLOCATED FIRST AND FILLED AS THE SIZES ARE PARSED. The
+; first draft of this carried four numbers on the stack through three calls
+; and was unreadable by the time the second dimension was optional; the
+; entry is the natural place to put them, and bas_arrat is cheap enough to
+; re-fetch.
+.dim:
+    call bas_skipsp
+    call bas_word                   ; the name, sigil and all
+    jc .dimnoname
+    call bas_arrfind
+    jnc .dimdup
+    mov bx, [bas_narr]
+    cmp bx, BAS_ARR_MAX
+    jae .dimmax
+    call bas_arrat
+    mov [si + BAS_ARR_SRC], di
+    mov [si + BAS_ARR_LEN], cx
+    call bas_bopen
+    jc .x
+    call bas_dimone                 ; AX = low, DX = count
+    jc .x
+    mov bx, [bas_narr]
+    call bas_arrat
+    mov [si + BAS_ARR_LO0], ax
+    mov [si + BAS_ARR_N0], dx
+    mov word [si + BAS_ARR_DIM], 1
+    mov word [si + BAS_ARR_LO1], 0
+    mov word [si + BAS_ARR_N1], 1   ; ...so the indexer needs no special case
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .dimclose
+    inc word [bas_src]
+    call bas_dimone
+    jc .x
+    mov bx, [bas_narr]
+    call bas_arrat
+    mov [si + BAS_ARR_LO1], ax
+    mov [si + BAS_ARR_N1], dx
+    mov word [si + BAS_ARR_DIM], 2
+.dimclose:
+    call bas_bclose
+    jc .x
+    ; --- how many elements, and does the arena hold them? ---------------
+    mov bx, [bas_narr]
+    call bas_arrat
+    mov ax, [si + BAS_ARR_N0]
+    push si
+    mul word [si + BAS_ARR_N1]      ; DX:AX, and DX must be 0
+    pop si
+    or dx, dx
+    jnz .dimfull
+    mov cx, 3                       ; eight bytes an element
+.dimsh:
+    shl ax, 1
+    jc .dimfull
+    dec cx
+    jnz .dimsh
+    mov dx, [bas_atop]
+    mov [si + BAS_ARR_AT], dx
+    add ax, dx
+    jc .dimfull
+    cmp ax, BAS_ARR_BYTES
+    ja .dimfull
+    mov [bas_atop], ax
+    inc word [bas_narr]
+    mov word [bas_adimd], 1         ; ...and OPTION BASE is closed now
+    ret
+.dimnoname:
+    mov si, bas_e_arrname
+    jmp bas_err
+.dimdup:
+    mov si, bas_e_arrdup
+    jmp bas_err
+.dimmax:
+    mov si, bas_e_arrmax
+    jmp bas_err
+.dimfull:
+    mov si, bas_e_arrfull
+    jmp bas_err
+
+; --- OPTION BASE 0|1 ---------------------------------------------------
+.option:
+    call bas_skipsp
+    call bas_word
+    jc .optbad
+    mov si, bas_kw_base
+    call bas_wordis
+    jne .optbad
+    cmp word [bas_adimd], 0         ; ...and only before any DIM: an array
+    jne .optlate                    ; already laid out cannot move its base
+    call bas_c_const
+    jc .x
+    cmp ax, 1
+    ja .optval
+    or ax, ax
+    js .optval
+    mov [bas_abase], ax
+    ret
+.optbad:
+    mov si, bas_e_stmt
+    jmp bas_err
+.optlate:
+    mov si, bas_e_basedim
+    jmp bas_err
+.optval:
+    mov si, bas_e_baseval
+    jmp bas_err
+
 .tilde:
     inc word [bas_src]
 .void:
@@ -2194,6 +2385,19 @@ bas_c_fact:
     mov si, bas_kw_val
     call bas_wordis
     je .b_val
+    mov si, bas_kw_lbound
+    call bas_wordis
+    je .b_lbound
+    mov si, bas_kw_ubound
+    call bas_wordis
+    je .b_ubound
+    ; **AN ARRAY ELEMENT, AND THE NAME DECIDES** (SPEC.md 126.31): a(3) is
+    ; an element where a has been DIMmed and a procedure call where it has
+    ; not, which is what lets arrays cost no run-time type word.
+    call bas_arrfind
+    jc .notarray
+    jmp .elem
+.notarray:
     ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
     ; never assigned reads 0, which is what every BASIC of this line does -
@@ -2210,6 +2414,57 @@ bas_c_fact:
     jmp bas_emit                    ; ...the index byte after it
 ; Each takes ONE piece of text and answers a number, so one body serves and
 ; the opcode rides in AL - the shape .cmp uses for the six comparisons.
+.elem:
+    push bx
+    call bas_c_subs
+    pop bx
+    jc .elx
+    mov al, OP_ALOAD
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .elx
+    mov ax, bx
+    jmp bas_emit                    ; ...the array's index after it
+.elx:
+    ret
+
+; --- LBOUND(a) and UBOUND(a), and the dimension is optional -------------
+.b_lbound:
+    xor dx, dx
+    jmp short .b_bound
+.b_ubound:
+    mov dx, 1
+.b_bound:
+    push dx
+    call bas_bopen
+    jc .b_bpop
+    call bas_skipsp
+    call bas_word
+    jc .b_bnotarr
+    call bas_arrfind
+    jc .b_bnotarr
+    push bx
+    call bas_bclose
+    pop bx
+    jc .b_bpop
+    mov al, OP_ABOUND
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .b_bpop
+    mov ax, bx
+    call bas_emit                   ; which array...
+    cmp byte [bas_bad], 0
+    jne .b_bpop
+    pop ax                          ; ...and which end
+    jmp bas_emit
+.b_bpop:
+    pop ax
+    ret
+.b_bnotarr:
+    pop ax
+    mov si, bas_e_notarr
+    jmp bas_err
+
 .b_len:
     mov al, OP_SLEN
     jmp short .b_s1
@@ -3732,6 +3987,227 @@ bas_unsave:
     ret
 
 ; -----------------------------------------------------------------------------
+; Arrays, compile side (SPEC.md 126.31)
+; -----------------------------------------------------------------------------
+bas_arrat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, bas_arrs
+    mov si, ax
+    pop ax
+    ret
+    times BAS_ARR_SZ - 16 db 0
+    times 16 - BAS_ARR_SZ db 0
+
+; --- bas_arrfind - BX = the array named by DI/CX; CF=1 if none -----------
+bas_arrfind:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    xor bx, bx
+    mov dx, [bas_narr]
+.scan:
+    cmp bx, dx
+    jae .miss
+    push bx
+    push cx
+    push di
+    call bas_arrat
+    cmp cx, [si + BAS_ARR_LEN]
+    jne .nextpop
+    mov si, [si + BAS_ARR_SRC]
+.cmp:
+    or cx, cx
+    jz .hitpop
+    mov al, [si]
+    call bas_upper
+    mov ah, al
+    mov al, [di]
+    call bas_upper
+    cmp al, ah
+    jne .nextpop
+    inc si
+    inc di
+    dec cx
+    jmp .cmp
+.nextpop:
+    pop di
+    pop cx
+    pop bx
+    inc bx
+    jmp .scan
+.hitpop:
+    pop di
+    pop cx
+    pop bx
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+.miss:
+    stc
+    jmp .out
+
+; --- bas_c_subs - the (i) or (i,j) after an array's name ---------------
+; in:  BX = which array. Emits the subscripts as ORDINARY EXPRESSIONS, in
+;      order, so the element ops pop them in reverse.
+; out: CF=1 and refused by name, including when the count disagrees with the
+;      DIM - which is 126.31's own refusal and not a silent reinterpretation.
+bas_c_subs:
+    ; **IT RE-ENTERS ITSELF**, and the first version did not survive that:
+    ; `many(many(2))` compiles an inner subscript list in the middle of the
+    ; outer one, and two compile-time words shared between them left the
+    ; outer list counting the inner's subscripts - refused for a count that
+    ; disagreed with the DIM. The words are saved across the whole of it;
+    ; `push`/`pop` of a memory word is 8086-legal and is the cheapest way to
+    ; make a scratch global reentrant.
+    push word [bas_acur]
+    push word [bas_asubs]
+    mov [bas_acur], bx
+    mov word [bas_asubs], 0
+    call bas_bopen
+    jc .suout
+    call bas_c_rel                  ; the first subscript
+    cmp byte [bas_bad], 0
+    jne .subad
+    call bas_wantnum
+    jc .suout
+    inc word [bas_asubs]
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .sudone
+    inc word [bas_src]
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .subad
+    call bas_wantnum
+    jc .suout
+    inc word [bas_asubs]
+.sudone:
+    call bas_bclose
+    jc .suout
+    mov bx, [bas_acur]              ; ...and the count must match the DIM
+    call bas_arrat
+    mov ax, [bas_asubs]
+    cmp ax, [si + BAS_ARR_DIM]
+    jne .sumis
+    mov bx, [bas_acur]
+    clc
+    jmp short .suout
+.sumis:
+    mov si, bas_e_arrdim
+    call bas_err
+.subad:
+    stc
+.suout:
+    pushf
+    pop ax
+    pop word [bas_asubs]
+    pop word [bas_acur]
+    push ax
+    popf
+    ret
+
+; --- bas_c_const - a plain integer literal at the cursor; out AX --------
+; out: CF=1 and refused by name if there is not one.
+; A BOUND IS NOT AN EXPRESSION, for the reason FOR's STEP is not one: the
+; compiler has to know the size to lay the array out, so a number it would
+; have to run the program to learn is no use to it.
+bas_c_const:
+    push bx
+    push si
+    call bas_skipsp
+    xor bx, bx                      ; BX = 1 if it is negative
+    mov si, [bas_src]
+    cmp byte [si], '-'
+    jne .cnpos
+    inc bx
+    inc word [bas_src]
+.cnpos:
+    mov si, [bas_src]
+    call fp_atof                    ; A = the magnitude, SI advanced
+    jc .cnbad
+    mov [bas_src], si
+    call fp_a2i
+    jc .cnbad
+    or bx, bx
+    jz .cnout
+    neg ax
+.cnout:
+    clc
+    pop si
+    pop bx
+    ret
+.cnbad:
+    mov si, bas_e_expr
+    call bas_err
+    stc
+    pop si
+    pop bx
+    ret
+
+; --- bas_dimone - one size: `n` or `a TO b`; out AX = low, DX = count ----
+bas_dimone:
+    push bx
+    push si
+    call bas_c_const                ; a plain number, as FOR's STEP is
+    jc .d1bad
+    mov bx, ax                      ; BX = the first number
+    call bas_skipsp
+    call bas_word                   ; ...TO?
+    jc .d1just
+    mov si, bas_kw_to
+    call bas_wordis
+    je .d1to
+    mov [bas_src], di
+.d1just:
+    ; `DIM a(8)` is 0..8 - NINE slots - with the base OPTION BASE set
+    mov ax, [bas_abase]
+    mov dx, bx
+    sub dx, ax
+    js .d1neg
+    inc dx                          ; inclusive, which is the reference's
+    clc
+    jmp short .d1out
+.d1to:
+    call bas_c_const
+    jc .d1bad
+    mov dx, ax
+    sub dx, bx
+    js .d1order
+    inc dx
+    mov ax, bx
+    clc
+    jmp short .d1out
+.d1order:
+    mov si, bas_e_arrto
+    call bas_err
+    stc
+    jmp short .d1out
+.d1neg:
+    mov si, bas_e_arrto
+    call bas_err
+    stc
+    jmp short .d1out
+.d1bad:
+    stc
+.d1out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; The string arena (SPEC.md 126.28)
 ;
 ; TWO REGIONS GROWING TOWARDS EACH OTHER. Variables' bytes from the bottom
@@ -3847,6 +4323,93 @@ bas_svaralloc:
     call bas_err
     stc
     jmp .vout
+
+; --- bas_aelem - SI = array BX's element, subscripts on the stack -------
+; in:  BX = which array, DI = one past the top of the value stack with the
+;      subscripts pushed in order.
+; out: SI = the element's address, DI dropped by the subscript count,
+;      CF=1 and refused by name if a subscript is outside the array.
+bas_aelem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push bx
+    call bas_arrat                  ; SI = the entry
+    pop bx
+    push si                         ; the entry, through the pops below
+    mov cx, [si + BAS_ARR_DIM]
+    cmp cx, 2
+    je .ae2
+    ; --- one dimension ------------------------------------------------
+    call bas_asub                   ; AX = the subscript, DI -= a slot
+    jc .aebad
+    pop si
+    push si
+    sub ax, [si + BAS_ARR_LO0]
+    js .aerange
+    cmp ax, [si + BAS_ARR_N0]
+    jae .aerange
+    jmp short .aeat
+.ae2:
+    call bas_asub                   ; the SECOND subscript is on top
+    jc .aebad
+    pop si
+    push si
+    mov dx, ax
+    sub dx, [si + BAS_ARR_LO1]
+    js .aerange
+    cmp dx, [si + BAS_ARR_N1]
+    jae .aerange
+    call bas_asub                   ; ...then the first
+    jc .aebad
+    pop si
+    push si
+    sub ax, [si + BAS_ARR_LO0]
+    js .aerange
+    cmp ax, [si + BAS_ARR_N0]
+    jae .aerange
+    mul word [si + BAS_ARR_N1]      ; row-major: i*n1 + j
+    add ax, dx
+.aeat:
+    shl ax, 1                       ; eight bytes an element
+    shl ax, 1
+    shl ax, 1
+    pop si
+    add ax, [si + BAS_ARR_AT]
+    add ax, bas_arena
+    mov si, ax
+    clc
+.aeout:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.aerange:
+    pop si
+    mov si, bas_e_arrrange
+    call bas_err
+    stc
+    jmp .aeout
+.aebad:
+    pop si
+    stc
+    jmp .aeout
+
+; --- bas_asub - pop one subscript as a 16-bit integer; out AX -----------
+bas_asub:
+    push bx
+    push cx
+    push si
+    sub di, BAS_SLOT
+    mov si, di
+    call fp_unpack_a
+    call fp_a2i
+    pop si
+    pop cx
+    pop bx
+    ret
 
 ; --- bas_sarg1 - pop the top slot as a 16-bit count; out AX -------------
 ; in:  DI = one past the top slot. out: DI -= one slot, AX = the number,
@@ -4962,6 +5525,110 @@ bas_exec:
     pop bx
     jmp .done
 
+; --- the array ops (SPEC.md 126.31) --------------------------------------
+; **THE BOUNDS CHECK IS THE POINT.** An 8086 has none of its own, and a
+; subscript one past the end would read or write whatever the arena holds
+; next - another array, or the string region - so it is refused by name with
+; nothing plausible returned.
+;
+; bas_aelem does the arithmetic for all three: in BX = which array, with the
+; subscripts already on the value stack; out SI = the element, DI dropped by
+; as many slots as there were subscripts.
+.aload:
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_aelem
+    jc .alx
+    xor bx, bx                      ; BX counts: the only register an 8086
+.alcp:                              ; may add to SI or DI, and it is free
+    mov ax, [si + bx]               ; once bas_aelem has answered
+    mov [di + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .alcp
+    pop si
+    pop bx
+    add di, BAS_SLOT
+    jmp .next
+.alx:
+    pop si
+    pop bx
+    jmp .done
+
+.astore:
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si                         ; the op cursor
+    cmp di, bas_stk + BAS_SLOT
+    jb .asund
+    push dx
+    sub di, BAS_SLOT                ; DI = the VALUE's slot, above the subs
+    push di
+    call bas_aelem                  ; SI = the element, DI = where the stack
+    jc .asx2                         ; must END - the subscripts are gone
+    ; **DI MUST NOT BE RESTORED.** The first version popped the value's slot
+    ; back into DI after the store, which left the stack n slots high per
+    ; assignment - sixteen of them in a FOR loop and the evaluation stack is
+    ; full. The final DI is bas_aelem's; the value's slot is only a source.
+    mov dx, di
+    pop di                          ; DI = the value's slot, to copy FROM
+    xor bx, bx
+.ascp:
+    mov ax, [di + bx]
+    mov [si + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .ascp
+    mov di, dx                      ; ...and the value is consumed too
+    pop dx
+    pop si
+    pop bx
+    jmp .next
+.asx2:
+    pop di
+    pop dx
+.asund:
+    pop si
+    pop bx
+    jmp .done
+
+.abound:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push bx
+    mov bl, [si]                    ; which array...
+    inc si
+    xor bh, bh
+    push si
+    mov si, bas_arrs                ; (bas_arrat wants BX and gives SI)
+    call bas_arrat
+    pop ax                          ; the op cursor, to read `which end`
+    push ax
+    mov bx, ax
+    mov al, [bx]                    ; 0 = LBOUND, 1 = UBOUND
+    xor ah, ah
+    or al, al
+    jnz .abup
+    mov ax, [si + BAS_ARR_LO0]
+    jmp short .abgot
+.abup:
+    mov ax, [si + BAS_ARR_LO0]
+    add ax, [si + BAS_ARR_N0]
+    dec ax
+.abgot:
+    call fp_i2a
+    call fp_pack_a
+    pop si
+    inc si                          ; past the `which end` byte
+    pop bx
+    add di, BAS_SLOT
+    jmp .next
+
 .sprint:
     cmp di, bas_stk + BAS_SLOT
     jb .under
@@ -5231,6 +5898,9 @@ bas_optab:
     dw bas_exec.sleft               ; OP_SLEFT
     dw bas_exec.sright              ; OP_SRIGHT
     dw bas_exec.smid                ; OP_SMID
+    dw bas_exec.aload               ; OP_ALOAD
+    dw bas_exec.astore              ; OP_ASTORE
+    dw bas_exec.abound              ; OP_ABOUND
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -5645,6 +6315,11 @@ bas_kw_str:     db 'STR$', 0
 bas_kw_left:    db 'LEFT$', 0
 bas_kw_right:   db 'RIGHT$', 0
 bas_kw_mid:     db 'MID$', 0
+bas_kw_dim:     db 'DIM', 0
+bas_kw_option:  db 'OPTION', 0
+bas_kw_base:    db 'BASE', 0
+bas_kw_lbound:  db 'LBOUND', 0
+bas_kw_ubound:  db 'UBOUND', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -5714,4 +6389,15 @@ bas_e_comma:    db 'this wants a comma and another value', 0
 bas_e_ascempty: db 'ASC wants text with at least one character in it', 0
 bas_e_chrrange: db 'CHR$ takes a code from 0 to 255', 0
 bas_e_negcount: db 'that many characters is a negative number', 0
+bas_e_arrmax:   db 'too many arrays - this wave holds eight', 0
+bas_e_arrfull:  db 'out of room for arrays - this wave holds 512 elements', 0
+bas_e_arrdup:   db 'that array is already DIMmed', 0
+bas_e_arrname:  db 'DIM wants a name and a size in brackets', 0
+bas_e_arrdim:   db 'that array was DIMmed with a different number of sizes', 0
+bas_e_arrrange: db 'that subscript is outside the array', 0
+bas_e_arrto:    db 'a size runs low TO high', 0
+bas_e_arrdims:  db 'DIM takes one or two sizes here', 0
+bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0
+bas_e_baseval:  db 'OPTION BASE takes 0 or 1', 0
+bas_e_notarr:   db 'that is not an array', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

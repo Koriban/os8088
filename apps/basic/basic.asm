@@ -651,7 +651,15 @@ BAS_B_bas_restype equ BAS_B_bas_casech + 2
 BAS_B_bas_svtop  equ BAS_B_bas_restype + 2
 BAS_B_bas_sttop  equ BAS_B_bas_svtop + 2
 BAS_B_bas_sarena equ BAS_B_bas_sttop + 2
-BAS_B_bas_nlbl   equ BAS_B_bas_sarena + BAS_STR_MAX
+BAS_B_bas_narr   equ BAS_B_bas_sarena + BAS_STR_MAX
+BAS_B_bas_arrs   equ BAS_B_bas_narr + 2
+BAS_B_bas_abase  equ BAS_B_bas_arrs + BAS_ARR_MAX*BAS_ARR_SZ
+BAS_B_bas_adimd  equ BAS_B_bas_abase + 2
+BAS_B_bas_acur   equ BAS_B_bas_adimd + 2
+BAS_B_bas_asubs  equ BAS_B_bas_acur + 2
+BAS_B_bas_atop   equ BAS_B_bas_asubs + 2
+BAS_B_bas_arena  equ BAS_B_bas_atop + 2
+BAS_B_bas_nlbl   equ BAS_B_bas_arena + BAS_ARR_BYTES
 BAS_B_bas_lbls   equ BAS_B_bas_nlbl + 2
 BAS_B_bas_nfwd   equ BAS_B_bas_lbls + BAS_LBL_MAX*BAS_LBL_SZ
 BAS_B_bas_fwds   equ BAS_B_bas_nfwd + 2
@@ -799,6 +807,30 @@ bas_sarena      equ os88_image_end + BAS_B_bas_sarena; ...and the arena, in
                                          ; a heap claim: a claim is another
                                          ; segment and ES belongs to the
                                          ; kernel on every callback
+bas_narr        equ os88_image_end + BAS_B_bas_narr  ; word: arrays DIMmed
+bas_arrs        equ os88_image_end + BAS_B_bas_arrs  ; ...and the table of
+                                         ; them (SPEC.md 126.31)
+bas_abase       equ os88_image_end + BAS_B_bas_abase ; word: OPTION BASE's
+                                         ; default lower bound, 0 unless a
+                                         ; program says otherwise BEFORE any
+                                         ; DIM - compile time only
+bas_adimd       equ os88_image_end + BAS_B_bas_adimd ; word: whether a DIM
+                                         ; has been seen, so OPTION BASE
+                                         ; after one is refused
+bas_acur        equ os88_image_end + BAS_B_bas_acur  ; word: which array a
+bas_asubs       equ os88_image_end + BAS_B_bas_asubs ; subscript list is for
+                                         ; and how many it has read - both
+                                         ; COMPILE TIME ONLY, and here
+                                         ; rather than on the stack because
+                                         ; the expression compiler clobbers
+                                         ; every register and a list of two
+                                         ; became four pushes through three
+                                         ; calls
+bas_atop        equ os88_image_end + BAS_B_bas_atop  ; word: the arena's top
+bas_arena       equ os88_image_end + BAS_B_bas_arena ; ...and the elements,
+                                         ; EIGHT BYTES EACH whatever they
+                                         ; hold: one size, one indexer, one
+                                         ; bound (126.31)
 bas_nlbl        equ os88_image_end + BAS_B_bas_nlbl  ; word: labels seen
 bas_lbls        equ os88_image_end + BAS_B_bas_lbls  ; ...and the table of
                                          ; them (SPEC.md 126.22), keyed on
