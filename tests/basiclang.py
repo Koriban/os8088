@@ -90,6 +90,12 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     length as 32767 (SPEC.md 126.29), so without the clamp the slice asks
     the arena for 32767 bytes: `Error at line 9: one piece of text is longer
     than the arena`, which is the clamp's whole job stated as a refusal.
+  * string arrays: making bas_nroots count only the variables, so an array
+    element stops being a compaction root (SPEC.md 126.32). After the
+    120-iteration loop that forces a compaction, `File` `Edit` `Help` come
+    back as `yyyy` - the elements still point into the arena and the loop's
+    own string is living in those bytes now. Five differences, all of them
+    the lines after the loop.
   * arrays: taking the UPPER bound out of bas_aelem's check. `PRINT a(5)`
     on a `DIM a(4)` stops being refused and answers `0` - a plausible number
     read from past the end of the array, which is the one thing an 8086
@@ -858,6 +864,48 @@ PART26 = [
     ("PRINT 31415",                      "31415"),
 ]
 
+PART27 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- a string array (SPEC.md 126.31) ---------------------------------
+    ("DIM m$(3)",                        None),
+    ('m$(0) = "File"',                   None),
+    ('m$(1) = "Edit"',                   None),
+    ('m$(2) = "Help"',                   None),
+    ("PRINT m$(0)",                      "File"),
+    ("PRINT m$(2)",                      "Help"),
+    ("PRINT m$(3)",                      None),      # never stored: empty
+    ("PRINT LEN(m$(1))",                 "4"),
+    ('PRINT m$(1) + "!"',                "Edit!"),
+    ('PRINT LEFT$(m$(2), 2)',            "He"),
+    ("PRINT m$(1) < m$(0)",              "-1"),       # Edit < File: 'E' < 'F'
+    ("PRINT m$(0) < m$(1)",              "0"),        # ...and not the reverse
+    # --- AND THE ROOT THAT 126.32 IS ABOUT -------------------------------
+    # The elements above are live. Now fill the string arena from a loop so
+    # a compaction MUST happen, then read them back: if the walk does not
+    # cover array elements, their bytes have moved and this prints rubbish.
+    ('c$ = "x"',                         None),
+    ("FOR i = 1 TO 120",                 None),
+    ('c$ = "yy" + c$',                   None),
+    ("NEXT",                             None),
+    ("PRINT LEN(c$)",                    "241"),
+    ("PRINT m$(0)",                      "File"),     # ...still, after it
+    ("PRINT m$(1)",                      "Edit"),
+    ("PRINT m$(2)",                      "Help"),
+    ('PRINT m$(1) + m$(2)',              "EditHelp"),
+    # ...and an element reassigned after the compaction ------------------
+    ('m$(1) = "Search"',                 None),
+    ("PRINT m$(1)",                      "Search"),
+    ("PRINT m$(0)",                      "File"),
+]
+
+PART28 = [
+    ("CLS",                              None),
+    ("DIM n(3)",                         None),
+    ('PRINT n(1) + "x"',
+     "Error at line 3: that mixes text and numbers"),
+]
+
 # TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -866,7 +914,7 @@ PART26 = [
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
-        PART22, PART23, PART24, PART25, PART26)
+        PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:

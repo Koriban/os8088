@@ -655,7 +655,8 @@ BAS_B_bas_narr   equ BAS_B_bas_sarena + BAS_STR_MAX
 BAS_B_bas_arrs   equ BAS_B_bas_narr + 2
 BAS_B_bas_abase  equ BAS_B_bas_arrs + BAS_ARR_MAX*BAS_ARR_SZ
 BAS_B_bas_adimd  equ BAS_B_bas_abase + 2
-BAS_B_bas_acur   equ BAS_B_bas_adimd + 2
+BAS_B_bas_asval  equ BAS_B_bas_adimd + 2
+BAS_B_bas_acur   equ BAS_B_bas_asval + 4
 BAS_B_bas_asubs  equ BAS_B_bas_acur + 2
 BAS_B_bas_atop   equ BAS_B_bas_asubs + 2
 BAS_B_bas_arena  equ BAS_B_bas_atop + 2
@@ -817,6 +818,12 @@ bas_abase       equ os88_image_end + BAS_B_bas_abase ; word: OPTION BASE's
 bas_adimd       equ os88_image_end + BAS_B_bas_adimd ; word: whether a DIM
                                          ; has been seen, so OPTION BASE
                                          ; after one is refused
+bas_asval       equ os88_image_end + BAS_B_bas_asval ; the (offset,length)
+                                         ; OP_ASSTORE is storing, held here
+                                         ; rather than juggled: RUN time, and
+                                         ; safe as a global because the
+                                         ; interpreter runs one op at a time
+                                         ; and that op cannot re-enter itself
 bas_acur        equ os88_image_end + BAS_B_bas_acur  ; word: which array a
 bas_asubs       equ os88_image_end + BAS_B_bas_asubs ; subscript list is for
                                          ; and how many it has read - both

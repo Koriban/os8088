@@ -499,9 +499,17 @@ GFA's at all**: entry 239 has only `LOCAL`, the pairing here came from the
 wider dialect survey, and its effect is this language's default anyway
 (§126.26).
 
-**Wave 3 — strings and arrays.** Gap 3 (the string heap). `DIM` with `a TO b`
-and `OPTION BASE`, `REDIM`, `ERASE`, `SWAP`, `LSET`/`RSET`, `TYPE` records,
-dotted names, the string built-ins, `BYTE` and `WORD`.
+**Wave 3 — strings and arrays. MOSTLY DONE.** Gap 3 (the string heap) is
+closed: SPEC.md §126.28 is the string model, §126.29 the eight built-ins a
+program cannot be written without, §126.31 arrays numeric and string, and
+§126.32 the compaction root an array element is. `DIM` with `a TO b`, two
+dimensions, `OPTION BASE`, `LBOUND`/`UBOUND`.
+
+Still open in it, in this order: `REDIM` (which loses the contents) and
+`ERASE` (which clears in place), a third dimension, `SWAP`, `LSET`/`RSET`,
+`TYPE` records with their dotted names, and `BYTE`/`WORD` — which want the
+type system §126.4 describes and nothing yet builds. The other 56 built-ins
+are wave 5's, in the overlay.
 
 **Wave 4 — the event loop and tier A windows.** The wave that makes it GFA.
 `OPENW`/`CLOSEW`/`CLEARW`/`TITLEW`/`TOPW`/`FULLW`, `MENU` from a string array,

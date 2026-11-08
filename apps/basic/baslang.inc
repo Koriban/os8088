@@ -128,7 +128,9 @@ OP_ASTORE   equ 46                  ; + an index byte: pop a value and the
                                     ; subscripts, store it
 OP_ABOUND   equ 47                  ; + an index byte and a which byte: push
                                     ; LBOUND or UBOUND
-OP_N        equ 48                  ; how many there are, table included
+OP_ASSTORE  equ 48                  ; + an index byte: pop TEXT and the
+                                    ; subscripts, COPY it into that element
+OP_N        equ 49                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -595,6 +597,19 @@ bas_c_stmt:
     cmp byte [si], '='
     jne .elemnoeq
     inc word [bas_src]
+    ; **THE ARRAY'S KIND DECIDES**, as a scalar's spelling does (126.28)
+    call bas_isstrarr
+    jc .elemnum
+    call bas_c_str                  ; ...text, copied into the element
+    cmp byte [bas_bad], 0
+    jne .elempop
+    mov al, OP_ASSTORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .elempop
+    pop ax
+    jmp bas_emit
+.elemnum:
     call bas_c_rel                  ; ...then the value
     cmp byte [bas_bad], 0
     jne .elempop
@@ -1804,6 +1819,15 @@ bas_c_sfact:
     mov si, bas_kw_mid
     call bas_wordis
     je .b_mid
+    ; a `$` ARRAY's element reads as text, and the same OP_ALOAD serves:
+    ; an element is eight bytes and a string value is the first four of
+    ; them, so the copy onto the stack is already right (SPEC.md 126.31)
+    call bas_arrfind
+    jc .nostrarr
+    call bas_isstrarr
+    jc .notstr                      ; a numeric array is not text
+    jmp .selem
+.nostrarr:
     call bas_isstrname
     jc .notstr
     call bas_varfind
@@ -1858,6 +1882,20 @@ bas_c_sfact:
     jne .sfx
     mov ax, cx
     jmp bas_emitw                   ; ...and how long
+.selem:
+    push bx
+    call bas_c_subs
+    pop bx
+    jc .selx
+    mov al, OP_ALOAD
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .selx
+    mov ax, bx
+    jmp bas_emit
+.selx:
+    ret
+
 ; --- CHR$(n) and STR$(n): one number in, text out --------------------
 .b_chr:
     mov al, OP_NCHR
@@ -2396,7 +2434,12 @@ bas_c_fact:
     ; not, which is what lets arrays cost no run-time type word.
     call bas_arrfind
     jc .notarray
+    call bas_isstrarr               ; ...and a `$` array is not a number
+    jnc .elemstr
     jmp .elem
+.elemstr:
+    mov si, bas_e_strtype
+    jmp bas_err
 .notarray:
     ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
@@ -2500,10 +2543,18 @@ bas_c_fact:
     jc .bad
     mov al, 1
     jmp bas_callemit
+.mixed:
+    mov si, bas_e_strtype
+    jmp bas_err
 .noopen:
     mov si, bas_e_paren
     jmp bas_err
 .notword:
+    cmp al, '"'                     ; **NAME THE ACTUAL MISTAKE**: a piece of
+    je .mixed                       ; text where arithmetic wants a number is
+                                    ; not "expected a number", it is the one
+                                    ; thing bas_wantnum says elsewhere, and
+                                    ; `n(1) + "x"` is how it is written
     cmp al, '0'
     jb .bad
     cmp al, '9'
@@ -4537,6 +4588,148 @@ bas_isstrvar:
     stc
     jmp .isout
 
+; -----------------------------------------------------------------------------
+; Compaction's ROOTS (SPEC.md 126.32)
+;
+; A root is a pointer to an (offset, length) WORD PAIR, and that is the only
+; thing the walk needs to know about it - which is why one abstraction covers
+; both kinds: a string variable's BAS_VAR_SOFF and BAS_VAR_SLEN are adjacent
+; words, and so are a string array element's first two. 126.28's four-byte
+; value earns its keep here.
+;
+; Root 0..BAS_VAR_MAX-1 are the variables. Above that they are the elements
+; of the string arrays, each array's in turn, which gives every element a
+; stable number without a table.
+; -----------------------------------------------------------------------------
+
+; --- bas_isstrarr - does array BX hold text? CF=0 if it does -------------
+bas_isstrarr:
+    push ax
+    push bx
+    push cx
+    push si
+    call bas_arrat
+    mov cx, [si + BAS_ARR_LEN]
+    or cx, cx
+    jz .iano
+    mov si, [si + BAS_ARR_SRC]
+    add si, cx
+    dec si
+    cmp byte [si], '$'
+    jne .iano
+    clc
+.iaout:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.iano:
+    stc
+    jmp .iaout
+
+; --- bas_arrcount - AX = how many elements array BX has ------------------
+bas_arrcount:
+    push bx
+    push dx
+    push si
+    call bas_arrat
+    mov ax, [si + BAS_ARR_N0]
+    mul word [si + BAS_ARR_N1]
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; --- bas_nroots - AX = how many roots there are now ---------------------
+bas_nroots:
+    push bx
+    push cx
+    push dx
+    mov dx, BAS_VAR_MAX
+    xor bx, bx
+.nrlp:
+    cmp bx, [bas_narr]
+    jae .nrdone
+    call bas_isstrarr
+    jc .nrnext
+    call bas_arrcount
+    add dx, ax
+.nrnext:
+    inc bx
+    jmp .nrlp
+.nrdone:
+    mov ax, dx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_rootat - root BX; out DI = its (offset,length) pair ------------
+; out: AX = its arena-relative offset, or 0xFFFF for "owns no bytes" -
+;      not a string, never assigned, or EMPTY (126.28's rule, which the
+;      walk needs or it never terminates).
+bas_rootat:
+    push bx
+    push cx
+    push dx
+    push si
+    cmp bx, BAS_VAR_MAX
+    jb .rvar
+    sub bx, BAS_VAR_MAX
+    xor dx, dx                      ; DX = which array
+.ralp:
+    cmp dx, [bas_narr]
+    jae .rnone                      ; past the end: nothing
+    push bx
+    mov bx, dx
+    call bas_isstrarr
+    jc .ranext
+    call bas_arrcount               ; AX = its element count
+    pop bx
+    cmp bx, ax
+    jb .rafound
+    sub bx, ax
+    inc dx
+    jmp .ralp
+.ranext:
+    pop bx
+    inc dx
+    jmp .ralp
+.rafound:
+    ; element BX of array DX
+    mov cx, bx
+    mov bx, dx
+    call bas_arrat
+    mov ax, cx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; eight bytes an element
+    add ax, [si + BAS_ARR_AT]
+    add ax, bas_arena
+    mov di, ax
+    jmp short .rgot
+.rvar:
+    call bas_varat
+    add si, BAS_VAR_SOFF
+    mov di, si
+.rgot:
+    cmp word [di + 2], 0            ; a length of zero owns no bytes
+    je .rnone
+    mov ax, [di]
+    or ax, ax
+    jz .rnone
+    sub ax, bas_sarena
+    jmp short .rout
+.rnone:
+    mov ax, 0xFFFF
+.rout:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; --- bas_svoff - AX = variable BX's arena offset, or 0xFFFF --------------
 ; 0xFFFF for "owns no bytes in the arena", so a caller can skip it without a
 ; second test: not a string, never assigned, or EMPTY.
@@ -4592,9 +4785,12 @@ bas_scompact:
     mov cx, 0xFFFF                  ; the lowest offset at or above DX
     xor bx, bx
 .look:
-    cmp bx, [bas_nvar]
+    push bx
+    call bas_nroots
+    pop bx
+    cmp bx, ax
     jae .chose
-    call bas_svoff
+    call bas_rootat                 ; AX = its offset, DI = its pair
     cmp ax, 0xFFFF
     je .looknext
     cmp ax, dx
@@ -4608,25 +4804,31 @@ bas_scompact:
 .chose:
     cmp cx, 0xFFFF
     je .packed
-    xor bx, bx                      ; ...and WHICH variable that was
+    xor bx, bx                      ; ...and WHICH root that was
 .who:
-    cmp bx, [bas_nvar]
+    push bx
+    call bas_nroots
+    pop bx
+    cmp bx, ax
     jae .packed                     ; (cannot happen: CX came from one)
-    call bas_svoff
+    call bas_rootat
     cmp ax, cx
     je .move
     inc bx
     jmp .who
 .move:
-    call bas_varat
-    mov cx, [si + BAS_VAR_SLEN]
-    push si
-    mov si, [si + BAS_VAR_SOFF]
+    ; DI = the (offset, length) pair, wherever it lives - a variable's
+    ; entry or an array element (SPEC.md 126.32), and the walk does not
+    ; care which
+    mov cx, [di + 2]
+    push di
+    mov si, [di]
     mov di, dx
     add di, bas_sarena
     call bas_scopy
-    pop si
-    mov [si + BAS_VAR_SOFF], di
+    mov ax, di
+    pop di
+    mov [di], ax
     add dx, cx
     jmp .sweep
 .packed:
@@ -5597,6 +5799,53 @@ bas_exec:
     pop bx
     jmp .done
 
+; **AN ELEMENT OWNS ITS BYTES** (SPEC.md 126.28's one-owner rule, which is
+; what makes compaction a slide): a string on the value stack is a literal
+; or a temporary, and a temporary dies at the end of the statement - so
+; storing the pair without copying would leave the element pointing at bytes
+; about to be reused. The value goes in bas_asval rather than round three
+; calls on the stack, which is where the first draft of this lost its error
+; paths.
+.asstore:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si                         ; the op cursor
+    sub di, BAS_SLOT                ; DI = the text's slot
+    mov ax, [di]
+    mov [bas_asval], ax
+    mov ax, [di + 2]
+    mov [bas_asval + 2], ax
+    call bas_aelem                  ; SI = the element, DI = where it ends
+    jc .assbad
+    push si
+    push di
+    mov cx, [bas_asval + 2]
+    call bas_svaralloc              ; room of its own
+    jc .assbad2
+    mov di, ax
+    mov si, [bas_asval]
+    mov cx, [bas_asval + 2]
+    call bas_scopy                  ; ...and it keeps DI and CX
+    mov ax, di
+    pop di
+    pop si
+    mov [si], ax
+    mov [si + 2], cx
+    pop si
+    pop bx
+    jmp .next
+.assbad2:
+    pop di
+    pop si
+.assbad:
+    pop si
+    pop bx
+    jmp .done
+
 .abound:
     cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
     jae .over
@@ -5901,6 +6150,7 @@ bas_optab:
     dw bas_exec.aload               ; OP_ALOAD
     dw bas_exec.astore              ; OP_ASTORE
     dw bas_exec.abound              ; OP_ABOUND
+    dw bas_exec.asstore             ; OP_ASSTORE
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0

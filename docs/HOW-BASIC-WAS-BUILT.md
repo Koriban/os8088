@@ -1524,6 +1524,44 @@ is 25 rows of one attribute, and anything under 20 is not one. That is its
 third design, and the row's docstring says so along with why the two before
 it failed.
 
+## String arrays, and the root that was pinned first
+
+`DIM m$(3)`, elements read and assigned, used in expressions and passed to
+the built-ins. It cost **one opcode**, and the reason is §126.28's
+representation: an element is eight bytes and a string value is the first
+four of them, so `OP_ALOAD` copies the right thing already and only the
+*store* needed a sibling — `OP_ASSTORE`, which allocates in the variables'
+region and copies, because a string on the value stack is a literal or a
+temporary and a temporary dies at the end of the statement.
+
+**§126.32's root cost less than writing it down did.** A root is a pointer
+to an (offset, length) **word pair**, and that is all the walk needs to know
+about it — so one abstraction covers both kinds, because a string variable's
+`BAS_VAR_SOFF` and `BAS_VAR_SLEN` are adjacent words and so are an
+element's first two. Roots are numbered: the variables first, then each
+string array's elements in turn, which gives every element a stable number
+with no table. Compaction's two passes — find the lowest root at or above
+the write pointer, then find which root that was — both go through it.
+
+The part that proves it is three lines: fill the string arena from a
+120-iteration loop so a compaction *must* happen, then read three live array
+elements back. If the walk did not cover them, their bytes have moved and
+those lines print rubbish. They print `File`, `Edit`, `Help`.
+
+Writing §126.32 before the code was the right call for a reason I did not
+expect: it made the *representation* the design, so by the time the code was
+written there was nothing to decide. The three defects the variables'
+version cost were all in the interaction between allocation and compaction,
+and this half had none.
+
+**One refusal got better on the way.** `n(1) + "x"` on a numeric array was
+refused with "expected a number" — accurate, since a quotation mark is not
+a digit, and vaguer than the language can manage. The numeric factor parser
+now recognises a quote specifically and says "that mixes text and numbers",
+which is what `bas_wantnum` says at every other site. My test expectation
+had assumed the better message; rather than weaken the test to match the
+code, the code now matches what a reader deserves.
+
 ## Next
 
 **Wave 3: strings and arrays** — the string heap, `DIM`, and the string
