@@ -593,9 +593,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "e88b5c64",
-  "strings": "2b391919e4c9218d",
-  "why": "only OS88VER.TXT changed (20261026 -> 20261030 release notes); the page names no release or its notes, so unchanged"
+  "stamped": "974c976d6",
+  "strings": "a40210b59174c907",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261106's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -1327,9 +1327,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "dc4aa4f05",
-  "strings": "4fe195f6a33d805e",
-  "why": "a zero-byte label for the pin registry; WIN16.O88 byte-identical on both arms"
+  "stamped": "5b15d6e7f",
+  "strings": "60b62591a5fcb95f",
+  "why": "WIN16-NEXT round 2: libraries are also found in the shared SYSTEM\\APPDATA\\WIN16 folder and in a folder the program names (SPEC 124.23.1.1, 124.25.22); the rest (odd selectors, DDEML with no server, window properties, the locked-move rule, a background task's message as a toast) is below the page's level of detail or kern_mega-only"
  },
  "WIN16_TXT": {
   "sources": [
@@ -1359,9 +1359,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "24c3d243",
-  "strings": "fd2e07efd394d8ce",
-  "why": "credit line in About and the five-theme help line; the page already describes Wired, Mono-Dark, Blue, Green and Amber and the About card's credit"
+  "stamped": "8f688c2bb",
+  "strings": "6e00d17167409314",
+  "why": "claimed nicks (SPEC.md 113.6.6); reserved-name examples are ones the server lets through as nicks (help, wirebot)"
  },
  "WIREFLET_O88": {
   "sources": [
