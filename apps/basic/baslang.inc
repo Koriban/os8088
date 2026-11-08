@@ -112,7 +112,16 @@ OP_SCAT     equ 34                  ; pop two, join them in a temporary
 OP_SPRINT   equ 35                  ; pop and say it
 OP_SCMP     equ 36                  ; pop two, push -1/0/1 as a NUMBER, so
                                     ; 126.18's six relations serve strings
-OP_N        equ 37                  ; how many there are, table included
+; --- the eight built-ins (SPEC.md 126.29) ---------------------------------
+OP_SLEN     equ 37                  ; pop text, push its length
+OP_SASC     equ 38                  ; pop text, push its first byte's code
+OP_SVAL     equ 39                  ; pop text, push the number at its front
+OP_NCHR     equ 40                  ; pop a code, push one character
+OP_NSTR     equ 41                  ; pop a number, push it as text
+OP_SLEFT    equ 42                  ; pop n and text, push the first n
+OP_SRIGHT   equ 43                  ; ...the last n
+OP_SMID     equ 44                  ; pop n, start and text, push the slice
+OP_N        equ 45                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -1587,8 +1596,23 @@ bas_c_sfact:
     je .lit
     cmp al, '('
     je .paren
-    call bas_word                   ; a $-name, and nothing else is a string
+    call bas_word                   ; a $-name, or a built-in that makes text
     jc .notstr
+    mov si, bas_kw_chr
+    call bas_wordis
+    je .b_chr
+    mov si, bas_kw_str
+    call bas_wordis
+    je .b_str
+    mov si, bas_kw_left
+    call bas_wordis
+    je .b_left
+    mov si, bas_kw_right
+    call bas_wordis
+    je .b_right
+    mov si, bas_kw_mid
+    call bas_wordis
+    je .b_mid
     call bas_isstrname
     jc .notstr
     call bas_varfind
@@ -1643,6 +1667,99 @@ bas_c_sfact:
     jne .sfx
     mov ax, cx
     jmp bas_emitw                   ; ...and how long
+; --- CHR$(n) and STR$(n): one number in, text out --------------------
+.b_chr:
+    mov al, OP_NCHR
+    jmp short .b_n1
+.b_str:
+    mov al, OP_NSTR
+.b_n1:
+    push ax
+    call bas_bopen
+    jc .b_n1x
+    call bas_c_rel                  ; a NUMBER, and it must be one
+    cmp byte [bas_bad], 0
+    jne .b_n1x
+    call bas_wantnum
+    jc .b_n1x
+    call bas_bclose
+    jc .b_n1x
+    pop ax
+    jmp bas_emit
+.b_n1x:
+    pop ax
+    ret
+
+; --- LEFT$(s$,n) and RIGHT$(s$,n) ------------------------------------
+.b_left:
+    mov al, OP_SLEFT
+    jmp short .b_sn
+.b_right:
+    mov al, OP_SRIGHT
+.b_sn:
+    push ax
+    call bas_bopen
+    jc .b_snx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_snx
+    call bas_bcomma
+    jc .b_snx
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_snx
+    call bas_wantnum
+    jc .b_snx
+    call bas_bclose
+    jc .b_snx
+    pop ax
+    jmp bas_emit
+.b_snx:
+    pop ax
+    ret
+
+; --- MID$(s$, start [, n]) -------------------------------------------
+; **A MISSING LENGTH IS 32767, PUSHED BY THE COMPILER**, so there is one
+; opcode and not two: "to the end" is just a count no string can reach
+; (SPEC.md 126.28 caps the arena far below it), and the run-time clamp that
+; every other count goes through handles it with no special case.
+.b_mid:
+    call bas_bopen
+    jc .b_midx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_midx
+    call bas_bcomma
+    jc .b_midx
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_midx
+    call bas_wantnum
+    jc .b_midx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    je .b_mid3
+    mov ax, 32767                   ; ...to the end
+    call bas_emitnum
+    cmp byte [bas_bad], 0
+    jne .b_midx
+    jmp short .b_midend
+.b_mid3:
+    inc word [bas_src]
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_midx
+    call bas_wantnum
+    jc .b_midx
+.b_midend:
+    call bas_bclose
+    jc .b_midx
+    mov al, OP_SMID
+    jmp bas_emit
+.b_midx:
+    ret
+
 .sfx:
     ret
 .noquote:
@@ -1668,6 +1785,78 @@ bas_wantnum:
     ret
 .wok:
     clc
+    ret
+
+; --- bas_bopen / bas_bcomma / bas_bclose - a built-in's punctuation -----
+; out: CF=1 and refused by name. Three one-line routines rather than the
+; same six instructions eight times over, which is what the first draft of
+; SPEC.md 126.29 had.
+bas_bopen:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    jne .bono
+    inc word [bas_src]
+    clc
+    ret
+.bono:
+    mov si, bas_e_paren
+    call bas_err
+    stc
+    ret
+
+bas_bcomma:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .bcno
+    inc word [bas_src]
+    clc
+    ret
+.bcno:
+    mov si, bas_e_comma
+    call bas_err
+    stc
+    ret
+
+bas_bclose:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    jne .bzno
+    inc word [bas_src]
+    clc
+    ret
+.bzno:
+    mov si, bas_e_paren
+    call bas_err
+    stc
+    ret
+
+; --- bas_emitnum - AX as a literal number on the stack ------------------
+bas_emitnum:
+    push ax
+    push di
+    mov al, OP_PUSHN
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .enout
+    pop di
+    pop ax
+    push ax
+    push di
+    call fp_i2a
+    mov di, bas_ops
+    add di, [bas_opn]
+    call fp_pack_a
+    add word [bas_opn], 8
+    cmp word [bas_opn], BAS_OPS_MAX - 10
+    jb .enout
+    mov si, bas_e_long
+    call bas_err
+.enout:
+    pop di
+    pop ax
     ret
 
 ; --- bas_isstrname - does the word in DI/CX end in '$'? -----------------
@@ -1995,6 +2184,16 @@ bas_c_fact:
     mov si, bas_kw_fn               ; FN name(...), GFA's other spelling
     call bas_wordis
     je .fnword
+    ; --- the built-ins that answer a NUMBER (SPEC.md 126.29) -----------
+    mov si, bas_kw_len
+    call bas_wordis
+    je .b_len
+    mov si, bas_kw_asc
+    call bas_wordis
+    je .b_asc
+    mov si, bas_kw_val
+    call bas_wordis
+    je .b_val
     ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
     ; never assigned reads 0, which is what every BASIC of this line does -
@@ -2009,6 +2208,31 @@ bas_c_fact:
     cmp byte [bas_bad], 0
     jne .x
     jmp bas_emit                    ; ...the index byte after it
+; Each takes ONE piece of text and answers a number, so one body serves and
+; the opcode rides in AL - the shape .cmp uses for the six comparisons.
+.b_len:
+    mov al, OP_SLEN
+    jmp short .b_s1
+.b_asc:
+    mov al, OP_SASC
+    jmp short .b_s1
+.b_val:
+    mov al, OP_SVAL
+.b_s1:
+    push ax
+    call bas_bopen                  ; '(' , then the text, then ')'
+    jc .b_s1x
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_s1x
+    call bas_bclose
+    jc .b_s1x
+    pop ax
+    jmp bas_emit
+.b_s1x:
+    pop ax
+    ret
+
 .atfn:
     inc word [bas_src]
     call bas_word
@@ -3624,6 +3848,35 @@ bas_svaralloc:
     stc
     jmp .vout
 
+; --- bas_sarg1 - pop the top slot as a 16-bit count; out AX -------------
+; in:  DI = one past the top slot. out: DI -= one slot, AX = the number,
+;      CF=1 and refused by name if it is negative.
+; A count is a count: SPEC.md 126.29 clamps a count that is too LARGE and
+; refuses one that is negative, because a negative length is a program
+; saying something it cannot mean.
+bas_sarg1:
+    push bx
+    push cx
+    push si
+    sub di, BAS_SLOT
+    mov si, di
+    call fp_unpack_a
+    call fp_a2i
+    jc .a1bad
+    or ax, ax
+    js .a1bad
+    clc
+.a1out:
+    pop si
+    pop cx
+    pop bx
+    ret
+.a1bad:
+    mov si, bas_e_negcount
+    call bas_err
+    stc
+    jmp .a1out
+
 ; --- bas_sayrun - CX bytes at SI onto the console -----------------------
 ; NOT con_say: that stops at a NUL, and a string here is counted, so a NUL
 ; is an ordinary character in it (CHR$(0) is a value a program may hold).
@@ -4456,6 +4709,259 @@ bas_exec:
     pop bx
     jmp .done
 
+; --- the eight built-ins at run time (SPEC.md 126.29) --------------------
+; Each of the five that answers text ALLOCATES A TEMPORARY, which is what
+; makes `a$ = MID$(a$, 2)` correct: the result cannot alias its own source.
+.slen:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push si
+    sub di, BAS_SLOT
+    mov ax, [di + 2]
+    call fp_i2a
+    call fp_pack_a
+    add di, BAS_SLOT
+    pop si
+    jmp .next
+
+.sasc:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push si
+    sub di, BAS_SLOT
+    cmp word [di + 2], 0
+    je .ascempty
+    mov si, [di]
+    mov al, [si]
+    xor ah, ah
+    call fp_i2a
+    call fp_pack_a
+    add di, BAS_SLOT
+    pop si
+    jmp .next
+.ascempty:
+    pop si
+    mov si, bas_e_ascempty
+    jmp bas_err
+
+; **A COPY WITH A NUL AFTER IT** (SPEC.md 126.29): fp_atof reads to a
+; terminator and a string here is counted, so the parser would run off the
+; end of the last one in the arena.
+.sval:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    push si
+    sub di, BAS_SLOT
+    mov cx, [di + 2]
+    inc cx                          ; ...room for the NUL
+    call bas_stmpalloc
+    jc .svalx
+    mov bx, ax
+    push bx
+    mov si, [di]
+    mov cx, [di + 2]
+    push di
+    mov di, bx
+    call bas_scopy
+    add di, cx
+    mov byte [di], 0
+    pop di
+    pop bx
+    mov si, bx
+    call fp_atof                    ; A = the number at the front...
+    jnc .svalok
+    xor ax, ax                      ; ...or ZERO, which is the reference's
+    call fp_i2a                     ; answer and not a refusal
+.svalok:
+    call fp_pack_a
+    add di, BAS_SLOT
+    pop si
+    pop bx
+    jmp .next
+.svalx:
+    pop si
+    pop bx
+    jmp .done
+
+.nchr:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    push si
+    sub di, BAS_SLOT
+    mov si, di
+    call fp_unpack_a
+    call fp_a2i
+    jc .chrbad
+    cmp ax, 255
+    ja .chrbad
+    mov bx, ax
+    mov cx, 1
+    call bas_stmpalloc
+    jc .nchrx
+    mov [di], ax
+    mov word [di + 2], 1
+    mov si, ax
+    mov al, bl
+    mov [si], al
+    add di, BAS_SLOT
+    pop si
+    pop bx
+    jmp .next
+.chrbad:
+    pop si
+    pop bx
+    mov si, bas_e_chrrange
+    jmp bas_err
+.nchrx:
+    pop si
+    pop bx
+    jmp .done
+
+; **IT KEEPS PRINT'S LEADING SPACE** for a non-negative number, because the
+; reference does and because `PRINT x` and `PRINT STR$(x)` may not differ.
+.nstr:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    push si
+    sub di, BAS_SLOT
+    mov si, di
+    call fp_unpack_a
+    mov cx, 24
+    call bas_stmpalloc
+    jc .nstrx
+    mov bx, ax
+    push bx
+    push di
+    mov di, bx
+    cmp byte [fp_as], 0
+    jne .nstrneg
+    mov byte [di], ' '              ; the sign's place
+    inc di
+.nstrneg:
+    mov ax, 7
+    call fp_ftoa                    ; A -> a NUL string at DS:DI
+    pop di
+    pop bx
+    mov si, bx                      ; ...and its length is to the NUL
+    xor cx, cx
+.nstrlen:
+    cmp byte [si], 0
+    je .nstrgot
+    inc si
+    inc cx
+    jmp .nstrlen
+.nstrgot:
+    mov [di], bx
+    mov [di + 2], cx
+    add di, BAS_SLOT
+    pop si
+    pop bx
+    jmp .next
+.nstrx:
+    pop si
+    pop bx
+    jmp .done
+
+; --- LEFT$ / RIGHT$ / MID$, which are one body and three starts ----------
+; Each wants (source, start, count) and differs only in how start and count
+; are worked out, so they meet at .ssliceg with BX = start (0-based) and
+; CX = how many, both already clamped.
+.sleft:
+    cmp di, bas_stk + 2*BAS_SLOT
+    jb .under
+    push bx
+    push si
+    call bas_sarg1                  ; AX = the count, DI -= one slot
+    jc .sslx
+    sub di, BAS_SLOT                ; ...and DOWN TO THE SOURCE: the stack
+                                    ; pointer is one PAST the top, so after
+                                    ; consuming n operands it has moved n
+                                    ; slots - which .scat does in one
+                                    ; `sub di, 2*BAS_SLOT` and this forgot.
+                                    ; [di+2] then read the count's own
+                                    ; second word, which for 3.0 is 0, so
+                                    ; every slice answered "".
+    xor bx, bx                      ; ...from the beginning
+    mov cx, ax
+    jmp short .sslice
+.sright:
+    cmp di, bas_stk + 2*BAS_SLOT
+    jb .under
+    push bx
+    push si
+    call bas_sarg1
+    jc .sslx
+    sub di, BAS_SLOT                ; down to the source, as above
+    mov cx, [di + 2]                ; ...from the end: start = len - n
+    cmp ax, cx
+    jb .srsome
+    xor bx, bx                      ; more than there is: all of it
+    jmp short .sslice
+.srsome:
+    mov bx, cx
+    sub bx, ax
+    mov cx, ax
+    jmp short .sslice
+.smid:
+    cmp di, bas_stk + 3*BAS_SLOT
+    jb .under
+    push bx
+    push si
+    call bas_sarg1                  ; the count...
+    jc .sslx
+    mov cx, ax
+    push cx
+    call bas_sarg1                  ; ...and the start, 1-BASED
+    pop cx
+    jc .sslx
+    sub di, BAS_SLOT                ; down to the source, as above
+    or ax, ax
+    jz .smidclamp                   ; MID$(s$,0) reads as 1
+    dec ax
+.smidclamp:
+    mov bx, ax
+.sslice:
+    ; DI = the source slot, BX = start (0-based), CX = how many
+    mov ax, [di + 2]
+    cmp bx, ax
+    jae .sslempty                   ; start past the end: ""
+    sub ax, bx                      ; what is actually left
+    cmp cx, ax
+    jbe .sslfit
+    mov cx, ax                      ; clamped, not refused
+.sslfit:
+    push cx
+    call bas_stmpalloc
+    pop cx
+    jc .sslx
+    push ax
+    push di
+    mov si, [di]
+    add si, bx
+    mov di, ax
+    call bas_scopy
+    pop di
+    pop ax
+    mov [di], ax
+    mov [di + 2], cx
+    add di, BAS_SLOT
+    pop si
+    pop bx
+    jmp .next
+.sslempty:
+    mov word [di + 2], 0            ; the offset may stay: nothing reads it
+    add di, BAS_SLOT
+    pop si
+    pop bx
+    jmp .next
+.sslx:
+    pop si
+    pop bx
+    jmp .done
+
 .sprint:
     cmp di, bas_stk + BAS_SLOT
     jb .under
@@ -4717,6 +5223,14 @@ bas_optab:
     dw bas_exec.scat                ; OP_SCAT
     dw bas_exec.sprint              ; OP_SPRINT
     dw bas_exec.scmp                ; OP_SCMP
+    dw bas_exec.slen                ; OP_SLEN
+    dw bas_exec.sasc                ; OP_SASC
+    dw bas_exec.sval                ; OP_SVAL
+    dw bas_exec.nchr                ; OP_NCHR
+    dw bas_exec.nstr                ; OP_NSTR
+    dw bas_exec.sleft               ; OP_SLEFT
+    dw bas_exec.sright              ; OP_SRIGHT
+    dw bas_exec.smid                ; OP_SMID
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -5123,6 +5637,14 @@ bas_kw_endfunc: db 'ENDFUNC', 0
 bas_kw_fn:      db 'FN', 0
 bas_kw_var:     db 'VAR', 0
 bas_kw_void:    db 'VOID', 0
+bas_kw_len:     db 'LEN', 0
+bas_kw_asc:     db 'ASC', 0
+bas_kw_val:     db 'VAL', 0
+bas_kw_chr:     db 'CHR$', 0
+bas_kw_str:     db 'STR$', 0
+bas_kw_left:    db 'LEFT$', 0
+bas_kw_right:   db 'RIGHT$', 0
+bas_kw_mid:     db 'MID$', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -5188,4 +5710,8 @@ bas_e_strfull:  db 'out of room for text - this wave holds 4096 bytes', 0
 bas_e_strquote: db 'a piece of text wants a closing quotation mark', 0
 bas_e_strtype:  db 'that mixes text and numbers', 0
 bas_e_strlong:  db 'one piece of text is longer than the arena', 0
+bas_e_comma:    db 'this wants a comma and another value', 0
+bas_e_ascempty: db 'ASC wants text with at least one character in it', 0
+bas_e_chrrange: db 'CHR$ takes a code from 0 to 255', 0
+bas_e_negcount: db 'that many characters is a negative number', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

@@ -243521,6 +243521,85 @@ zero — so `<`, `<=`, `>`, `>=`, `=` and `<>` on strings come free from
 and a shorter string that is a prefix of a longer one sorts first. That is
 QuickBASIC's rule and GFA's.
 
+### 126.29 The eight built-ins a program cannot be written without
+
+Wave 3's second half. `LEN` `ASC` `VAL` answer numbers; `CHR$` `STR$`
+`LEFT$` `RIGHT$` `MID$` answer text. The other fifty-six of the reference's
+library are wave 5's, in the overlay (§126.3's architecture); these eight
+are here because the language is unusable without them and because
+`PRINT "5! is " + STR$(@fac(5))` is the shortest program anybody writes.
+
+**Taken from the reference, not from memory**, and it settles four things
+that would otherwise have been guessed:
+
+| | |
+|---|---|
+| `LEN(s$)` | how many characters |
+| `LEFT$(s$, n)` / `RIGHT$(s$, n)` | the first / last `n` |
+| `MID$(s$, start)` | from `start` **to the end**, counting from 1 |
+| `MID$(s$, start, n)` | `n` characters from `start` |
+| `CHR$(n)` | the character with code `n` |
+| `ASC(s$)` | the code of the **first** character |
+| `VAL(s$)` | **the number at the front of `s$`, or 0** |
+| `STR$(n)` | the number as text, **with a leading space if positive** |
+
+**`VAL` does not refuse.** `VAL("42 parts")` is 42 and `VAL("not a
+number")` is 0 — it reads a prefix and answers 0 when there is none, which
+is the reference's behaviour and the opposite of this chapter's usual
+instinct to refuse. `fp_atof` already stops where the number stops, so the
+prefix rule is free; what is not free is that it reads to a terminator and a
+string here is counted, **so `VAL` copies its argument into the temporaries'
+region with a NUL after it** (§126.28) rather than letting the parser run
+off the end.
+
+**`STR$` keeps `PRINT`'s leading space**, which is QuickBASIC's rule and the
+reference's in as many words, so `"[" + STR$(42) + "]"` is `[ 42]`.
+`bas_sayfp` already does this for the console and the two must agree:
+`PRINT x` and `PRINT STR$(x)` may not differ.
+
+**Counting starts at 1**, and the ends are clamped rather than refused: a
+`start` past the end gives `""`, an `n` past the end gives what is there,
+and a negative `n` is refused by name. Clamping is what every BASIC of this
+line does and what a program slicing a line of input relies on.
+
+**`CHR$` outside 0..255 and `ASC` of an empty string are refused by name.**
+The reference does not say what they do, and a guess in either direction is
+worse than a sentence: `CHR$(-1)` would otherwise write some byte and
+`ASC("")` would answer the code of whatever follows the string in the arena.
+
+**Every one of the five that answers text allocates a temporary**, so each
+is released at the statement boundary with everything else (§126.28), and
+none of them can alias into its own argument — which is the rule that keeps
+`a$ = MID$(a$, 2)` correct.
+
+### 126.30 `@` needs a NUL, and the arena is where it goes
+
+Recorded here because it is a constraint on §126.28 discovered by reading
+`docs/plans/BASIC-BINDINGS-PLAN.md` §3 rather than by writing code, and it
+decides part of wave 4 before wave 4 starts.
+
+**34 of the API's 194 slots take a buffer or a pointer**, and the bindings
+plan's answer is `@`, the pin-and-pass operator: `OSAPI OSAPI_FILE_PATH,
+@buf$, LEN(buf$)` hands over *the object*, not an address, "pinned for
+exactly the duration of the call". Its §8 forbids the alternative in as many
+words — *"a `VARPTR` that reaches a kernel call ... is a bug with a long
+fuse"*.
+
+**Two facts about §126.28's strings make `@` cheap here and change what it
+has to do.** The arena is in the package's own bss and cannot move, so the
+*segment* half of the problem the plan describes does not exist — but
+compaction moves strings *within* it, so the fuse is real. And a kernel call
+wants a **NUL-terminated** string in the caller's own segment
+(`OSAPI_WM_TITLE`'s own words), while a BASIC string is counted and may
+contain a NUL of its own.
+
+So `@` materialises a NUL-terminated copy in the **temporaries'** region and
+hands over that. The lifetime is already exactly right: a temporary lives to
+the end of the statement, which is longer than one call, and the copy cannot
+be moved by a compaction because compaction only ever slides the variables'
+region. `LEN` is the companion the convention needs, which is why it is in
+§126.29 and not in wave 5 with the rest of the library.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

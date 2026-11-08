@@ -85,6 +85,11 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     variable number the VALUE rounds to - which for GFA's own entry-238
     example is variable 0, so `a` collects both answers (16) and `b` keeps
     0. A plausible-looking wrong answer, which is what this row is for.
+  * the built-ins: taking the CLAMP out of the slice, so a count larger than
+    what is left is passed through. `MID$(s$, 4)` compiles its missing
+    length as 32767 (SPEC.md 126.29), so without the clamp the slice asks
+    the arena for 32767 bytes: `Error at line 9: one piece of text is longer
+    than the arena`, which is the clamp's whole job stated as a refusal.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -718,6 +723,66 @@ PART18 = [
     ('PRINT "still here"',               "still here"),
 ]
 
+PART19 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- the eight built-ins (SPEC.md 126.29) ----------------------------
+    ('s$ = "abcdef"',                    None),
+    ("PRINT LEN(s$)",                    "6"),
+    ('PRINT LEN("")',                    "0"),
+    ('PRINT LEFT$(s$, 3)',               "abc"),
+    ('PRINT RIGHT$(s$, 2)',              "ef"),
+    ('PRINT MID$(s$, 2, 3)',             "bcd"),
+    ('PRINT MID$(s$, 4)',                "def"),      # ...to the end
+    ('PRINT ASC("A")',                   "65"),
+    ('PRINT CHR$(66)',                   "B"),
+    ('PRINT ASC(CHR$(200))',             "200"),      # a round trip
+    # ...VAL reads a PREFIX and answers 0, it does not refuse -------------
+    ('PRINT VAL("42 parts")',            "42"),
+    ('PRINT VAL("not a number")',        "0"),
+    ('PRINT VAL("-7.5")',                "-7.5"),
+    # ...STR$ keeps PRINT's leading space, so this is `[ 42]` ------------
+    ('PRINT "<" + STR$(42) + ">"',       "< 42>"),
+    ('PRINT "<" + STR$(0 - 42) + ">"',   "<-42>"),
+    # ...the ends are CLAMPED, not refused -------------------------------
+    ('PRINT LEN(LEFT$(s$, 99))',         "6"),
+    ('PRINT LEN(MID$(s$, 99))',          "0"),        # start past the end
+    ('PRINT LEN(RIGHT$(s$, 99))',        "6"),
+    ('PRINT MID$(s$, 0, 2)',             "ab"),       # 0 reads as 1
+    # ...and the diary's own example line finally runs --------------------
+    ("r = 1",                            None),
+    ("GOSUB fact5",                      None),
+    ('PRINT "5! is " + STR$(r)',         "5! is  120"),
+    # ...a slice of a variable INTO ITSELF, which the temporary makes safe
+    ('t$ = "hello"',                     None),
+    ("t$ = MID$(t$, 2)",                 None),
+    ("PRINT t$",                         "ello"),
+    ("END",                              None),
+    ("PROCEDURE fact5",                  None),
+    ("FOR i = 2 TO 5",                   None),
+    ("r = r * i",                        None),
+    ("NEXT",                             None),
+    ("RETURN",                           None),
+]
+
+PART20 = [
+    ("CLS",                              None),
+    ('PRINT ASC("")',
+     "Error at line 2: ASC wants text with at least one character in it"),
+]
+
+PART21 = [
+    ("CLS",                              None),
+    ("PRINT CHR$(300)",
+     "Error at line 2: CHR$ takes a code from 0 to 255"),
+]
+
+PART22 = [
+    ("CLS",                              None),
+    ('PRINT LEFT$("abc", 0 - 1)',
+     "Error at line 2: that many characters is a negative number"),
+]
+
 # TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -725,7 +790,8 @@ PART18 = [
 # the lot, which is what a developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
-        PART14, PART15, PART16, PART17, PART18)
+        PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
+        PART22)
 PARTS = EARLY + LATE
 
 if "--early" in sys.argv:

@@ -1385,6 +1385,50 @@ cannot drift. It had drifted by one line anyway, because I had been running
 running `make`, and it is `make` that runs `os88index.py --check`. Running
 the gate tools by hand is not running the gates.
 
+## The eight built-ins, and reading the plans first
+
+`LEN` `ASC` `VAL` `CHR$` `STR$` `LEFT$` `RIGHT$` `MID$` — the handful without
+which the language cannot be used, with the other fifty-six left to wave 5's
+overlay. Taken from the reference's `library.md` rather than from memory,
+which settled four things I would have guessed:
+
+* **`VAL` does not refuse.** `VAL("42 parts")` is 42 and `VAL("not a
+  number")` is 0 — a prefix, then zero. That is the opposite of this
+  chapter's usual instinct, and it is the reference's behaviour.
+* **`STR$` keeps `PRINT`'s leading space**, so `"<" + STR$(42) + ">"` is
+  `< 42>`. `PRINT x` and `PRINT STR$(x)` may not differ.
+* **Counting starts at 1**, and the ends are *clamped*, not refused —
+  `MID$(s$, 99)` is `""` and `LEFT$(s$, 99)` is all of it.
+* `CHR$` out of 0..255 and `ASC("")` are refused by name, because the
+  reference does not say and either guess is worse than a sentence.
+
+Reading the two plans first — which I had never opened — paid twice. §126.30
+exists because of it: the bindings plan's `@` operator hands a *buffer* to a
+kernel call, and a kernel call wants a **NUL-terminated** string in the
+caller's own segment while a BASIC string is counted and may contain a NUL.
+So `@` has to materialise a terminated copy, and the temporaries' region is
+exactly the right home — a temporary already lives to the end of the
+statement, which is longer than one call, and compaction never moves it.
+That is a wave-4 decision settled before wave 4 starts, from a document
+rather than from a defect. The GUI plan also makes `LEN` a dependency of the
+`@` convention itself (`OSAPI ..., @buf$, LEN(buf$)`), which is why it is
+here and not in wave 5.
+
+### The stack convention I misread
+
+All three slices answered `""`. The interpreter's `DI` is the stack pointer
+and points **one past** the top, so a body that consumes *n* operands has to
+step down *n* slots before `[di]` is the first of them — which `.scat` does
+in a single `sub di, 2*BAS_SLOT`, and which my slices did once per argument
+and never for the source. `[di+2]` then read the *count's* own second word,
+and a packed 3.0 has zero there, so every slice took the "start is past the
+end" branch and returned the empty string.
+
+It printed as a blank line, which the row filters out as non-content, so the
+failure arrived as *four expected answers missing and everything after them
+shifted up by four* rather than as a wrong value. Reading the body against
+`.scat` found it; guessing at it did not.
+
 ## Next
 
 **Wave 3: strings and arrays** — the string heap, `DIM`, and the string
