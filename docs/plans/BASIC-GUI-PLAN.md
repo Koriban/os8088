@@ -2,7 +2,7 @@
 
 **Status: planned 2026-11-04. Nothing built.** Branch `basic-o88`. The
 keyword layer of `BASIC-PLAN.md`; `BASIC-BINDINGS-PLAN.md` is the two tiers
-underneath it; SPEC §126 is the contract.
+underneath it; SPEC §150 is the contract.
 
 This is the half the target is actually about. A BASIC that can evaluate
 expressions is a toy; the goal is a BASIC somebody writes an OS/8088
@@ -69,7 +69,7 @@ The event's parameters arrive as named read-only values rather than as a
 `MENUITEM$`. `REG()` from the bindings plan stays available for anything tier
 A has not named.
 
-**The loop.** GFA's `ON MENU` inside a `DO`/`LOOP` is kept, because SPEC §126.8
+**The loop.** GFA's `ON MENU` inside a `DO`/`LOOP` is kept, because SPEC §150.8
 makes it the yield point and because it is the idiom a GFA programmer already
 knows:
 
@@ -159,7 +159,7 @@ pixel, it is a corrupted screen or a held lock. So:
 - the interpreter takes the lock and arms the clip **around** the `ON PAINT`
   handler, and releases both when it returns;
 - a drawing verb outside a paint is **refused by name**, with the reason — the
-  same contract §126.7 sets for everything else. `REDRAW n` posts damage and
+  same contract §150.7 sets for everything else. `REDRAW n` posts damage and
   lets the paint happen through the normal path, which is what a program that
   wants to redraw actually needs;
 - `SCREEN TEXT`'s paint is `con_rows_owed`, so a text program needs no
@@ -244,7 +244,7 @@ it.
 
 ## 6. Dialogs — decided: by calls
 
-**Settled, and specified in SPEC §126.12.** GEM's dialogs are data in a `.RSC`
+**Settled, and specified in SPEC §150.12.** GEM's dialogs are data in a `.RSC`
 run by `FORM_DO`; `os88ui.inc`'s widgets are code opted into with `%define`,
 which a BASIC program cannot do. So a dialog is built by calling, and the
 `DIALOG` block is kept for later — a dialog built by calls can be wrapped in a
@@ -261,7 +261,7 @@ Controls bind to variables rather than being read back: the variable supplies
 the initial state and receives the result, nothing is written on cancel, and
 `DLG RUN` returns the id that dismissed the dialog or **0 for the close box**.
 
-Four things §126.12.1 fixes, each for a reason this repository already paid
+Four things §150.12.1 fixes, each for a reason this repository already paid
 for: the dialog is **modal** (a non-modal one here can be orphaned by a stray
 click or the close box and gate-lock the application); `DLG FREE` **destroys**
 rather than hides (`MAX_WIN` is 12, and 6 on `kern_small`); coordinates are

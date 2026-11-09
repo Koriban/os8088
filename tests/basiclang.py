@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BASIC/8088 runs a program and the answers are right (SPEC.md 126).
+"""BASIC/8088 runs a program and the answers are right (SPEC.md 150).
 
     python3 tests/basiclang.py
 
@@ -25,7 +25,7 @@ Every one of them is a line below.
 **IT READS THE CONSOLE BUFFER, NOT THE PIXELS.** The answers are (character,
 attribute) cells in the package's own bss, so a row that matches glyphs would
 be testing the renderer as well and could not say which half was wrong - and
-the console is EIGHT rows of a 25-row buffer (SPEC.md 126.17), so most of a
+the console is EIGHT rows of a 25-row buffer (SPEC.md 150.17), so most of a
 long program's output is not on the glass at all. The buffer is found by its
 CONTENT: BASIC's banner, as cells, locates it with no kernel symbol and no
 package map. One pixel assertion stands beside the text, and only one - that
@@ -87,11 +87,11 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     0. A plausible-looking wrong answer, which is what this row is for.
   * the built-ins: taking the CLAMP out of the slice, so a count larger than
     what is left is passed through. `MID$(s$, 4)` compiles its missing
-    length as 32767 (SPEC.md 126.29), so without the clamp the slice asks
+    length as 32767 (SPEC.md 150.29), so without the clamp the slice asks
     the arena for 32767 bytes: `Error at line 9: one piece of text is longer
     than the arena`, which is the clamp's whole job stated as a refusal.
   * string arrays: making bas_nroots count only the variables, so an array
-    element stops being a compaction root (SPEC.md 126.32). After the
+    element stops being a compaction root (SPEC.md 150.32). After the
     120-iteration loop that forces a compaction, `File` `Edit` `Help` come
     back as `yyyy` - the elements still point into the arena and the loop's
     own string is living in those bytes now. Five differences, all of them
@@ -140,7 +140,7 @@ BANNER = "BASIC/8088"                   # bas_s_banner's first word
 
 # The program, and what each line owes the console. A blank expectation is a
 # line that prints nothing - an assignment, which is most of what a program
-# is. SPEC.md 126.4's PRINT puts a space where the sign would be and another
+# is. SPEC.md 150.4's PRINT puts a space where the sign would be and another
 # after the number, so the text is compared STRIPPED.
 PART1 = [
     # CLS FIRST, and it is not decoration: the buffer is 25 rows and this
@@ -176,7 +176,7 @@ PART1 = [
 # one of them, so 24 answers is the ceiling - and a wave that adds cases
 # would otherwise have to delete older ones to make room, which is exactly
 # the coverage a growing language must not trade away. Each part CLSes and
-# is self-contained (RUN clears the variables, SPEC.md 126.17), so they are
+# is self-contained (RUN clears the variables, SPEC.md 150.17), so they are
 # read one after the other and the answers concatenated.
 PART2 = [
     ("CLS",                              None),
@@ -440,7 +440,7 @@ PART6 = [
     ("IF n < 3 THEN GOTO again",         None),
     ("PRINT n",                          "3"),
     # ...a label spelled the way only a LABEL may be: a leading digit, a
-    # dot and an underscore (SPEC.md 126.22, GFA's entry 249)
+    # dot and an underscore (SPEC.md 150.22, GFA's entry 249)
     ("GOTO 2nd.step_a",                  None),
     ("PRINT 92",                         None),
     ("2nd.step_a:",                      None),
@@ -481,7 +481,7 @@ PART8 = [
 PART9 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- the three spellings of one call (SPEC.md 126.23) -----------------
+    # --- the three spellings of one call (SPEC.md 150.23) -----------------
     # AN EXPECTATION IS PINNED TO THE LINE THAT RUNS, not to the line that
     # holds the PRINT: the console is in execution order, and a procedure's
     # body runs at its CALL - which is below its own text here.
@@ -576,7 +576,7 @@ PART11 = [
 PART13 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- FUNCTION: a value comes back, in an expression (SPEC.md 126.25) --
+    # --- FUNCTION: a value comes back, in an expression (SPEC.md 150.25) --
     ("PRINT @twice(21)",                 "42"),
     ("PRINT FN twice(5)",                "10"),     # ...GFA's other spelling
     ("v = @twice(3) + @twice(4)",        None),
@@ -588,7 +588,7 @@ PART13 = [
     ("PRINT @sgn3(9)",                   "1"),
     # ...a body that falls off its end answers 0, not whatever was there --
     ("PRINT @nothing(1)",                "0"),
-    # ...and a value may be worked out and FORGOTTEN (SPEC.md 126.27)
+    # ...and a value may be worked out and FORGOTTEN (SPEC.md 150.27)
     ("k2 = 0",                           None),
     ("~@bump(5)",                        None),
     ("PRINT k2",                         "5"),      # the call HAPPENED...
@@ -625,7 +625,7 @@ PART13 = [
 PART16 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- VAR: the variable itself, not its value (SPEC.md 126.26) --------
+    # --- VAR: the variable itself, not its value (SPEC.md 150.26) --------
     ("a = 0",                            None),
     ("b = 0",                            None),
     ("sum(13, 12, a)",                   None),
@@ -702,7 +702,7 @@ PART12 = [
 PART18 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- text: a literal, a $ name, and the two kept apart (126.28) ------
+    # --- text: a literal, a $ name, and the two kept apart (150.28) ------
     ('PRINT "hello"',                    "hello"),
     ('a$ = "world"',                     None),
     ("PRINT a$",                         "world"),
@@ -739,7 +739,7 @@ PART18 = [
 PART19 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- the eight built-ins (SPEC.md 126.29) ----------------------------
+    # --- the eight built-ins (SPEC.md 150.29) ----------------------------
     ('s$ = "abcdef"',                    None),
     ("PRINT LEN(s$)",                    "6"),
     ('PRINT LEN("")',                    "0"),
@@ -799,7 +799,7 @@ PART22 = [
 PART23 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- DIM a(8) is 0..8, NINE slots (SPEC.md 126.31) -------------------
+    # --- DIM a(8) is 0..8, NINE slots (SPEC.md 150.31) -------------------
     ("DIM rows(8)",                      None),
     ("rows(0) = 1",                      None),
     ("rows(8) = 9",                      None),
@@ -867,7 +867,7 @@ PART26 = [
 PART27 = [
     ("CLS",                              None),
     ("PRINT 31415",                      "31415"),
-    # --- a string array (SPEC.md 126.31) ---------------------------------
+    # --- a string array (SPEC.md 150.31) ---------------------------------
     ("DIM m$(3)",                        None),
     ('m$(0) = "File"',                   None),
     ('m$(1) = "Edit"',                   None),
@@ -880,7 +880,7 @@ PART27 = [
     ('PRINT LEFT$(m$(2), 2)',            "He"),
     ("PRINT m$(1) < m$(0)",              "-1"),       # Edit < File: 'E' < 'F'
     ("PRINT m$(0) < m$(1)",              "0"),        # ...and not the reverse
-    # --- AND THE ROOT THAT 126.32 IS ABOUT -------------------------------
+    # --- AND THE ROOT THAT 150.32 IS ABOUT -------------------------------
     # The elements above are live. Now fill the string arena from a loop so
     # a compaction MUST happen, then read them back: if the walk does not
     # cover array elements, their bytes have moved and this prints rubbish.
@@ -1122,7 +1122,7 @@ def console_lines(m):
     not it. The language was correct in that run; the fixture was not.
 
     **A PART THAT TESTS A REFUSAL CANNOT PRINT IT.** The whole program is
-    compiled before any of it runs (SPEC.md 126.19), so a program refused
+    compiled before any of it runs (SPEC.md 150.19), so a program refused
     at compile time prints nothing at all - not the sentinel, not even its
     own CLS. Those parts are read at the address a previous part found: the
     buffer is in the package's bss and the package does not move while the
@@ -1271,7 +1271,7 @@ def main():
             # take them that fast: `the ROM had not stored the press after
             # 10 guest seconds`, once per key, for minutes. New clears the
             # program, the console and the variable table in one gesture
-            # (SPEC.md 126.17), and is the only menu this row touches.
+            # (SPEC.md 150.17), and is the only menu this row touches.
             mo.menu(112, 8, 112, 30)
             os88qemu.pace(m, 2.0)
         t0 = time.time()
@@ -1281,7 +1281,7 @@ def main():
               % (pn + 1, len(part), time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
         # **WAIT FOR THE LAST ANSWER, NOT FOR A CLOCK.** A fixed pace was
-        # six seconds, which every part until SPEC.md 126.28's fitted inside
+        # six seconds, which every part until SPEC.md 150.28's fitted inside
         # - and a loop that reassigns a string 200 times does not. The row
         # then read the console mid-run and reported the last two lines as
         # missing, which looks exactly like a defect in the feature. Polling
@@ -1318,10 +1318,10 @@ def main():
                     m.path, os.path.join(m.tmp, "end.png")],
                    capture_output=True, cwd=ROOT)
     print("      screen: %s" % os.path.join(m.tmp, "end.png"))
-    answers = [g for g in answers if g not in (BANNER + " - SPEC.md 126",
+    answers = [g for g in answers if g not in (BANNER + " - SPEC.md 150",
                                                "Ready")]
     check(answers == want,
-          "every line of the program answers what SPEC.md 126 says it does",
+          "every line of the program answers what SPEC.md 150 says it does",
           why="the language is what this row is for; an answer that is merely "
               "PLAUSIBLE is the failure mode (-2.668453E+307 was not)",
           got=answers, want=want)

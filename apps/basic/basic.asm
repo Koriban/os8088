@@ -1,17 +1,17 @@
 ; =============================================================================
 ; os8088 - apps/basic/basic.asm
 ;
-; BASIC/8088 (SPEC.md 126) - THE PACKAGE: the window, the two panes and the
+; BASIC/8088 (SPEC.md 150) - THE PACKAGE: the window, the two panes and the
 ; command path. The LANGUAGE is basic/baslang.inc, included below.
 ;
 ; TWO PANES, one window: the editor above and the console below, which is
-; SPEC.md 126's shape for both halves of the target - a GUI program and a
-; text one are the same program with a different surface (126.8). The editor
+; SPEC.md 150's shape for both halves of the target - a GUI program and a
+; text one are the same program with a different surface (150.8). The editor
 ; is os88text.inc (SPEC.md 83) over bas_prog; the console is os88con.inc's
 ; teletype half (70.8), and every output a program makes goes through
 ; con_say. Run compiles the editor's text and runs it (bas_run).
 ;
-; THE SIZE IS THE THING THIS FILE WATCHES. SPEC.md 126.6 plans a split
+; THE SIZE IS THE THING THIS FILE WATCHES. SPEC.md 150.6 plans a split
 ; across BASIC.O88 and BASIC.OVL on the arithmetic that an interpreter
 ; cannot fit beside sixty-four built-ins, an editor and a console in one
 ; 63.5KB segment. Nothing is split yet and the wall is not in sight;
@@ -20,7 +20,7 @@
 ;
 ; (This header described wave 0 - "nothing of the language is here", "owns
 ; no text widget yet", "Run does nothing, deliberately and visibly" - for
-; four waves after each stopped being true. SPEC.md 126's own discipline is
+; four waves after each stopped being true. SPEC.md 150's own discipline is
 ; that a refusal is stated by name; a stale description is the same defect
 ; pointed at the reader.)
 ; =============================================================================
@@ -30,7 +30,7 @@
     OS88_HEADER 'BASIC', bas_entry, 0, OS88_HIGH | OS88_HIGHMEM
 
 ; --- geometry (SPEC.md 11: content is x+1..x+w-2, y+TITLE_H..y+h-2) ----------
-; DERIVED, never quoted: SPEC.md 126.12.1's rule for a dialog is the rule for
+; DERIVED, never quoted: SPEC.md 150.12.1's rule for a dialog is the rule for
 ; a window too, and the one number a package must not contain is TITLE_H.
 BAS_W       equ 480                         ; outer
 BAS_H       equ 300
@@ -526,7 +526,7 @@ bas_tpl:
 
 ; --- the app menu set (SPEC.md 12.2) -----------------------------------------
 ; TWO menus of MENU_APPMAX's five. OS88_MENUSET_END asserts the cap, which is
-; the build-time half of what SPEC.md 126's own MENU statement has to do at
+; the build-time half of what SPEC.md 150's own MENU statement has to do at
 ; run time: the kernel drops a sixth silently.
     OS88_MENUSET bas_menus, bas_name, bas_oncmd
         OS88_MENU bas_m_file, bas_i_file, 2
@@ -545,7 +545,7 @@ bas_i_run:      dw bas_it_run, bas_it_stop
 bas_it_run:     db 'Run', 0
 bas_it_stop:    db 'Stop', 0
 
-bas_s_banner:   db 'BASIC/8088 - SPEC.md 126', 13, 10
+bas_s_banner:   db 'BASIC/8088 - SPEC.md 150', 13, 10
                 db 'Ready', 13, 10, 0
 bas_s_stop:     db 'Nothing to stop.', 13, 10, 0
 
@@ -555,7 +555,7 @@ bas_ablines:
 bas_ab1:        db 'BASIC/8088', 0
 bas_ab2:        db 0
 bas_ab3:        db 'A BASIC for OS/8088,', 0
-bas_ab4:        db 'SPEC.md 126', 0
+bas_ab4:        db 'SPEC.md 150', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) ------------------------------------
 %define OS88UI_ABOUT
@@ -591,7 +591,7 @@ bas_ab4:        db 'SPEC.md 126', 0
 %define CON_BSS_AT (os88_image_end + BAS_BSS_OWN)
 %include "os88con.inc"
 
-; The language itself (SPEC.md 126.5). After os88con.inc, because every one of
+; The language itself (SPEC.md 150.5). After os88con.inc, because every one of
 ; its outputs goes through con_say.
 %include "basic/baslang.inc"
 
@@ -764,7 +764,7 @@ bas_reg         equ os88_image_end + BAS_B_bas_reg   ; the tier C register file,
 bas_nvar        equ os88_image_end + BAS_B_bas_nvar   ; word: how many of the
                                          ; table below are in use this RUN
 bas_vars        equ os88_image_end + BAS_B_bas_vars   ; the scalar variables
-                                         ; (SPEC.md 126.4): BAS_VAR_MAX entries
+                                         ; (SPEC.md 150.4): BAS_VAR_MAX entries
                                          ; of BAS_VAR_SZ. A name is NOT stored -
                                          ; the entry points at the one in
                                          ; bas_prog, so a name is any length and
@@ -794,11 +794,11 @@ bas_casech      equ os88_image_end + BAS_B_bas_casech ; word: the chain of
 bas_restype     equ os88_image_end + BAS_B_bas_restype; byte: 1 if the
                                          ; expression bas_c_rel just compiled
                                          ; leaves TEXT on the stack rather
-                                         ; than a number (SPEC.md 126.28) -
+                                         ; than a number (SPEC.md 150.28) -
                                          ; compile time only
 bas_svtop       equ os88_image_end + BAS_B_bas_svtop ; word: the top of the
                                          ; VARIABLES' half of the string
-                                         ; arena, which grows up (126.28)
+                                         ; arena, which grows up (150.28)
 bas_sttop       equ os88_image_end + BAS_B_bas_sttop ; word: the bottom of
                                          ; the TEMPORARIES' half, which grows
                                          ; down and is released whole at
@@ -810,7 +810,7 @@ bas_sarena      equ os88_image_end + BAS_B_bas_sarena; ...and the arena, in
                                          ; kernel on every callback
 bas_narr        equ os88_image_end + BAS_B_bas_narr  ; word: arrays DIMmed
 bas_arrs        equ os88_image_end + BAS_B_bas_arrs  ; ...and the table of
-                                         ; them (SPEC.md 126.31)
+                                         ; them (SPEC.md 150.31)
 bas_abase       equ os88_image_end + BAS_B_bas_abase ; word: OPTION BASE's
                                          ; default lower bound, 0 unless a
                                          ; program says otherwise BEFORE any
@@ -837,10 +837,10 @@ bas_atop        equ os88_image_end + BAS_B_bas_atop  ; word: the arena's top
 bas_arena       equ os88_image_end + BAS_B_bas_arena ; ...and the elements,
                                          ; EIGHT BYTES EACH whatever they
                                          ; hold: one size, one indexer, one
-                                         ; bound (126.31)
+                                         ; bound (150.31)
 bas_nlbl        equ os88_image_end + BAS_B_bas_nlbl  ; word: labels seen
 bas_lbls        equ os88_image_end + BAS_B_bas_lbls  ; ...and the table of
-                                         ; them (SPEC.md 126.22), keyed on
+                                         ; them (SPEC.md 150.22), keyed on
                                          ; where the name is in bas_prog for
                                          ; bas_vars' reason
 bas_nfwd        equ os88_image_end + BAS_B_bas_nfwd  ; word: GOTOs still
@@ -850,7 +850,7 @@ bas_fwds        equ os88_image_end + BAS_B_bas_fwds  ; owed a label, resolved
                                          ; the program can answer
 bas_nprc        equ os88_image_end + BAS_B_bas_nprc  ; word: procedures
 bas_prcs        equ os88_image_end + BAS_B_bas_prcs  ; ...and the table of
-                                         ; them (SPEC.md 126.23)
+                                         ; them (SPEC.md 150.23)
 bas_ncal        equ os88_image_end + BAS_B_bas_ncal  ; word: calls still owed
 bas_cals        equ os88_image_end + BAS_B_bas_cals  ; a procedure - the
                                          ; NORMAL case, procedures living
@@ -860,14 +860,14 @@ bas_prcp        equ os88_image_end + BAS_B_bas_prcp  ; the parameter indices
                                          ; collected before any of the
                                          ; prologue is emitted because the
                                          ; prologue runs BACKWARDS
-                                         ; (SPEC.md 126.24) - compile time
+                                         ; (SPEC.md 150.24) - compile time
                                          ; only, bas_forlim's shape
 bas_inprc       equ os88_image_end + BAS_B_bas_inprc ; word: which procedure
                                          ; is being compiled, 0 for none -
                                          ; COMPILE time only
 bas_calfn       equ os88_image_end + BAS_B_bas_calfn ; byte: whether the
                                          ; call site being compiled can use a
-                                         ; value (SPEC.md 126.25) - compile
+                                         ; value (SPEC.md 150.25) - compile
                                          ; time only
 bas_prcnv       equ os88_image_end + BAS_B_bas_prcnv ; word: which
                                          ; parameter VAR began at, while ONE
@@ -879,7 +879,7 @@ bas_argsl       equ os88_image_end + BAS_B_bas_argsl ; where each of a
                                          ; byte, 0 if it was not a bare
                                          ; variable name - the byte a VAR
                                          ; parameter rewrites (SPEC.md
-                                         ; 126.26). Compile time only
+                                         ; 150.26). Compile time only
 bas_alias       equ os88_image_end + BAS_B_bas_alias ; which variable each
                                          ; variable really IS: identity
                                          ; except where a VAR parameter

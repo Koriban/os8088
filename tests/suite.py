@@ -256,12 +256,12 @@ FAST = [
         "eleven more sites one failed assembly away. The argument is gated "
         "and not the device, so it is caught at the edit"),
     Row("basrefuse", "fast", py("tests/unit/t_basrefuse.py"), 0.3,
-        "SPEC.md 126.7: bas_err prints the reason and RETURNS, which makes "
+        "SPEC.md 150.7: bas_err prints the reason and RETURNS, which makes "
         "`jmp bas_err` right for a statement body holding nothing and WRONG "
         "for a helper another routine calls - there the ret goes into the "
         "caller's saved registers. The refusal still prints, correctly and "
         "with the right line, so every visible symptom says the feature "
-        "works while the package is wedged: `jmp bas_kinderr` in 126.25's "
+        "works while the package is wedged: `jmp bas_kinderr` in 150.25's "
         "kind check made the NEXT program typed never run, so the row read "
         "the previous program's console and the bug arrived as a wrong "
         "MESSAGE. A ratchet on names, not a proof - three tail-call targets "
@@ -20265,7 +20265,7 @@ SOAK = [
                "build/mbr.bin", "build/boothd.bin", "build/kernel.sys",
                "build/sound.hma.bin", "build/xmem.bin")),
     Row("basiclang", "soak", py("tests/basiclang.py", "--early"), 320.0,
-        "SPEC.md 126: BASIC/8088 RUNS A PROGRAM and the answers are right - "
+        "SPEC.md 150: BASIC/8088 RUNS A PROGRAM and the answers are right - "
         "the first row that executes the language at all. Everything before "
         "it checked the package's layout or its size, and the cost of that "
         "was five defects the build could not see: a value stack that "
@@ -20286,7 +20286,7 @@ SOAK = [
         "iterate against and holds a soak slot while others sit idle.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang2", "soak", py("tests/basiclang.py", "--late"), 980.0,
-        "SPEC.md 126.22-126.25: labels, GOTO, PROCEDURE and FUNCTION. The half of "
+        "SPEC.md 150.22-150.25: labels, GOTO, PROCEDURE and FUNCTION. The half of "
         "basiclang whose constructs span the WHOLE program rather than a "
         "line - a GOTO's label and a call's procedure are both normally "
         "below the line that names them, so both wait in a pending table "

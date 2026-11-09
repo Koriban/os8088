@@ -3,7 +3,7 @@
 
     python3 tests/unit/t_basrefuse.py
 
-`bas_err` (SPEC.md 126.7) prints the reason and **returns**. That makes
+`bas_err` (SPEC.md 150.7) prints the reason and **returns**. That makes
 `jmp bas_err` the right ending for a statement body, which is reached with
 nothing of its own on the stack - the `ret` then goes to bas_c_stmt's own
 caller, which is exactly where a refused statement should end up.
@@ -13,7 +13,7 @@ ends in `jmp bas_err` and is reached by `jmp R` from a routine holding
 pushed registers, bas_err's `ret` returns into those saved registers. The
 refusal still PRINTS, correctly and with the right line, so every visible
 symptom says the feature works - and the package is wedged from that moment
-on. That is what `jmp bas_kinderr` did in SPEC.md 126.25's kind check: the
+on. That is what `jmp bas_kinderr` did in SPEC.md 150.25's kind check: the
 sentence appeared, and the NEXT program typed into the editor never ran, so
 the row read the previous program's console and reported the previous
 program's refusal. The bug looked like a wrong message.

@@ -88,6 +88,35 @@ net-**negative** is *behind* it, not ahead of it, and content that far behind
 is content that already landed. **A net-negative diff is merged work, not
 pending work.**
 
+## SPEC.md section numbers: this fork reserves 150 and up
+
+**The number is the one thing a clean textual merge cannot conflict on**, so
+two authors each appending "the next free number" collide silently and
+`tools/checkdocs.py`'s third check catches it only after the merge, as two
+headings sharing a number.
+
+This fork's chapters therefore sit at **§150 and above**, well clear of
+upstream's sequence (§125 at this writing). §150 is BASIC/8088 and §151 the
+replaceable shells; they were 126 and 127 until two upstream drafts,
+`feat/mousechk` (PR #340) and `feat/pagedesk` (PR #342), were found claiming
+exactly those two.
+
+**Renumbering is expensive and worth avoiding**, which is the argument for
+the reservation rather than for doing it again later. The move cost 393 lines
+across 17 files, and the thing that makes it dangerous is that the doc gate
+cannot help: it passes a citation that resolves to a real but WRONG heading.
+Two traps are worth knowing if it is ever needed again:
+
+* **`127.0.0.1`.** The loopback address is in the Makefile and the QMP
+  harness. A section number is at most two dot-groups and an IP is three,
+  which is the only reliable way to tell them apart mechanically.
+* **SPEC.md is 14.9 MB of measured prose.** An unmarked `126.6` there is a
+  timing, a table value, `126.99 m/s` or a tangent clamped at `127.996` —
+  **27 of them**, and not one unmarked section citation in the whole file.
+  So in SPEC.md only headings and citations carrying an explicit `§` or
+  `SPEC.md` marker may be rewritten. Elsewhere an unmarked dotted form is a
+  citation, but check it in context rather than trusting the pattern.
+
 ## "N commits behind main" — read them before acting
 
 ```sh

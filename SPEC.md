@@ -242202,7 +242202,7 @@ pentium-pciether`) is the 86Box profile.
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
    TSD's TOK/OWN timing has not been run; the harness's row is the first.
 
-## 126. BASIC/8088 — the language as a package (`apps/basic/`)
+## 150. BASIC/8088 — the language as a package (`apps/basic/`)
 
 **The language is called BASIC/8088**, after the machine it is for and in the
 shape its parent's name already had. BASIC/nw is the reference implementation
@@ -242239,7 +242239,7 @@ change after the second wave, and because a plan that is not in SPEC cannot be
 merged. `docs/plans/BASIC-PLAN.md` says what to build in what order; this says
 what must be true of the result.
 
-### 126.1 The language is a port, and the port has an oracle
+### 150.1 The language is a port, and the port has an oracle
 
 BASIC/nw was written as a plot device for a game: the player wrote BASIC inside
 the fiction of a sealed machine, and the implementation is shaped by that. The
@@ -242256,9 +242256,9 @@ match the reference can be checked one stage at a time against something that
 already works. A rewrite that collapsed them would have to be trusted whole.
 
 The audit of the 43 refusals is `basicnw/notes/REFUSAL-AUDIT.md` in that
-project. Its finding is the premise of §126.7.
+project. Its finding is the premise of §150.7.
 
-### 126.2 Assembly, because C cannot hold it
+### 150.2 Assembly, because C cannot hold it
 
 §73 allows a package written in C, slower and larger in exchange for being
 writable, and a ten-thousand-line interpreter is exactly the kind of program
@@ -242276,7 +242276,7 @@ not stylistic:
 
 So the interpreter is 8086 assembly, and its arithmetic is `apps/os88fp.inc`.
 
-### 126.3 What it is built on, and what it must not duplicate
+### 150.3 What it is built on, and what it must not duplicate
 
 The package is small because most of it already exists, and the dependencies
 below are normative: a second console, a second editor or a second double
@@ -242305,15 +242305,15 @@ and **two of which it must add for everyone**:
    move, so **a string is a handle and never a far pointer held across a call
    that may compact.**
 
-### 126.4 The five types, and the one stated simplification
+### 150.4 The five types, and the one stated simplification
 
 | | width | held as |
 | --- | --- | --- |
 | `%` INTEGER | 2 | native |
-| `&` LONG | 4 | `dx:ax`, over §126.3's second gap |
+| `&` LONG | 4 | `dx:ax`, over §150.3's second gap |
 | `!` SINGLE | 4 | computed as a double, **narrowed to 32 bits on every store** |
 | `#` DOUBLE | 8 | `os88fp.inc`'s A/B registers |
-| `$` STRING | a handle | §126.3's third gap |
+| `$` STRING | a handle | §150.3's third gap |
 
 **A sigil is one of four ways a name gets its type, and not the authoritative
 one.** The table above names the five types by their suffixes, but the suffix
@@ -242326,7 +242326,7 @@ live in the reference implementation; they were run to check, not assumed.
 
 And **the suffixed forms of one base name are distinct variables**: `a%`, `a$`
 and `a#` coexist and hold three unrelated values. That is QuickBASIC's rule and
-it is kept, and it is the reason §126.11 takes a name as a *spelling* rather
+it is kept, and it is the reason §150.11 takes a name as a *spelling* rather
 than as an identifier.
 
 `!` is where an implementation will be tempted to diverge, so the requirement
@@ -242346,7 +242346,7 @@ LET d2# = 16777217.0   ' prints 16777217
 An implementation that left `!` as a double would print `16777217` for the
 first line and be **more accurate than the language**, which is a divergence
 the differential test in `BASIC-PLAN.md` §8 would catch and should catch. The
-same goes for a bare name with no suffix, which is a SINGLE by §126.4's table
+same goes for a bare name with no suffix, which is a SINGLE by §150.4's table
 and narrows identically.
 
 **`MKS$` and `CVS` must emit and read a true four-byte IEEE single**, because
@@ -242357,7 +242357,7 @@ exact.
 Half-to-even rounding is the reference's and QuickBASIC's: `CINT(2.5)` is 2 and
 `CINT(3.5)` is 4.
 
-### 126.5 One op is one step
+### 150.5 One op is one step
 
 The compiler emits a flat array of operations rather than handing the
 interpreter a tree. In the reference this was done so a budget could count
@@ -242379,7 +242379,7 @@ checked against their counts at assembly time**, so adding an op and
 forgetting its row is a build error and not a jump into whatever word follows
 the table. It is also 29 bytes SMALLER than the chain it replaced.
 
-### 126.6 The seam
+### 150.6 The seam
 
 `APP_MAX_SIZE` is `0xFE00` — image plus bss — and a module is one segment, so
 65,536 is a wall and not a setting. The interpreter does not fit beside
@@ -242403,7 +242403,7 @@ it is needed is a dispatcher and two traps bought for nothing. What this
 section fixes is WHERE the cut goes when it is wanted, so that the resident
 half is not accidentally filled with what belongs outside it.
 
-### 126.7 Where a refusal is principled, and where it was only fiction
+### 150.7 Where a refusal is principled, and where it was only fiction
 
 A refused spelling is reported **by name and with a reason**, never as a syntax
 error and never as a type error blamed on the author. That property is the
@@ -242430,7 +242430,7 @@ manual gives the equivalence: "`a%=INP%(#1)` can replace
 message must therefore name `INPUT$` as well as the port, or a reader who
 meant the channel is told the wrong thing.
 
-`WAIT` was the sixth and is no longer a refusal — §126.15.
+`WAIT` was the sixth and is no longer a refusal — §150.15.
 
 `POKE`'s **name stays reserved** and is refused by name with its reason, as
 every refusal here is. It is not freed for use as a variable, and it is not
@@ -242438,7 +242438,7 @@ quietly absent: a program that writes `POKE` is told why, once, at the place it
 wrote it.
 
 `PEEK` was the seventh and is no longer a refusal at all. It keeps its name and
-is given a different job — §126.11.
+is given a different job — §150.11.
 
 A second group is refused **while the statement remains true**, and each names
 what would change it: `LPRINT` has no printer API yet; `LOCK` has nothing to
@@ -242452,7 +242452,7 @@ defend nothing this OS lacks — including `INKEY$`, whose stated reason is that
 a key cannot be polled without blocking a pane that does not exist here, and
 which `OSAPI_KEY_DOWN` answers in one call.
 
-### 126.8 How a program reaches the OS, and where it yields
+### 150.8 How a program reaches the OS, and where it yields
 
 The target is **GFA-BASIC on the Atari ST**: not a BASIC that runs, but a BASIC
 that OS/8088 applications are written in, GUI or text. That target decides this
@@ -242498,7 +242498,7 @@ interpreter's own. A BASIC program is therefore a package that happens to be
 interpreted, and the editor's console is only the default output surface, not
 the boundary of what a program may own.
 
-### 126.9 What finished means, and what `gorilla.bas` is not
+### 150.9 What finished means, and what `gorilla.bas` is not
 
 **It is not a conformance target.** BASIC/nw is in the QuickBASIC 4.5 *line*
 and deliberately departs from it: channel I/O has its own four keywords,
@@ -242512,7 +242512,7 @@ this language.**
 
 So `reference/gorillas/gorilla.bas` is a **sample, not a bar**. What it is good
 for is evidence: 1,135 lines of real-world QuickBASIC is a fair answer to "what
-do programs of this kind actually reach for", which is exactly how §126.10 uses
+do programs of this kind actually reach for", which is exactly how §150.10 uses
 it — and the answer there, seven lines of memory poking for a keyboard LED,
 only carries weight *as* evidence about ordinary practice. It would carry none
 as an obligation, because there is no obligation.
@@ -242524,13 +242524,13 @@ interpreter and none of it visible in the program.
 `docs/plans/BASIC-GUI-PLAN.md` §7 is that program, and it is the thing to make
 run.
 
-### 126.10 What is not yet decided
+### 150.10 What is not yet decided
 
 Three things, recorded because the chapter would otherwise read as though they
 were settled.
 
 **`PEEK` and `POKE` — decided.** `POKE` is dropped and its name kept reserved
-(§126.7); `PEEK` keeps its name and becomes introspection (§126.11). No system-
+(§150.7); `PEEK` keeps its name and becomes introspection (§150.11). No system-
 access declaration is introduced, and nothing in this chapter hands a user
 program an address.
 
@@ -242539,7 +242539,7 @@ because 34 slots take a buffer; they are not, because `@` hands the address to
 the *kernel* inside one call and the program never sees it, while the
 `MK*`/`CV*` pair reads and writes bytes in a program's own buffers. They then
 looked worth having for parity, because GFA had them; measured against a sample of real
-QuickBASIC — `reference/gorillas/gorilla.bas`, which §126.9 is careful to say
+QuickBASIC — `reference/gorillas/gorilla.bas`, which §150.9 is careful to say
 is evidence and not an obligation — they are used on **seven lines of 1,135**,
 in two blocks, both forcing the BIOS NumLock flag on and back. That is
 precisely a thing a cooperative system should refuse, being one application
@@ -242566,10 +242566,10 @@ assembly. `BYTE` and `WORD` are needed by tier B and are in. The matrix
 sublanguage is a library rather than a language and is out. The rest is
 `docs/plans/BASIC-PLAN.md` §0.3's to argue.
 
-### 126.11 `PEEK` looks at the program, not at the machine
+### 150.11 `PEEK` looks at the program, not at the machine
 
 QuickBASIC's `PEEK(n)` reads the byte at address `n`. That is gone with the rest
-of §126.7's group. The name is kept and pointed at something this language
+of §150.7's group. The name is kept and pointed at something this language
 actually wants: **reading a named thing in the running program** — a variable,
 a constant, an array element, a record field — and getting its value.
 
@@ -242592,7 +242592,7 @@ feature, and `PEEK$("p.label")` reaches a record field.
 
 **What the string holds is a source spelling, resolved exactly as the compiler
 would resolve it at that point in the program** — which is more than looking
-for a suffix, by §126.4. `PEEK$("count")` must answer for
+for a suffix, by §150.4. `PEEK$("count")` must answer for
 `DIM count AS INTEGER` even though nothing in the string says so, a bare name
 must be read through whatever `DEFINT`-family range is in effect, and
 `PEEK$("a")` and `PEEK$("a%")` are **two different variables** and must not be
@@ -242617,10 +242617,10 @@ window into other frames.
 **A numeric argument is refused by name.** `PEEK(1047)` is the old meaning, and
 it appears in real QuickBASIC — `gorilla.bas` has it. It must not be read as a
 name, and it must not silently return something: it is refused with the reason,
-pointing at §126.7. A ported program is told exactly what changed, at the line
+pointing at §150.7. A ported program is told exactly what changed, at the line
 that changed.
 
-#### 126.11.1 What it costs, and what else it buys
+#### 150.11.1 What it costs, and what else it buys
 
 A compiler resolves names to slots and has no further use for them. An
 introspection function taking a name at run time means **the names have to
@@ -242637,7 +242637,7 @@ environment of this class is expected to have, and the reason this is better
 value than it first looks: one table, two features, and the second is the one a
 programmer debugging a BASIC program actually reaches for.
 
-### 126.12 Dialogs are built by calls, and `DIALOG` is reserved for later
+### 150.12 Dialogs are built by calls, and `DIALOG` is reserved for later
 
 A GEM dialog is data: an object tree in a `.RSC`, loaded and run by `FORM_DO`.
 This OS has no resource file and no tree — `apps/os88ui.inc` (§13, §75) has the
@@ -242651,7 +242651,7 @@ whereas starting from the block means designing a layout engine before anything
 can show a button.
 
 **`DIALOG` is therefore a reserved word from the start and means nothing yet.**
-It is held for the block form, exactly as `POKE`'s name is held in §126.7: a
+It is held for the block form, exactly as `POKE`'s name is held in §150.7: a
 word reserved before it is needed costs nothing, and a word that has to be
 taken away later breaks programs. The call API is spelled `DLG`, with the verb
 after it, which is the shape this language already uses for `MENU KILL` and
@@ -242681,7 +242681,7 @@ dialog is accepted. On cancel, nothing is written. This is the same idea as
 `DLG RUN` is a function returning the id of the control that ended the dialog,
 or **0 for the close box**, which a program must handle as a cancel.
 
-#### 126.12.1 Four properties that are not negotiable
+#### 150.12.1 Four properties that are not negotiable
 
 **Modal.** `DLG RUN` does not return until the dialog is dismissed. This is not
 a simplification, it is the lesson of a recorded incident: a non-modal
@@ -242690,7 +242690,7 @@ after which the application is gate-locked and the user cannot reach either
 window. A modal dialog cannot reach that state. A non-modal form may be
 designed later; it is not this.
 
-**`DLG FREE` destroys.** A dialog is a window, so §126.12 inherits the hide/
+**`DLG FREE` destroys.** A dialog is a window, so §150.12 inherits the hide/
 destroy trap: hiding leaves the slot used, and `MAX_WIN` is 12 on `kern_big`
 and 6 on `kern_small`. A program that opens and cancels a dialog a few times
 would otherwise exhaust the window table and every later dialog would silently
@@ -242709,15 +242709,15 @@ once, for every program: buttons, `OS88UI_CHK` check boxes, `OS88UI_RAD` radio
 dots, static text, a single-line edit over `apps/os88line.inc` (§83), group
 boxes, and `OS88UI_DROP` for one pick from a short list. Scroll bars
 (`OS88UI_SCROLL`) are not in a dialog's set. The `DLG` engine lives in
-`BASIC.OVL` by §126.6's rule, a dialog being rare next to the inner loop.
+`BASIC.OVL` by §150.6's rule, a dialog being rare next to the inner loop.
 
 `ALERT` and `FILESELECT` are **not** `DLG` verbs: each is one existing facility
 — `OS88UI_ALERT`'s standard alert and the chooser — and keeps its own GFA
 spelling.
 
-### 126.13 `VAR name AS type` — declaring, said properly
+### 150.13 `VAR name AS type` — declaring, said properly
 
-`DIM` means *dimension*, and it acquired five other jobs. §126.4's four ways to
+`DIM` means *dimension*, and it acquired five other jobs. §150.4's four ways to
 give a name a type all run through it or through a suffix, and the one that
 states a type outright reads wrongly:
 
@@ -242753,9 +242753,9 @@ form — read a `VAR` line and you know the type without looking anywhere else.
 `VAR rows(1 TO 5) AS INTEGER` is refused by name pointing at `DIM`. Each word
 then means one thing.
 
-#### 126.13.1 This is an addition, not a divergence
+#### 150.13.1 This is an addition, not a divergence
 
-The distinction matters and §126.4 is the cautionary case. Narrowing `!`
+The distinction matters and §150.4 is the cautionary case. Narrowing `!`
 differently would have **changed what an existing program prints** — a
 divergence, which the differential test in `BASIC-PLAN.md` §8 exists to catch.
 Adding a keyword changes no existing program's meaning: every BASIC/nw program
@@ -242767,7 +242767,7 @@ nothing to compare against. **Additions therefore carry their own tests**, and
 the rule is worth stating once: the reference settles the common language, and
 anything this chapter adds on top is this project's to prove.
 
-#### 126.13.2 What it costs: `var` stops being a name
+#### 150.13.2 What it costs: `var` stops being a name
 
 A suffix cannot follow a reserved word here — `name$` and `line$` are not
 variables because `NAME` and `LINE` are keywords — so reserving `VAR` makes
@@ -242777,7 +242777,7 @@ It was checked rather than assumed: the reference implementation uses `var` as
 an identifier in **none** of its manual pages or tests, so nothing in the
 oracle moves.
 
-#### 126.13.3 And GFA's `VAR` is therefore refused
+#### 150.13.3 And GFA's `VAR` is therefore refused
 
 GFA-BASIC uses `VAR` for something unrelated — a by-reference marker in a
 parameter list, sticky over everything after it. That spelling is now taken, and
@@ -242790,13 +242790,13 @@ by default, so the capability GFA's `VAR` provides is already the default here
 and only the *marking* has to change. `docs/plans/BASIC-PORTING-NOTES.md` §2
 carries the rule and the worked example.
 
-### 126.14 Writing without type suffixes
+### 150.14 Writing without type suffixes
 
 Three different things hide behind "drop the suffixes", and they have three
 different answers.
 
 **Stop using them on your own names — already possible, no change needed.**
-§126.4's other three paths all type a name with no suffix, and §126.13's `VAR`
+§150.4's other three paths all type a name with no suffix, and §150.13's `VAR`
 makes it the obvious way to write. This runs today, on the reference
 implementation:
 
@@ -242845,12 +242845,12 @@ language supports rather than a dialect that replaces it** — which is the
 decision, taken 2026-11-04: keep them, write without them where you like, and
 revisit only behind a function return-type syntax.
 
-#### 126.14.1 `OPTION EXPLICIT`, which the style requires
+#### 150.14.1 `OPTION EXPLICIT`, which the style requires
 
 Writing suffix-free without this would be a mistake, and it is worth being
 exact about why.
 
-A bare undeclared name is a SINGLE by §126.4, so in suffix-free code a
+A bare undeclared name is a SINGLE by §150.4, so in suffix-free code a
 misspelling is not an error — it is a **new variable holding zero**. Run on the
 reference:
 
@@ -242879,14 +242879,14 @@ the library alone, so a codebase can hold the house style. It is a convenience
 over `OPTION EXPLICIT`, not a substitute: the typo is the danger, and the
 suffix is only a habit.
 
-Both are additions by §126.13.1's rule — no existing program changes meaning,
+Both are additions by §150.13.1's rule — no existing program changes meaning,
 and both carry their own tests.
 
-### 126.15 `WAIT` waits for the machine; `SLEEP` waits for time
+### 150.15 `WAIT` waits for the machine; `SLEEP` waits for time
 
 QuickBASIC's `WAIT port, and[, xor]` spins on a hardware port until its bits
-match. The port half goes with §126.7's group, and the **name is kept and
-pointed at the ordinary meaning of the word**, as `PEEK`'s was in §126.11.
+match. The port half goes with §150.7's group, and the **name is kept and
+pointed at the ordinary meaning of the word**, as `PEEK`'s was in §150.11.
 
 ```basic
 WAIT            ' give the machine a moment: one yield, then carry on
@@ -242899,9 +242899,9 @@ line worth saying once: **`SLEEP` waits for time, `WAIT` waits for the
 machine.** A program that wants half a second says `SLEEP 0.5`; a program that
 wants to stop hogging says `WAIT`.
 
-#### 126.15.1 It answers the hole §126.8 leaves
+#### 150.15.1 It answers the hole §150.8 leaves
 
-§126.8 settles the yield for a **GUI** program: `ON MENU`, inside a loop the
+§150.8 settles the yield for a **GUI** program: `ON MENU`, inside a loop the
 programmer writes. A **text-mode** program has no such loop, and on a
 cooperative system that is a real gap — a `FOR` loop counting to a million
 never returns to the kernel, and the desktop stops until it finishes.
@@ -242913,7 +242913,7 @@ program that hogs, which is the programmer's business here exactly as it was
 on the ST. What matters is that the language now *has* a word for it, and that
 the word is the one a reader would guess.
 
-#### 126.15.2 `WAIT KEY`
+#### 150.15.2 `WAIT KEY`
 
 Blocks until a keystroke is available, leaving it in the queue for `INKEY$`,
 `INPUT` or `INPUT$` to take. It is the half of QuickBASIC's `SLEEP` that
@@ -242925,11 +242925,11 @@ A bare `WAIT` with no keyword yields once and returns; `WAIT KEY` yields until
 there is something to read. Both go through the same `OSAPI_TASK_YIELD`, and
 the only difference is the condition for coming back.
 
-### 126.16 `FIELD` takes a buffer as well as a channel; `SEG` is held
+### 150.16 `FIELD` takes a buffer as well as a channel; `SEG` is held
 
 A kernel call that answers in a structure answers **into your buffer**:
 `OSAPI_FILE_FIND_RAW` fills a directory entry in which `+18` is a four-byte
-size, and §126.11's rule says a program reads that with the `CV*` pair rather
+size, and §150.11's rule says a program reads that with the `CV*` pair rather
 than with an address. Which works, and reads like this:
 
 ```basic
@@ -242970,13 +242970,13 @@ OSAPI OSAPI_FILE_FIND_RAW, @ent
 PRINT RTRIM$(nm$); CVL(sz$)
 ```
 
-**This is an extension, not a divergence** (§126.13.1): no existing program
+**This is an extension, not a divergence** (§150.13.1): no existing program
 changes meaning, every `FIELD #n` still means what it meant, and the addition
 carries its own tests.
 
-#### 126.16.1 `SEG` is reserved and means nothing yet
+#### 150.16.1 `SEG` is reserved and means nothing yet
 
-`SEG` is held, as `DIALOG` is (§126.12) and `POKE`'s name is (§126.7). It was
+`SEG` is held, as `DIALOG` is (§150.12) and `POKE`'s name is (§150.7). It was
 the obvious candidate for the buffer-overlay above — GFA spends it on a
 memory segment, and the spelling was free here once `DEF SEG` was refused —
 and it lost to `FIELD` on one argument: **the operation is the one `FIELD`
@@ -242986,7 +242986,7 @@ mechanisms for named fields where two suffice.
 Reserving it costs nothing and un-reserving one later breaks programs, so it
 stays reserved against a use that has not arrived.
 
-### 126.17 Scalar variables, and what a RUN resets
+### 150.17 Scalar variables, and what a RUN resets
 
 Wave 2's floor, and everything above it needs this first: `FOR` has no loop
 variable without it and `IF` has nothing to compare.
@@ -242995,7 +242995,7 @@ variable without it and `IF` has nothing to compare.
 name — it holds **where the name is**, an offset into the program buffer and
 a length. A fixed-width name field would make `averylongname1` and
 `averylongname2` one variable, silently, which is the kind of wrong answer
-§126.7 exists to refuse; this cannot, because the comparison is against the
+§150.7 exists to refuse; this cannot, because the comparison is against the
 program's own text.
 
 **Names are case-insensitive.** `Total`, `total` and `TOTAL` are one
@@ -243005,7 +243005,7 @@ keywords.
 **A name never assigned reads 0.** An entry is born as eight zero bytes,
 which is 0.0 in §84's format. That is QuickBASIC's behaviour and it means a
 mistyped name is a second variable rather than an error — `OPTION EXPLICIT`
-(§126.10, decided, not built) is where a program asks for the error instead,
+(§150.10, decided, not built) is where a program asks for the error instead,
 and it gates exactly the create path.
 
 **Sixteen of them, and the seventeenth is refused by name** rather than
@@ -243023,7 +243023,7 @@ it owed 0. Both doors are shut: `bas_run` clears the table on every run, and
 **`File > New` clears the PROGRAM.** It reset only the console until wave 2,
 which read as New having done nothing, the program being the thing on screen.
 
-### 126.18 Comparisons, and the one-line `IF`
+### 150.18 Comparisons, and the one-line `IF`
 
 **TRUE IS -1 AND FALSE IS 0**, QuickBASIC's convention and not a private
 one: a comparison's answer is an ordinary number, so `PRINT 1 < 2` prints
@@ -243051,7 +243051,7 @@ code.
 accumulator, never `fp_a2i`: truncating first would make `IF 0.5 THEN`
 false, a number that is not zero answering as though it were.
 
-### 126.19 The whole program is compiled, then run — and the loops
+### 150.19 The whole program is compiled, then run — and the loops
 
 **Until wave 2d the interpreter compiled and ran one STATEMENT at a time**,
 resetting the op stream per line. That is impossible to loop over: a jump
@@ -243067,7 +243067,7 @@ Two consequences are contract, not detail:
 - **the line number rides in the stream** (`OP_LINE`, three bytes a
   statement). Without it `[bas_line]` at run time is the last line
   *compiled*, so a division by zero on line 3 of a thirty-line program would
-  be reported against line 30, and §126.7's rule that a refusal names its
+  be reported against line 30, and §150.7's rule that a refusal names its
   line would quietly stop being true.
 
 **`WHILE <cond>` … `WEND`** tests at the top, so a condition false on entry
@@ -243090,7 +243090,7 @@ that block opened.
 `ENDIF` and optionally split by `ELSE`. It shares everything with the
 one-line form up to the forward jump and differs only in who closes it: a
 statement on the line closes it there, an empty rest of line hands that job
-to a later line. This is what §126.19's whole-program compilation bought —
+to a later line. This is what §150.19's whole-program compilation bought —
 before it there was no later line to hand anything to. `ENDIF` is one word,
 GFA's spelling, not QuickBASIC's `END IF`.
 
@@ -243114,11 +243114,11 @@ them. `OP_JT` is `OP_JF`'s twin and exists for this one caller.
 Blocks nest eight deep, and a ninth, an unclosed one at the end of the
 program, or a `WEND` that closes a `FOR` are each refused by name.
 
-### 126.20 `ELSEIF`, and an arm's two kinds of pending jump
+### 150.20 `ELSEIF`, and an arm's two kinds of pending jump
 
 **`ELSEIF <cond> THEN`, one word and with a `THEN`.** GFA spells it `ELSE IF`
 and takes no `THEN` at all; this language's block `IF` already requires one
-(§126.18), so the arm keyword matches it rather than its ancestor, and a
+(§150.18), so the arm keyword matches it rather than its ancestor, and a
 missing `THEN` is refused in the same words `IF` uses. `ELSEIF` after `ELSE`
 is a mistake of its own and says so, rather than reporting the generic
 wrong-block refusal.
@@ -243134,7 +243134,7 @@ whole of the implementation:
   "none" without a second field.
 * the **finished-jump** at an arm's foot goes to the end of the whole
   construct, which no arm knows yet, and there is one per arm. Those are
-  §126.19's chain — each placeholder carries the offset of the one before it,
+  §150.19's chain — each placeholder carries the offset of the one before it,
   so the pending jumps are a list in the op stream and no table pays for
   them — and `ENDIF` walks it once, through the same `bas_blkexits` that
   closes a loop's `EXIT IF`s.
@@ -243145,7 +243145,7 @@ chain of `n` arms is `n` tests at worst and not `n` nested blocks. `ELSE` is
 the same code with the condition and the new `PAT` left out, which is how it
 came to be rewritten onto the chain rather than keeping its own patch slot.
 
-### 126.21 `SELECT`, which needed no new opcode
+### 150.21 `SELECT`, which needed no new opcode
 
 **The authority is GFA's own entry 228**, held locally at
 `_LIBRARY/languages/basic/gfa-basic/gfabasic.txt`, and the shape is its:
@@ -243164,25 +243164,25 @@ The three pairs of synonyms are **GFA's, not invented here**: the manual
 lists both halves of each and says the interpreter rewrites `OTHERWISE` to
 `DEFAULT` itself, so a listing from the oracle may carry either spelling and
 refusing one would refuse real GFA source. That is a different argument from
-§126.19's "one spelling is enough" for a bare `EXIT`, which no GFA program
+§150.19's "one spelling is enough" for a bare `EXIT`, which no GFA program
 can have been written against, because GFA has no bare `EXIT`.
 
 **It adds no opcode.** The subject goes into a variable no program can name —
 the same `bas_varhidden` entry `FOR` keeps its limit in — and every test is
 then `OP_LOAD`, the value's own ops, and one of `OP_EQ`/`OP_LE`/`OP_GE`.
-The branching is `OP_JT`, `OP_JF` and `OP_JMP`, all of which §126.19 and
-§126.20 already needed. **It costs one of the sixteen variables**, which is
+The branching is `OP_JT`, `OP_JF` and `OP_JMP`, all of which §150.19 and
+§150.20 already needed. **It costs one of the sixteen variables**, which is
 the one resource a `SELECT` spends that an `IF` chain does not.
 
 **The subject is evaluated ONCE**, which is the whole reason it is stored at
 all: `SELECT f(x)` over five arms must not call `f` five times, and that is
 a behavioural promise rather than an optimisation.
 
-**Two chains, for §126.20's two reasons.** An arm's no-match jump has one
+**Two chains, for §150.20's two reasons.** An arm's no-match jump has one
 destination — the next arm — so it lives in the entry's single `PAT` slot and
 each arm patches the one before it, with `DEFAULT` leaving it at 0. An arm's
 finished-jump goes to the `ENDSELECT` and there is one per arm, so those are
-§126.20's chain, walked by the same code. And a `CASE` adds a **third** kind:
+§150.20's chain, walked by the same code. And a `CASE` adds a **third** kind:
 a list has several matched-jumps with ONE destination, the body, which is not
 known until the last value has been parsed — so those are a chain too, local
 to the one `CASE` line, and `ENDSELECT` never sees it.
@@ -243205,7 +243205,7 @@ packed into a number) need strings, which are wave 3.
 `CASE` after `DEFAULT`, a second `DEFAULT`, and an `ENDIF` closing a `SELECT`
 or an `ENDSELECT` closing an `IF`.
 
-### 126.22 Labels and `GOTO`, and the one place the oracle is not followed
+### 150.22 Labels and `GOTO`, and the one place the oracle is not followed
 
 **A label is a name followed by a colon, at the start of a statement.** Its
 characters are letters, digits, `_` and `.`, and it **may begin with a
@@ -243250,7 +243250,7 @@ into a *different* loop at the same nesting depth is caught, which a depth
 count alone would not catch. When procedures arrive they extend this one
 word rather than adding a second rule.
 
-### 126.23 Procedures, and the frame
+### 150.23 Procedures, and the frame
 
 ```
 GOSUB name          @name          name          ' three spellings, one call
@@ -243270,7 +243270,7 @@ procedure called `PRIN` with a stray `3` after it.
 
 **A name not yet seen is the normal case**, procedures living after the main
 program, so an unresolved call waits in a pending table and is answered
-where the text ends — §126.22's mechanism, with its own refusal.
+where the text ends — §150.22's mechanism, with its own refusal.
 
 **Control cannot fall into a procedure body.** Each body is preceded by a
 jump over its `RETURN`, so a main program that runs off its own end steps
@@ -243303,7 +243303,7 @@ one, a second procedure of the same name, a call to a name the program never
 defines, the thirty-third frame and the sixty-fifth save. The frame limits
 are run-time refusals and name the line, like a division by zero.
 
-### 126.24 Parameters, and why the prologue runs backwards
+### 150.24 Parameters, and why the prologue runs backwards
 
 ```
 PROCEDURE area(w, h)
@@ -243317,7 +243317,7 @@ note — *"The parameter list given to a procedure or function are always
 local"* — so a parameter is a `LOCAL` that arrives with a value in it, and
 it needs no mechanism of its own: the prologue the compiler emits for
 `PROCEDURE` is one `OP_LOCAL` and one `OP_STORE` per parameter, which is
-§126.23's save stack doing exactly what it already does.
+§150.23's save stack doing exactly what it already does.
 
 **The prologue runs backwards.** The caller pushes its arguments left to
 right, so the LAST one is on top of the value stack, and the prologue must
@@ -243336,7 +243336,7 @@ table so the check happens where the name is resolved — the same place the
 undefined-procedure refusal lives. A procedure that takes none may still be
 called as `name()`.
 
-### 126.25 `FUNCTION`, which needed no opcode either
+### 150.25 `FUNCTION`, which needed no opcode either
 
 ```
 FUNCTION fact(n)
@@ -243352,7 +243352,7 @@ ENDFUNC
 an expression is a function call: the context decides, which is what GFA's
 two entries describe between them.
 
-**`OP_RETV` was predicted in §126.23 and is not needed.** A function's value
+**`OP_RETV` was predicted in §150.23 and is not needed.** A function's value
 is pushed by the expression after `RETURN`, and `OP_RET` touches the value
 stack not at all — so the value is simply still there when the caller's
 expression continues. The frame mechanism was already exactly right for a
@@ -243363,7 +243363,7 @@ been pinned before it was written.
 `ENDFUNC` does. A body that falls off its end returns **0** rather than
 whatever was on the stack — GFA's manual says of that case only *"expect
 unpredictable results if you reach this point"*, which is the second place
-this chapter declines to follow it (§126.22 is the first).
+this chapter declines to follow it (§150.22 is the first).
 
 **A `RETURN` with no value inside a `FUNCTION` is refused, and one WITH a
 value inside a `PROCEDURE` is refused too.** So is calling a procedure in an
@@ -243375,7 +243375,7 @@ resolved later is checked the same way.
 **Not here**: `~name(...)`, GFA's "call this function and throw the value
 away", and `DEFFN`'s single-line functions.
 
-### 126.26 `VAR`, and the one byte a forward call gets patched
+### 150.26 `VAR`, and the one byte a forward call gets patched
 
 ```
 sum(13, 12, a)                  ' the CALL looks ordinary - GFA's entry 238
@@ -243389,7 +243389,7 @@ place of a value, and the callee's prologue points the parameter AT it: a
 16-entry **alias table**, identity by default, which `OP_LOAD` and
 `OP_STORE` resolve through in one byte-read each. Copy-out would differ
 observably the moment a callee's callee also reads the caller's variable,
-which §126.23's dynamic scope makes easy to do.
+which §150.23's dynamic scope makes easy to do.
 
 **A reference passed ON hands over the ORIGINAL.** `OP_VREF` pushes what
 the name already resolves to, not the name's own index, so a `VAR`
@@ -243404,7 +243404,7 @@ extra. `OP_LOCAL` saves the pair and resets the alias to identity, which is
 what makes an ordinary local inside a procedure called by reference behave.
 
 **The hard part is that a call is compiled before the procedure is seen**,
-procedures living below their callers (§126.23), so the call site cannot
+procedures living below their callers (§150.23), so the call site cannot
 know which of its arguments are by reference. It does not have to: an
 argument that is a **bare variable name** is emitted as `OP_LOAD idx`, and
 the position of that opcode byte is remembered — in the pending record when
@@ -243423,7 +243423,7 @@ the wider survey of dialects, and entry 239 has no such keyword. Its effect
 is this language's default anyway: a variable a procedure does not declare
 `LOCAL` is the global one, and keeps its value between calls.
 
-### 126.27 `~` and `VOID`, which end wave 2
+### 150.27 `~` and `VOID`, which end wave 2
 
 ```
 ~@my_func(3)              ' work out the value and forget it
@@ -243434,7 +243434,7 @@ VOID @my_func(3)          ' ...the same thing, said at length
 spellings and they differ there only in arithmetic: `~` *"calculates an
 integer value before forgetting it, making it faster than VOID, which
 calculates a floating-point value"*. This language has one numeric path
-(§126.4), so the two are the same thing here — recorded because the
+(§150.4), so the two are the same thing here — recorded because the
 difference is real in the oracle and will matter if integer arithmetic ever
 arrives.
 
@@ -243445,11 +243445,11 @@ anything `bas_c_rel` can compile may be voided, which is one opcode
 With this, wave 2's list is complete: `IF`/`ELSEIF`, `SELECT`, `FOR`,
 `WHILE`, `DO`/`LOOP`, `REPEAT`/`UNTIL`, `EXIT IF`, `GOTO`, `PROCEDURE`,
 `FUNCTION`, `LOCAL`, recursion, `@proc`, `~func` and `VAR` — with `STATIC`
-ruled out as not GFA's (§126.26).
+ruled out as not GFA's (§150.26).
 
-### 126.28 Strings: a value is an offset and a length
+### 150.28 Strings: a value is an offset and a length
 
-Wave 3's first half. §126.4 names `$` as "a handle"; this is what the handle
+Wave 3's first half. §150.4 names `$` as "a handle"; this is what the handle
 is, and the answer is smaller than GFA's because of where this interpreter
 keeps everything.
 
@@ -243461,8 +243461,8 @@ not grow**: a string variable's offset and length live in the same eight
 bytes a number's double occupies.
 
 **The type is the name's spelling, so nothing on the value stack carries a
-tag.** §126.4 already requires `a$` and `a` to be different variables, and
-the table interns a name by *where it is in the program text* (§126.17), so
+tag.** §150.4 already requires `a$` and `a` to be different variables, and
+the table interns a name by *where it is in the program text* (§150.17), so
 they are already different entries. Every expression's type is therefore
 known at compile time, which is the whole reason this needs no run-time
 type word: the compiler emits string ops or numeric ops and they never meet.
@@ -243483,12 +243483,12 @@ The arena is one constant.
 **Two regions, growing towards each other.** Variables' strings from the
 bottom up; **temporaries from the top down**. Every temporary is released
 at once at each statement boundary, and that costs nothing to arrange
-because `OP_LINE` is already emitted once per statement (§126.19) and the
+because `OP_LINE` is already emitted once per statement (§150.19) and the
 value stack is empty between statements — so no temporary can be live across
 one. A concatenation allocates and nothing ever frees it individually.
 
 **A literal is not allocated at all.** The program text is stable for the
-whole of a run — the same fact §126.17's variable table already depends on —
+whole of a run — the same fact §150.17's variable table already depends on —
 and a string value is any `DS` offset, so a literal points *into the program
 text* where the lexer found it. No copy, and the quotation marks are not
 part of the value.
@@ -243515,17 +243515,17 @@ variable table.**
 **One compare opcode, not six.** `OP_SCMP` answers -1, 0 or 1 as an
 ordinary number, and the compiler then emits the numeric relation against
 zero — so `<`, `<=`, `>`, `>=`, `=` and `<>` on strings come free from
-§126.18's six, with the same TRUE-is--1 convention and no second table.
+§150.18's six, with the same TRUE-is--1 convention and no second table.
 
 **Byte order, not locale.** `"Z" < "a"` because `'Z'` is 90 and `'a'` is 97,
 and a shorter string that is a prefix of a longer one sorts first. That is
 QuickBASIC's rule and GFA's.
 
-### 126.29 The eight built-ins a program cannot be written without
+### 150.29 The eight built-ins a program cannot be written without
 
 Wave 3's second half. `LEN` `ASC` `VAL` answer numbers; `CHR$` `STR$`
 `LEFT$` `RIGHT$` `MID$` answer text. The other fifty-six of the reference's
-library are wave 5's, in the overlay (§126.3's architecture); these eight
+library are wave 5's, in the overlay (§150.3's architecture); these eight
 are here because the language is unusable without them and because
 `PRINT "5! is " + STR$(@fac(5))` is the shortest program anybody writes.
 
@@ -243549,7 +243549,7 @@ is the reference's behaviour and the opposite of this chapter's usual
 instinct to refuse. `fp_atof` already stops where the number stops, so the
 prefix rule is free; what is not free is that it reads to a terminator and a
 string here is counted, **so `VAL` copies its argument into the temporaries'
-region with a NUL after it** (§126.28) rather than letting the parser run
+region with a NUL after it** (§150.28) rather than letting the parser run
 off the end.
 
 **`STR$` keeps `PRINT`'s leading space**, which is QuickBASIC's rule and the
@@ -243568,13 +243568,13 @@ worse than a sentence: `CHR$(-1)` would otherwise write some byte and
 `ASC("")` would answer the code of whatever follows the string in the arena.
 
 **Every one of the five that answers text allocates a temporary**, so each
-is released at the statement boundary with everything else (§126.28), and
+is released at the statement boundary with everything else (§150.28), and
 none of them can alias into its own argument — which is the rule that keeps
 `a$ = MID$(a$, 2)` correct.
 
-### 126.30 `@` needs a NUL, and the arena is where it goes
+### 150.30 `@` needs a NUL, and the arena is where it goes
 
-Recorded here because it is a constraint on §126.28 discovered by reading
+Recorded here because it is a constraint on §150.28 discovered by reading
 `docs/plans/BASIC-BINDINGS-PLAN.md` §3 rather than by writing code, and it
 decides part of wave 4 before wave 4 starts.
 
@@ -243585,7 +243585,7 @@ exactly the duration of the call". Its §8 forbids the alternative in as many
 words — *"a `VARPTR` that reaches a kernel call ... is a bug with a long
 fuse"*.
 
-**Two facts about §126.28's strings make `@` cheap here and change what it
+**Two facts about §150.28's strings make `@` cheap here and change what it
 has to do.** The arena is in the package's own bss and cannot move, so the
 *segment* half of the problem the plan describes does not exist — but
 compaction moves strings *within* it, so the fuse is real. And a kernel call
@@ -243598,9 +243598,9 @@ hands over that. The lifetime is already exactly right: a temporary lives to
 the end of the statement, which is longer than one call, and the copy cannot
 be moved by a compaction because compaction only ever slides the variables'
 region. `LEN` is the companion the convention needs, which is why it is in
-§126.29 and not in wave 5 with the rest of the library.
+§150.29 and not in wave 5 with the rest of the library.
 
-### 126.31 Arrays
+### 150.31 Arrays
 
 ```basic
 DIM rows(8)                ' 0..8 - NINE slots, the index running from 0
@@ -243611,9 +243611,9 @@ PRINT LBOUND(rows), UBOUND(rows)
 ```
 
 **Status: numeric arrays shipped; string arrays are the second half** and
-carry §126.32's consequence with them.
+carry §150.32's consequence with them.
 
-**From the reference, as §126.29 was.** `DIM rows(8)` gives nine slots
+**From the reference, as §150.29 was.** `DIM rows(8)` gives nine slots
 because the index runs from 0 — and the reference's own advice about that is
 worth keeping where an implementer will read it: *"Find out once, per
 language, and then write loops that say what they mean."* `LBOUND` and
@@ -243630,12 +243630,12 @@ where a wrong answer would be indistinguishable from a right one, and an
 
 **`DIM` before use, so the compiler always knows.** The name decides
 everything at compile time: `a(3)` is an element where `a` has been
-`DIM`med and a procedure call where it has not (§126.23's three call
+`DIM`med and a procedure call where it has not (§150.23's three call
 spellings). A second `DIM` of one name is refused. That is what makes
-arrays cost no run-time type word, exactly as §126.28's strings do.
+arrays cost no run-time type word, exactly as §150.28's strings do.
 
 **One arena, eight bytes an element**, whatever the element is — a packed
-double uses all eight and a string uses the first four (§126.28's offset and
+double uses all eight and a string uses the first four (§150.28's offset and
 length). One size means one indexer and one bound; the four bytes a string
 element wastes buy the absence of a second allocator. 4,096 bytes, so 512
 elements across every array in a program, refused by name when the next
@@ -243646,9 +243646,9 @@ says loses the contents) and `ERASE` (which clears in place), a third
 dimension, `SWAP`, `LSET`/`RSET`, and `TYPE` records with their dotted
 names.
 
-### 126.32 A string array element is a second kind of root
+### 150.32 A string array element is a second kind of root
 
-§126.28's compaction walks the string variables, one owner per string, and
+§150.28's compaction walks the string variables, one owner per string, and
 slides the variables' region down over its garbage. **A string array element
 holds an arena offset too**, so it is a root of exactly the same kind and
 the walk has to cover it — an uncovered root is a string whose bytes move
@@ -243658,7 +243658,7 @@ chapter's waves.
 The design already allows for it: assignment copies, so an element owns its
 bytes alone, and the walk's rule — *repeatedly take the lowest root at or
 above the write pointer* — is indifferent to where a root lives. What
-changes is only the iteration, and §126.28's zero-length rule applies
+changes is only the iteration, and §150.28's zero-length rule applies
 unchanged: an element that owns no bytes is skipped, or the walk never
 terminates.
 
@@ -243666,7 +243666,7 @@ terminates.
 it the way the variables' version was found — a program that fills the arena
 and then reads a string that has moved.
 
-## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
+## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
 `docs/plans/SHELL-REPLACE-PLAN.md` and this chapter is the contract its wave
@@ -243677,7 +243677,7 @@ another one takes their place.
 abstraction over both: the dock and the desk get their own tables, so either
 can be swapped while the other stays stock.
 
-### 127.1 The model, and the boundary it sets
+### 151.1 The model, and the boundary it sets
 
 Windows 3.1 carried one line in `SYSTEM.INI`:
 
@@ -243700,7 +243700,7 @@ Here the furniture is the dock (§30) and the desk (§26), and `kernel/wm.inc`
 is `USER.EXE`. **A shell may not replace** the window manager, the menu bar,
 the clip region and damage machinery, the loader or the file system.
 
-### 127.2 The `SH` record
+### 151.2 The `SH` record
 
 `SYSTEM.CFG` is already key / ver / len / data with a **length byte**
 (§51.5), so a record carries a filename and the container generation does
@@ -243727,7 +243727,7 @@ The two names replace the literals in `kernel/mod.inc` — `mod_f_dock: db
 row already holds a POINTER to the name rather than inlining it, so the row
 shape does not change; only whether anything may write through that pointer.
 
-### 127.3 `dkv` — the dock's table, which already exists
+### 151.3 `dkv` — the dock's table, which already exists
 
 §30.5 and §30.7.7: fourteen far slots, `jmp far [dkv + x]`, a slot at rest
 holding `KERNEL_SEG:<basic body>`, the whole table taken at `mod_fp` entry 0
@@ -243736,7 +243736,7 @@ complete against every dock symbol the kernel names.
 
 **The dock needs nothing from this chapter but the name.**
 
-### 127.4 `dsv` — the desk's table, derived
+### 151.4 `dsv` — the desk's table, derived
 
 The desk layer is three files — `desk.inc` (zones, cells, drive icons),
 `desksc.inc` (§26.8's shortcuts) and `deskmod.inc` (`DESK.DRV`, §11.103.10's
@@ -243775,7 +243775,7 @@ nothing to catch it: `desk_ready`, `desk_zdirty`, and `desk_svc_file` /
 `stikmenu.inc` and `memory.inc` read). Publishing them is as much the
 contract as the thirteen slots are.
 
-### 127.5 The fallback, which is the safety property
+### 151.5 The fallback, which is the safety property
 
 **A named shell that will not load does not brick the machine.** Windows
 3.1's failure is `shell=` pointing at something broken: a bare screen, and
@@ -243793,7 +243793,7 @@ before this chapter, which is the gate the first wave is held to.
 The recovery procedure exists as well, and is §79.11's: `SYSTEM.CFG` is
 readable from any other machine.
 
-### 127.6 What it costs, and on which kernel
+### 151.6 What it costs, and on which kernel
 
 | | |
 |---|---|
@@ -243809,7 +243809,7 @@ does not quote (docs/KERNEL-MEMORY.md: measure, never quote).
 `kern_big`'s alone — a fixed bottom strip, no `DOCK.DRV` to load — and the
 desk's follows it, as `OS88_SHORTCUTS` and `DESK.DRV` already do.
 
-### 127.7 An abstraction with one implementation is a guess
+### 151.7 An abstraction with one implementation is a guess
 
 `dsv`'s shape is not proven by the built-in answering it: the built-in is
 what the table was traced from. **It is proven by a second implementation**,

@@ -1,7 +1,7 @@
 # BASIC's system bindings — the OS/8088 answer to GEM's call layer
 
 **Status: planned 2026-11-04. Nothing built.** Branch `basic-o88`. This is
-the tier B and tier C half of `BASIC-PLAN.md`; SPEC §126 is the contract.
+the tier B and tier C half of `BASIC-PLAN.md`; SPEC §150 is the contract.
 
 ## 1. The problem, stated precisely
 
@@ -172,7 +172,7 @@ Two things in tier A are **not** mappings and must be designed:
 **The menu array.** `MENU m$()` assigns meaning by position, and positions 3
 through 8 are six reserved slots for *desk accessories* — a GEM concept with
 nothing behind it here, and **with GFA source compatibility ruled out as a
-requirement (SPEC §126) this is no longer a decision: they go.** Six reserved
+requirement (SPEC §150) this is no longer a decision: they go.** Six reserved
 strings exist so that an operating system can fill them; this one fills
 nothing there, and keeping them would be keeping GEM's mechanism without GEM's
 purpose — which is what §8 below forbids.
@@ -216,7 +216,7 @@ in a `DIALOG` block later without changing the widgets underneath, whereas
 starting at 2 means designing a layout engine before anything can show a
 button. `DIALOG` is reserved from the start and means nothing yet, so the block
 can arrive without breaking a program; the call API is `DLG` with the verb
-after it. SPEC §126.12 is the contract and `BASIC-GUI-PLAN.md` §6 the summary.
+after it. SPEC §150.12 is the contract and `BASIC-GUI-PLAN.md` §6 the summary.
 
 **`FORM_DO` must not acquire a counterpart that pretends to be it** — a verb
 that looks like `FORM_DO` and takes a tree this OS cannot represent would be

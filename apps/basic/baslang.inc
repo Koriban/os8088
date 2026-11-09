@@ -1,9 +1,9 @@
 ; =============================================================================
 ; os8088 - apps/basic/baslang.inc
 ;
-; THE LANGUAGE (SPEC.md 126): the three stages, over IEEE-754 doubles.
+; THE LANGUAGE (SPEC.md 150): the three stages, over IEEE-754 doubles.
 ;
-; SPEC.md 126.1 keeps the reference implementation's stage boundaries, and not
+; SPEC.md 150.1 keeps the reference implementation's stage boundaries, and not
 ; out of deference: a stage boundary is where a differential test can be
 ; taken, so a port whose stages match can be checked one at a time against
 ; something that already works. This file is the first three of them -
@@ -14,9 +14,9 @@
 ; parentheses, unary minus, REM and '. One statement a line. That is all, and
 ; the gaps say so by name rather than guessing.
 ;
-; THE OP STREAM (SPEC.md 126.5) is the shape everything later plugs into. The
+; THE OP STREAM (SPEC.md 150.5) is the shape everything later plugs into. The
 ; compiler emits postfix, so the interpreter is a stack machine and its inner
-; loop is one dispatch on one byte - which is the whole reason 126.5 chose a
+; loop is one dispatch on one byte - which is the whole reason 150.5 chose a
 ; flat array over a tree for an 8086: a tree walk is a recursive descent
 ; through far pointers at run time.
 ;
@@ -25,7 +25,7 @@
 ; `cmp al, OP_x` / `je`, with the five binary ones grouped behind the
 ; operand-unpack prologue they share - which is also what makes a table
 ; awkward rather than obvious. It is honest at twelve; OP_ADD and OP_MUL are
-; at the BACK of it behind seven compares, and SPEC.md 126.5 now owes the
+; at the BACK of it behind seven compares, and SPEC.md 150.5 now owes the
 ; table to wave 2, where the op count stops making a chain defensible.
 ;
 ; `/` AND `\` ARE DIFFERENT OPERATORS and both work. `/` is real division -
@@ -33,7 +33,7 @@
 ; and `\` is integer division, which truncates both operands to a signed
 ; 16-bit INTEGER first, as every BASIC of this line does. Wave 1a shipped `/`
 ; REFUSED BY NAME rather than answering 3, because a wrong answer that looks
-; like a right one is the one thing SPEC.md 126.7's discipline exists to
+; like a right one is the one thing SPEC.md 150.7's discipline exists to
 ; prevent; wave 1c brought the numerics and the refusal went.
 ; =============================================================================
 
@@ -41,7 +41,7 @@
 OP_END      equ 0                   ; stop
 OP_PUSHN    equ 1                   ; + EIGHT bytes: a packed double, pushed
 
-; --- the value stack holds DOUBLES (SPEC.md 126.4) --------------------------
+; --- the value stack holds DOUBLES (SPEC.md 150.4) --------------------------
 ; Not 16-bit words. The reference implementation answers PRINT 1000*1000 with
 ; 1000000 and PRINT 7/2 with 3.5, so an integer stack would have had to refuse
 ; both - which wave 1a did, by name, saying the numerics were coming. They are
@@ -81,7 +81,7 @@ OP_MUL      equ 13
 OP_DIV      equ 14                  ; `/`, real division
 OP_IDIV     equ 15                  ; `\`, integer division
 ; ...and the six comparisons, which are binaries like any other: two slots in,
-; one out. SPEC.md 126's truth is QuickBASIC's - **-1 is TRUE and 0 is
+; one out. SPEC.md 150's truth is QuickBASIC's - **-1 is TRUE and 0 is
 ; FALSE** - so a comparison's answer is an ordinary number and `PRINT 1 < 2`
 ; says -1, which is what a program may then add, store or test.
 OP_EQ       equ 16
@@ -94,15 +94,15 @@ OP_CALL     equ 25                  ; + a word: call the procedure there
 OP_RET      equ 26                  ; ...and come back out of one
 OP_LOCAL    equ 27                  ; + an index byte: save that variable on
                                     ; the frame's share of the save stack and
-                                    ; zero it (SPEC.md 126.23)
+                                    ; zero it (SPEC.md 150.23)
 OP_VREF     equ 28                  ; + an index byte: push the INDEX, not the
                                     ; value - what a bare-variable argument's
                                     ; OP_LOAD is rewritten to when the
                                     ; parameter turns out to be VAR
 OP_ALIAS    equ 29                  ; + an index byte: pop an index and point
-                                    ; that variable at it (SPEC.md 126.26)
-OP_DROP     equ 30                  ; pop a value and forget it (126.27)
-; --- strings (SPEC.md 126.28): a value is a DS offset and a length --------
+                                    ; that variable at it (SPEC.md 150.26)
+OP_DROP     equ 30                  ; pop a value and forget it (150.27)
+; --- strings (SPEC.md 150.28): a value is a DS offset and a length --------
 OP_SPUSHL   equ 31                  ; + a word offset and a word length: a
                                     ; literal, pushed WHERE IT LIES in the
                                     ; program text - no copy
@@ -111,8 +111,8 @@ OP_SSTORE   equ 33                  ; + an index byte: pop and COPY into it
 OP_SCAT     equ 34                  ; pop two, join them in a temporary
 OP_SPRINT   equ 35                  ; pop and say it
 OP_SCMP     equ 36                  ; pop two, push -1/0/1 as a NUMBER, so
-                                    ; 126.18's six relations serve strings
-; --- the eight built-ins (SPEC.md 126.29) ---------------------------------
+                                    ; 150.18's six relations serve strings
+; --- the eight built-ins (SPEC.md 150.29) ---------------------------------
 OP_SLEN     equ 37                  ; pop text, push its length
 OP_SASC     equ 38                  ; pop text, push its first byte's code
 OP_SVAL     equ 39                  ; pop text, push the number at its front
@@ -121,7 +121,7 @@ OP_NSTR     equ 41                  ; pop a number, push it as text
 OP_SLEFT    equ 42                  ; pop n and text, push the first n
 OP_SRIGHT   equ 43                  ; ...the last n
 OP_SMID     equ 44                  ; pop n, start and text, push the slice
-; --- arrays (SPEC.md 126.31) ----------------------------------------------
+; --- arrays (SPEC.md 150.31) ----------------------------------------------
 OP_ALOAD    equ 45                  ; + an index byte: pop the subscripts,
                                     ; push that element
 OP_ASTORE   equ 46                  ; + an index byte: pop a value and the
@@ -133,7 +133,7 @@ OP_ASSTORE  equ 48                  ; + an index byte: pop TEXT and the
 OP_N        equ 49                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
-; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
+; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
 ; An entry does NOT hold the name. It holds where the name IS - an offset into
 ; bas_prog and a length - so a name may be any length and two long names
 ; cannot alias by sharing a prefix, which a fixed-width name field would make
@@ -149,7 +149,7 @@ BAS_VAR_SRC equ 0                   ; word: where the name is in bas_prog
 BAS_VAR_LEN equ 2                   ; word: how long it is
 BAS_VAR_VAL equ 4                   ; 8:    the value, packed (SPEC.md 84)
 BAS_VAR_SOFF equ 4                  ; ...or, for a `$` name, where its bytes
-BAS_VAR_SLEN equ 6                  ; are and how many: SPEC.md 126.28's
+BAS_VAR_SLEN equ 6                  ; are and how many: SPEC.md 150.28's
                                     ; four-byte value, inside the same eight,
                                     ; so the table does not grow
 BAS_VAR_SZ  equ 12
@@ -158,10 +158,10 @@ BAS_VAR_SZ  equ 12
 ; program, and it is REFUSED BY NAME when it fills rather than wrapping.
 BAS_STR_MAX equ 4096
 
-; --- arrays (SPEC.md 126.31) ----------------------------------------------
+; --- arrays (SPEC.md 150.31) ----------------------------------------------
 ; A name, its two dimensions' lower bound and count, how many dimensions it
 ; has, and where its elements start in bas_arena. TWO is the limit here; a
-; third is 126.31's "not here, and in this order when it is".
+; third is 150.31's "not here, and in this order when it is".
 BAS_ARR_MAX   equ 8
 BAS_ARR_SRC   equ 0
 BAS_ARR_LEN   equ 2
@@ -175,7 +175,7 @@ BAS_ARR_SZ    equ 16               ; a POWER OF TWO, so the indexer shifts
 
 BAS_ARR_BYTES equ 4096             ; 512 elements across the whole program
 
-; --- the OPEN BLOCKS, at compile time only (SPEC.md 126) --------------------
+; --- the OPEN BLOCKS, at compile time only (SPEC.md 150) --------------------
 ; WHILE..WEND, FOR..NEXT and the block IF all need two things remembered
 ; while their body is compiled: where to jump BACK to, and which forward
 ; word to patch once the end is known. One entry each, a stack because they
@@ -205,7 +205,7 @@ BK_DEFAULT equ 8
 BK_PROC  equ 9
 BK_FUNC  equ 10
 
-; --- labels and GOTO (SPEC.md 126.22) --------------------------------------
+; --- labels and GOTO (SPEC.md 150.22) --------------------------------------
 ; A label's name is kept as WHERE IT IS in bas_prog, for bas_vars' reason -
 ; the text is stable for the whole of a run, and a copy would be 16 more
 ; names to store. LOOP is the innermost loop's own top offset, unique per
@@ -229,7 +229,7 @@ BAS_FWD_LOOP equ 6
 BAS_FWD_LINE equ 8
 BAS_FWD_SZ   equ 10
 
-; --- procedures (SPEC.md 126.23) -------------------------------------------
+; --- procedures (SPEC.md 150.23) -------------------------------------------
 BAS_PRC_MAX  equ 8
 BAS_PRC_SRC  equ 0
 BAS_PRC_LEN  equ 2
@@ -252,7 +252,7 @@ BAS_CAL_FN   equ 10                 ; the procedure is seen later - and the
 BAS_CAL_SL   equ 12                 ; KIND the call site wanted, likewise;
 BAS_CAL_SZ   equ 20                 ; then one slot per argument, holding
                                     ; where its OPCODE byte is so a VAR
-                                    ; parameter can rewrite it (126.26)
+                                    ; parameter can rewrite it (150.26)
 
 ; A FRAME is two words and nothing else: where to come back to, and where
 ; this frame's saved variables begin. Thirty-two of them is the recursion
@@ -270,7 +270,7 @@ BAS_SAV_VAL  equ 2
 BAS_SAV_ALI  equ 10                 ; ...and what it was pointing AT
 BAS_SAV_SZ   equ 12
 
-; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
+; --- the register file (SPEC.md 150, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
 ; AES/VDI calling convention. This OS passes in REGISTERS over one flat space
 ; of 194 slots, so the whole of tier C is one verb and one small array.
@@ -318,14 +318,14 @@ bas_run:
     mov word [bas_line], 1
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
-    mov word [bas_narr], 0          ; ...no array DIMmed (SPEC.md 126.31),
+    mov word [bas_narr], 0          ; ...no array DIMmed (SPEC.md 150.31),
     mov word [bas_atop], 0          ; for the reason the variables go: an
     mov word [bas_abase], 0         ; entry keys on where its name is in a
     mov word [bas_adimd], 0         ; text the next RUN will have replaced,
                                     ; and a second DIM of one name is
                                     ; refused - so a program run twice
                                     ; refused itself the second time
-    mov word [bas_svtop], 0         ; ...and no text held (SPEC.md 126.28)
+    mov word [bas_svtop], 0         ; ...and no text held (SPEC.md 150.28)
     mov word [bas_sttop], BAS_STR_MAX
     mov word [bas_nlbl], 0          ; ...nor any label seen, for the reason
     mov word [bas_nprc], 0          ; the variables go below: an entry keys on
@@ -363,7 +363,7 @@ bas_run:
     ; **THE LINE NUMBER RIDES IN THE STREAM.** Compiling everything first
     ; means [bas_line] at RUN time is the last line COMPILED, so a division
     ; by zero on line 3 of a 30-line program would be reported against line
-    ; 30. OP_LINE puts it back: three bytes a statement, and SPEC.md 126.7's
+    ; 30. OP_LINE puts it back: three bytes a statement, and SPEC.md 150.7's
     ; rule that a refusal names its line keeps meaning what it says.
     mov al, OP_LINE
     call bas_emit
@@ -383,7 +383,7 @@ bas_run:
     cmp word [bas_nblk], 0          ; ...and nothing may still be open
     jne .unclosed
     call bas_fwdfix                 ; ...and every GOTO must have found its
-    cmp byte [bas_bad], 0           ; label (SPEC.md 126.22)
+    cmp byte [bas_bad], 0           ; label (SPEC.md 150.22)
     jne .done
     call bas_calfix                 ; ...and every call its procedure
     cmp byte [bas_bad], 0
@@ -411,7 +411,7 @@ bas_c_stmt:
     ; Making the entry point tolerant is what lets it be reentrant at all.
     call bas_skipsp
     ; **A LABEL IS PROBED BEFORE THE KEYWORDS**, because its name may be
-    ; anything at all - it may even begin with a digit (SPEC.md 126.22) -
+    ; anything at all - it may even begin with a digit (SPEC.md 150.22) -
     ; and what identifies it is the colon, not the name. The probe puts the
     ; cursor back when there is no colon, so an ordinary statement pays one
     ; scan of its first word for this.
@@ -540,14 +540,14 @@ bas_c_stmt:
     je .sendfunc
     mov si, bas_kw_void             ; VOID <expr>, and `~<expr>` below: GFA
     call bas_wordis                 ; has both and they differ there only in
-    je .void                        ; arithmetic (SPEC.md 126.27)
+    je .void                        ; arithmetic (SPEC.md 150.27)
     mov si, bas_kw_dim
     call bas_wordis
     je .dim
     mov si, bas_kw_option
     call bas_wordis
     je .option
-    ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
+    ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
     ; mistyped statement and then report the mistyped statement anyway -
@@ -560,7 +560,7 @@ bas_c_stmt:
     je .assign
     ; **AN ARRAY ELEMENT ASSIGNMENT COMES FIRST**, because `a(3) = 5` and a
     ; call `a(3)` are the same shape and only the name tells them apart
-    ; (SPEC.md 126.31).
+    ; (SPEC.md 150.31).
     mov al, [si]                    ; ...and AL IS LOADED HERE, not inherited:
                                     ; the line that loaded it for the bare-call
                                     ; test is BELOW this block, so the first
@@ -574,7 +574,7 @@ bas_c_stmt:
 .notelemst:
     ; **A BARE NAME IS A CALL ONLY IF NOTHING ELSE FOLLOWS IT**, which keeps
     ; `PRIN 3` the refusal it was rather than a call to a procedure called
-    ; PRIN with a stray 3 after it (SPEC.md 126.23).
+    ; PRIN with a stray 3 after it (SPEC.md 150.23).
     mov al, [si]
     or al, al
     jz .barecall
@@ -597,7 +597,7 @@ bas_c_stmt:
     cmp byte [si], '='
     jne .elemnoeq
     inc word [bas_src]
-    ; **THE ARRAY'S KIND DECIDES**, as a scalar's spelling does (126.28)
+    ; **THE ARRAY'S KIND DECIDES**, as a scalar's spelling does (150.28)
     call bas_isstrarr
     jc .elemnum
     call bas_c_str                  ; ...text, copied into the element
@@ -631,7 +631,7 @@ bas_c_stmt:
 
 .assign:
     inc word [bas_src]
-    ; **THE TARGET'S SPELLING DECIDES** (SPEC.md 126.28), so `a$ = ...` reads
+    ; **THE TARGET'S SPELLING DECIDES** (SPEC.md 150.28), so `a$ = ...` reads
     ; text and `a = ...` reads a number, and a mismatch is refused by name
     ; rather than storing one kind in the other's bytes.
     call bas_isstrname
@@ -670,7 +670,7 @@ bas_c_stmt:
     mov si, bas_e_stmt
     jmp bas_err
 
-; --- IF <cond> THEN <stmt> [ELSE <stmt>] (SPEC.md 126) ----------------------
+; --- IF <cond> THEN <stmt> [ELSE <stmt>] (SPEC.md 150) ----------------------
 ; ONE LINE. The block form - IF/THEN on a line of its own, ENDIF below it -
 ; spans STATEMENTS, and bas_run compiles and runs one statement at a time
 ; (it resets bas_opn per line), so a construct whose arms are other lines
@@ -706,7 +706,7 @@ bas_c_stmt:
     ; who closes it: a statement on this line closes it here, and an empty
     ; rest of line hands that job to ELSE or ENDIF, lines later. The block
     ; form is what wave 2d's whole-program compilation bought (SPEC.md
-    ; 126.19); before it there was no later line to hand anything to.
+    ; 150.19); before it there was no later line to hand anything to.
     call bas_skipsp
     mov si, [bas_src]
     mov al, [si]
@@ -774,7 +774,7 @@ bas_c_stmt:
 ; names - so the entry's PAT slot holds it and each arm patches the last
 ; one. The jump at the arm's FOOT goes to the end of the whole construct,
 ; which no arm knows, and there is one per arm; so those are the chain
-; EXIT IF already built (SPEC.md 126.19), threaded through their own
+; EXIT IF already built (SPEC.md 150.19), threaded through their own
 ; placeholders and walked once by ENDIF. An ELSE arm has no false-jump, and
 ; PAT = 0 says so - offset 0 is the program's first OPCODE and can never be
 ; a placeholder, which is what makes zero a usable "none" here.
@@ -800,9 +800,9 @@ bas_c_stmt:
     mov ax, [bas_blkex]
     jmp bas_blksetex
 
-; --- ELSEIF <cond> THEN: another arm (SPEC.md 126) -------------------------
+; --- ELSEIF <cond> THEN: another arm (SPEC.md 150) -------------------------
 ; GFA spells it `ELSE IF` and takes no THEN at all; this language's block IF
-; already requires THEN (SPEC.md 126.18), so it is one word here and takes
+; already requires THEN (SPEC.md 150.18), so it is one word here and takes
 ; one, and the refusals say so by name.
 .selseif:
     call bas_blkpop
@@ -848,7 +848,7 @@ bas_c_stmt:
 .elifelse:
     mov si, bas_e_elifelse
     jmp bas_err
-; --- DO ... LOOP [UNTIL c] and REPEAT ... UNTIL c (SPEC.md 126) ------------
+; --- DO ... LOOP [UNTIL c] and REPEAT ... UNTIL c (SPEC.md 150) ------------
 ; BOTH TEST AT THE BOTTOM, which is what distinguishes them from WHILE: the
 ; body always runs at least once. They are the same loop with two spellings
 ; - REPEAT/UNTIL is this line's, DO/LOOP is QuickBASIC's - and they share
@@ -857,7 +857,7 @@ bas_c_stmt:
 ;
 ; Neither opens a FORWARD jump, so there is nothing to patch: the block
 ; carries only where the top is, and the closing test jumps back to it.
-; --- EXIT IF <cond>: leave the innermost loop (SPEC.md 126) ----------------
+; --- EXIT IF <cond>: leave the innermost loop (SPEC.md 150) ----------------
 .exit:
     call bas_skipsp
     call bas_word                   ; EXIT IF, and IF is not optional - a
@@ -892,7 +892,7 @@ bas_c_stmt:
     jmp bas_err
 
 ; --- PROCEDURE / RETURN / LOCAL, and the three spellings of a call ---------
-; (SPEC.md 126.23)
+; (SPEC.md 150.23)
 .gosub:
     call bas_skipsp
     call bas_word                   ; A PROCEDURE'S NAME IS AN IDENTIFIER,
@@ -997,7 +997,7 @@ bas_c_stmt:
     ret
 .retfn:
     ; --- a FUNCTION's RETURN: a value, and it does NOT close the body.
-    ; **NO OP_RETV** (SPEC.md 126.25): the value is on the stack where the
+    ; **NO OP_RETV** (SPEC.md 150.25): the value is on the stack where the
     ; expression left it and OP_RET touches the stack not at all, so it is
     ; still there when the caller's expression goes on.
     call bas_skipsp
@@ -1079,7 +1079,7 @@ bas_c_stmt:
     mov si, bas_e_locname
     jmp bas_err
 
-; --- GOTO <label> (SPEC.md 126.22) ----------------------------------------
+; --- GOTO <label> (SPEC.md 150.22) ----------------------------------------
 .goto:
     call bas_skipsp
     call bas_lblword                ; DI = the name, CX = its length
@@ -1167,11 +1167,11 @@ bas_c_stmt:
     pop bx
     ret
 
-; --- SELECT <expr> / CASE / DEFAULT / ENDSELECT (SPEC.md 126.21) -----------
+; --- SELECT <expr> / CASE / DEFAULT / ENDSELECT (SPEC.md 150.21) -----------
 ; GFA's multi-way branch, and it needs NO NEW OPCODE: the subject is kept in
 ; a variable no program can name and every test is the comparison ops the
 ; expression compiler already emits. What it needs instead is a SECOND chain
-; beside 126.20's - a CASE may list several values and any of them enters the
+; beside 150.20's - a CASE may list several values and any of them enters the
 ; one body, whose address is not known until the last of them is parsed.
 .select:
     call bas_c_expr                 ; the subject, evaluated ONCE - a SELECT
@@ -1338,7 +1338,7 @@ bas_c_stmt:
     cmp byte [bas_bad], 0
     jne .x
     xor cx, cx                      ; DEFAULT opens no no-match jump, and
-    xor bx, bx                      ; 126.20's zero says so
+    xor bx, bx                      ; 150.20's zero says so
     mov ax, BK_DEFAULT
     call bas_blkpush
     jc .x
@@ -1376,7 +1376,7 @@ bas_c_stmt:
     mov al, OP_CLS
     jmp bas_emit
 
-; --- FOR v = a TO b [STEP n] ... NEXT [v] (SPEC.md 126) ---------------------
+; --- FOR v = a TO b [STEP n] ... NEXT [v] (SPEC.md 150) ---------------------
 ; THE INCREMENT IS EMITTED BEFORE THE TEST and jumped over on the way in:
 ;
 ;       v = a ; limit = b
@@ -1525,7 +1525,7 @@ bas_c_stmt:
     mov si, bas_e_then
     jmp bas_err
 
-; --- WHILE <cond> ... WEND (SPEC.md 126) ------------------------------------
+; --- WHILE <cond> ... WEND (SPEC.md 150) ------------------------------------
 ; The shape every loop here takes: the condition is re-tested at the TOP, so
 ; a WHILE whose condition is false at the start runs its body NO times, which
 ; is what distinguishes it from REPEAT. The jump back is emitted by WEND,
@@ -1577,17 +1577,17 @@ bas_c_stmt:
     mov al, [si]
     cmp al, "'"                     ; ' is REM, as it is in every BASIC here
     je .rem
-    cmp al, '@'                     ; ...and @name is a call (SPEC.md 126.23),
+    cmp al, '@'                     ; ...and @name is a call (SPEC.md 150.23),
     je .atcall                      ; which bas_word cannot have read: '@' is
                                     ; not a character a word may hold
-    cmp al, '~'                     ; ...nor is '~' (SPEC.md 126.27)
+    cmp al, '~'                     ; ...nor is '~' (SPEC.md 150.27)
     je .tilde
     mov si, bas_e_stmt
     jmp bas_err
 .rem:
     call bas_toeol                  ; the rest of the line is a comment
     ret
-; --- DIM name(size[,size]) (SPEC.md 126.31) ----------------------------
+; --- DIM name(size[,size]) (SPEC.md 150.31) ----------------------------
 ; THE ENTRY IS ALLOCATED FIRST AND FILLED AS THE SIZES ARE PARSED. The
 ; first draft of this carried four numbers on the stack through three calls
 ; and was unreadable by the time the second dimension was optional; the
@@ -1749,7 +1749,7 @@ bas_c_stmt:
     je .pbare
     ; **IT ASKS, IT DOES NOT DECIDE.** `PRINT "a" = "a"` begins with text
     ; and answers a NUMBER, so looking at the first token here printed the
-    ; first operand and left the comparison unread (SPEC.md 126.28).
+    ; first operand and left the comparison unread (SPEC.md 150.28).
     call bas_c_rel
     cmp byte [bas_bad], 0
     jne .x
@@ -1766,7 +1766,7 @@ bas_c_stmt:
     ret
 
 ; -----------------------------------------------------------------------------
-; bas_c_str - compile a STRING expression (SPEC.md 126.28)
+; bas_c_str - compile a STRING expression (SPEC.md 150.28)
 ;
 ; literal | $-name | ( ... ) | the lot joined by '+'. The type of every
 ; expression is known here, at compile time, from the names in it - which is
@@ -1821,7 +1821,7 @@ bas_c_sfact:
     je .b_mid
     ; a `$` ARRAY's element reads as text, and the same OP_ALOAD serves:
     ; an element is eight bytes and a string value is the first four of
-    ; them, so the copy onto the stack is already right (SPEC.md 126.31)
+    ; them, so the copy onto the stack is already right (SPEC.md 150.31)
     call bas_arrfind
     jc .nostrarr
     call bas_isstrarr
@@ -1851,7 +1851,7 @@ bas_c_sfact:
     inc word [bas_src]
     ret
 .lit:
-    ; **PUSHED WHERE IT LIES** (SPEC.md 126.28): the program text is stable
+    ; **PUSHED WHERE IT LIES** (SPEC.md 150.28): the program text is stable
     ; for the whole of a run, so a literal is an offset into it and the
     ; quotation marks are not part of the value.
     inc word [bas_src]
@@ -1950,7 +1950,7 @@ bas_c_sfact:
 ; --- MID$(s$, start [, n]) -------------------------------------------
 ; **A MISSING LENGTH IS 32767, PUSHED BY THE COMPILER**, so there is one
 ; opcode and not two: "to the end" is just a count no string can reach
-; (SPEC.md 126.28 caps the arena far below it), and the run-time clamp that
+; (SPEC.md 150.28 caps the arena far below it), and the run-time clamp that
 ; every other count goes through handles it with no special case.
 .b_mid:
     call bas_bopen
@@ -2019,7 +2019,7 @@ bas_wantnum:
 ; --- bas_bopen / bas_bcomma / bas_bclose - a built-in's punctuation -----
 ; out: CF=1 and refused by name. Three one-line routines rather than the
 ; same six instructions eight times over, which is what the first draft of
-; SPEC.md 126.29 had.
+; SPEC.md 150.29 had.
 bas_bopen:
     call bas_skipsp
     mov si, [bas_src]
@@ -2165,7 +2165,7 @@ bas_isstrahead:
 ; `a < (= b)` and refuse it for the wrong reason.
 ; -----------------------------------------------------------------------------
 bas_c_rel:
-    ; **A COMPARISON IS WHERE THE TWO KINDS MEET** (SPEC.md 126.28), and it
+    ; **A COMPARISON IS WHERE THE TWO KINDS MEET** (SPEC.md 150.28), and it
     ; is the only place they may: a string comparison compiles both sides as
     ; text, emits OP_SCMP for -1/0/1, and then runs the ordinary numeric
     ; relation against zero - so the six come free and TRUE is still -1.
@@ -2240,7 +2240,7 @@ bas_c_rel:
     jmp bas_emit
 
 ; --- bas_c_relop - the relation at the cursor; CL = its opcode ----------
-; THE TWO-CHARACTER FORMS ARE READ FIRST (SPEC.md 126.18), or `a <= b`
+; THE TWO-CHARACTER FORMS ARE READ FIRST (SPEC.md 150.18), or `a <= b`
 ; parses as `a < (= b)` and is refused for the wrong reason. Shared by the
 ; numeric path above and the string path at the top of this routine, which
 ; is why it is a routine at all.
@@ -2413,7 +2413,7 @@ bas_c_fact:
     mov si, bas_kw_fn               ; FN name(...), GFA's other spelling
     call bas_wordis
     je .fnword
-    ; --- the built-ins that answer a NUMBER (SPEC.md 126.29) -----------
+    ; --- the built-ins that answer a NUMBER (SPEC.md 150.29) -----------
     mov si, bas_kw_len
     call bas_wordis
     je .b_len
@@ -2429,7 +2429,7 @@ bas_c_fact:
     mov si, bas_kw_ubound
     call bas_wordis
     je .b_ubound
-    ; **AN ARRAY ELEMENT, AND THE NAME DECIDES** (SPEC.md 126.31): a(3) is
+    ; **AN ARRAY ELEMENT, AND THE NAME DECIDES** (SPEC.md 150.31): a(3) is
     ; an element where a has been DIMmed and a procedure call where it has
     ; not, which is what lets arrays cost no run-time type word.
     call bas_arrfind
@@ -2441,7 +2441,7 @@ bas_c_fact:
     mov si, bas_e_strtype
     jmp bas_err
 .notarray:
-    ; --- not a function, so a VARIABLE (SPEC.md 126.4, wave 2) -------------
+    ; --- not a function, so a VARIABLE (SPEC.md 150.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
     ; never assigned reads 0, which is what every BASIC of this line does -
     ; the entry is born zero in bas_varfind. OPTION EXPLICIT (126, decided,
@@ -2618,7 +2618,7 @@ bas_c_fact:
 ;
 ; THE TYPO IS STILL A BUG and this does not fix it: `totl = total + 1` makes a
 ; second variable rather than an error. That is the language's own behaviour
-; and SPEC.md 126's answer to it is OPTION EXPLICIT, which is decided and not
+; and SPEC.md 150's answer to it is OPTION EXPLICIT, which is decided and not
 ; yet built; when it is, it gates exactly this routine's create path.
 ; -----------------------------------------------------------------------------
 bas_varfind:
@@ -2847,7 +2847,7 @@ bas_exitshere:
 ; searched downwards rather than its top being assumed.
 ;
 ; This is bas_findloop plus the refusal. GOTO asks the same question and must
-; NOT refuse on a no (SPEC.md 126.22: outside every loop is a legal place to
+; NOT refuse on a no (SPEC.md 150.22: outside every loop is a legal place to
 ; be), so the search itself is the shared part.
 bas_blkinloop:
     call bas_findloop
@@ -2864,7 +2864,7 @@ bas_blkinloop:
 ; and a jump from one into the other must still be refused. A loop's own top
 ; offset is unique across the program, so it IS the identity.
 ;
-; **AND A PROCEDURE COUNTS TOO** (SPEC.md 126.23): GFA forbids a GOTO between
+; **AND A PROCEDURE COUNTS TOO** (SPEC.md 150.23): GFA forbids a GOTO between
 ; a procedure and the main program as firmly as one out of a FOR, and both
 ; sit at no loop at all. Outside a loop the answer is therefore the
 ; procedure's own number with the top bit set - an op offset cannot reach
@@ -2963,7 +2963,7 @@ bas_blkexits:
     ret
 
 ; -----------------------------------------------------------------------------
-; Labels and GOTO (SPEC.md 126.22)
+; Labels and GOTO (SPEC.md 150.22)
 ; -----------------------------------------------------------------------------
 
 ; --- bas_lblat / bas_fwdat - SI = entry BX of each table ------------------
@@ -3270,7 +3270,7 @@ bas_fwdfix:
     jmp .fdone
 
 ; -----------------------------------------------------------------------------
-; Procedures, compile side (SPEC.md 126.23)
+; Procedures, compile side (SPEC.md 150.23)
 ; -----------------------------------------------------------------------------
 bas_prcat:
     push ax
@@ -3450,9 +3450,9 @@ bas_emitzero:
     ret
 
 ; --- bas_callemit - emit a call to the procedure named by DI/CX ----------
-; in:  AL = 1 if the call site wants a VALUE back (SPEC.md 126.25)
+; in:  AL = 1 if the call site wants a VALUE back (SPEC.md 150.25)
 ; A name not yet seen is the NORMAL case, so this looks exactly like GOTO's
-; forward reference and shares its shape (SPEC.md 126.23).
+; forward reference and shares its shape (SPEC.md 150.23).
 bas_callemit:
     push ax
     push bx
@@ -3461,7 +3461,7 @@ bas_callemit:
     mov [bas_calfn], al             ; ...which kind this site can accept
     ; **THE VALUES ARE EMITTED FIRST**, before the OP_CALL, so they are on
     ; the stack when the callee's backwards prologue stores them
-    ; (SPEC.md 126.24). bas_callargs preserves the NAME in DI/CX.
+    ; (SPEC.md 150.24). bas_callargs preserves the NAME in DI/CX.
     call bas_callargs               ; DX = how many
     cmp byte [bas_bad], 0
     jne .cout
@@ -3539,7 +3539,7 @@ bas_callemit:
     jmp .cout
 
 ; --- bas_prcparams - the PROCEDURE's parameter list and its prologue ------
-; (SPEC.md 126.24) A parameter is a LOCAL that arrives with a value in it,
+; (SPEC.md 150.24) A parameter is a LOCAL that arrives with a value in it,
 ; so the prologue is one OP_LOCAL and one OP_STORE each and needs no new
 ; mechanism. It runs BACKWARDS: the caller pushes left to right, so the last
 ; parameter is on top of the value stack - which is why the whole list is
@@ -3721,7 +3721,7 @@ bas_callargs:
     push bx                         ; BARE VARIABLE IS RECOGNISED**: two
     call bas_c_rel                  ; bytes, the first an OP_LOAD. No
     pop bx                          ; parser change, and nothing else can
-    pop dx                          ; produce that shape (SPEC.md 126.26)
+    pop dx                          ; produce that shape (SPEC.md 150.26)
     cmp byte [bas_bad], 0
     jne .aout
     push bx
@@ -3958,7 +3958,7 @@ bas_savat:
     times 12 - BAS_SAV_SZ db 0
 
 ; --- bas_dosave - BX = a variable: push it on the save stack and zero it --
-; A LOCAL is exactly this (SPEC.md 126.23): the old value goes where RETURN
+; A LOCAL is exactly this (SPEC.md 150.23): the old value goes where RETURN
 ; will find it, and the new one is 0 - which GFA's manual notes its own
 ; original neglected to state.
 bas_dosave:
@@ -3977,7 +3977,7 @@ bas_dosave:
     mov al, [bas_alias + bx]        ; the alias is saved BESIDE the value and
     mov [di + BAS_SAV_ALI], al      ; restored with it, so a local inside a
     mov [bas_alias + bx], bl        ; procedure called by reference is its
-                                    ; own again (SPEC.md 126.26)
+                                    ; own again (SPEC.md 150.26)
     xor bx, bx                      ; ...and BX is the byte counter now: it
 .cp:                                ; is the only index register an 8086 can
     mov ax, [si + bx]               ; add to SI or DI, which is why vload and
@@ -4038,7 +4038,7 @@ bas_unsave:
     ret
 
 ; -----------------------------------------------------------------------------
-; Arrays, compile side (SPEC.md 126.31)
+; Arrays, compile side (SPEC.md 150.31)
 ; -----------------------------------------------------------------------------
 bas_arrat:
     push ax
@@ -4113,7 +4113,7 @@ bas_arrfind:
 ; in:  BX = which array. Emits the subscripts as ORDINARY EXPRESSIONS, in
 ;      order, so the element ops pop them in reverse.
 ; out: CF=1 and refused by name, including when the count disagrees with the
-;      DIM - which is 126.31's own refusal and not a silent reinterpretation.
+;      DIM - which is 150.31's own refusal and not a silent reinterpretation.
 bas_c_subs:
     ; **IT RE-ENTERS ITSELF**, and the first version did not survive that:
     ; `many(many(2))` compiles an inner subscript list in the middle of the
@@ -4259,7 +4259,7 @@ bas_dimone:
     ret
 
 ; -----------------------------------------------------------------------------
-; The string arena (SPEC.md 126.28)
+; The string arena (SPEC.md 150.28)
 ;
 ; TWO REGIONS GROWING TOWARDS EACH OTHER. Variables' bytes from the bottom
 ; up; temporaries from the top down, released ALL AT ONCE at each statement
@@ -4465,7 +4465,7 @@ bas_asub:
 ; --- bas_sarg1 - pop the top slot as a 16-bit count; out AX -------------
 ; in:  DI = one past the top slot. out: DI -= one slot, AX = the number,
 ;      CF=1 and refused by name if it is negative.
-; A count is a count: SPEC.md 126.29 clamps a count that is too LARGE and
+; A count is a count: SPEC.md 150.29 clamps a count that is too LARGE and
 ; refuses one that is negative, because a negative length is a program
 ; saying something it cannot mean.
 bas_sarg1:
@@ -4513,7 +4513,7 @@ bas_sayrun:
     ret
 
 ; --- bas_scmpbytes - SI/CX against BX/AX; out AX = -1, 0 or 1 -----------
-; BYTE ORDER, NOT LOCALE (SPEC.md 126.28): "Z" < "a" because 90 < 97, and a
+; BYTE ORDER, NOT LOCALE (SPEC.md 150.28): "Z" < "a" because 90 < 97, and a
 ; shorter string that is a prefix of a longer one sorts first.
 bas_scmpbytes:
     push bx
@@ -4560,7 +4560,7 @@ bas_scmpbytes:
     ret
 
 ; --- bas_isstrvar - is variable BX a `$` name? --------------------------
-; out: CF=0 if it is. THE TYPE IS THE SPELLING (SPEC.md 126.28), so this is
+; out: CF=0 if it is. THE TYPE IS THE SPELLING (SPEC.md 150.28), so this is
 ; the last character of the name where it sits in the program text, and no
 ; field in the entry says it.
 bas_isstrvar:
@@ -4571,7 +4571,7 @@ bas_isstrvar:
     call bas_varat
     mov cx, [si + BAS_VAR_LEN]
     or cx, cx
-    jz .isno                        ; a hidden entry (126.17) is a number
+    jz .isno                        ; a hidden entry (150.17) is a number
     mov si, [si + BAS_VAR_SRC]
     add si, cx
     dec si
@@ -4589,12 +4589,12 @@ bas_isstrvar:
     jmp .isout
 
 ; -----------------------------------------------------------------------------
-; Compaction's ROOTS (SPEC.md 126.32)
+; Compaction's ROOTS (SPEC.md 150.32)
 ;
 ; A root is a pointer to an (offset, length) WORD PAIR, and that is the only
 ; thing the walk needs to know about it - which is why one abstraction covers
 ; both kinds: a string variable's BAS_VAR_SOFF and BAS_VAR_SLEN are adjacent
-; words, and so are a string array element's first two. 126.28's four-byte
+; words, and so are a string array element's first two. 150.28's four-byte
 ; value earns its keep here.
 ;
 ; Root 0..BAS_VAR_MAX-1 are the variables. Above that they are the elements
@@ -4667,7 +4667,7 @@ bas_nroots:
 
 ; --- bas_rootat - root BX; out DI = its (offset,length) pair ------------
 ; out: AX = its arena-relative offset, or 0xFFFF for "owns no bytes" -
-;      not a string, never assigned, or EMPTY (126.28's rule, which the
+;      not a string, never assigned, or EMPTY (150.28's rule, which the
 ;      walk needs or it never terminates).
 bas_rootat:
     push bx
@@ -4764,7 +4764,7 @@ bas_svoff:
 
 ; --- bas_scompact - slide the variables' region down over its garbage ----
 ; ONE OWNER PER STRING is what makes this a slide and not a trace: an
-; assignment COPIES (SPEC.md 126.28), so no two variables share bytes. The
+; assignment COPIES (SPEC.md 150.28), so no two variables share bytes. The
 ; roots are therefore the string variables, one each, and the walk is
 ; "repeatedly take the lowest one not packed yet" - sixteen variables, so
 ; two passes of sixteen rather than a sort.
@@ -4818,7 +4818,7 @@ bas_scompact:
     jmp .who
 .move:
     ; DI = the (offset, length) pair, wherever it lives - a variable's
-    ; entry or an array element (SPEC.md 126.32), and the walk does not
+    ; entry or an array element (SPEC.md 150.32), and the walk does not
     ; care which
     mov cx, [di + 2]
     push di
@@ -4855,7 +4855,7 @@ bas_donejmp:
     ret
 
 ; --- bas_casejt - the same, as a jump-if-TRUE -----------------------------
-; A CASE's matched-jumps are a chain for 126.20's reason one construct along:
+; A CASE's matched-jumps are a chain for 150.20's reason one construct along:
 ; several of them, one destination, and the destination not known yet.
 bas_casejt:
     push cx
@@ -5008,7 +5008,7 @@ bas_exec:
     mov si, bas_ops
     mov di, bas_stk                 ; DI = the stack pointer, growing up
 .next:
-    ; ONE INDEXED JUMP (SPEC.md 126.5), not a run of compares. The chain this
+    ; ONE INDEXED JUMP (SPEC.md 150.5), not a run of compares. The chain this
     ; replaces tested in emission order, so OP_ADD and OP_MUL - which every
     ; expression runs - were reached last, after seven compares and then the
     ; operand prologue. This is the same cost whichever op it is.
@@ -5176,7 +5176,7 @@ bas_exec:
     mov ax, [si]
     mov [bas_line], ax
     add si, 2
-    ; **AND EVERY TEMPORARY GOES WITH IT** (SPEC.md 126.28). The value stack
+    ; **AND EVERY TEMPORARY GOES WITH IT** (SPEC.md 150.28). The value stack
     ; is empty between statements, so nothing can be holding one; releasing
     ; them all here is what keeps a concatenation from ever needing to be
     ; freed on its own, and it costs one store on an op that was already
@@ -5184,7 +5184,7 @@ bas_exec:
     mov word [bas_sttop], BAS_STR_MAX
     jmp .next
 
-; --- OP_JF / OP_JMP: the branch (SPEC.md 126) -------------------------------
+; --- OP_JF / OP_JMP: the branch (SPEC.md 150) -------------------------------
 ; The operand is a word - an offset into bas_ops - and a FORWARD one is
 ; patched by the compiler once the arm it skips has been emitted
 ; (bas_patch). OP_JF pops its condition.
@@ -5230,7 +5230,7 @@ bas_exec:
     add si, bas_ops
     jmp .next
 
-; --- OP_CALL / OP_RET / OP_LOCAL (SPEC.md 126.23) --------------------------
+; --- OP_CALL / OP_RET / OP_LOCAL (SPEC.md 150.23) --------------------------
 ; A FRAME IS TWO WORDS: where to come back to, and where this frame's share
 ; of the one save stack begins. Recursion is then free - it is what a stack
 ; of frames already is - and RETURN is a run of pops down to the mark.
@@ -5285,7 +5285,7 @@ bas_exec:
 
 ; --- OP_VREF: push the INDEX of a variable, not its value ---------------
 ; An ordinary number, so the value stack needs no second kind of slot and
-; nothing else in the interpreter learns about references (SPEC.md 126.26).
+; nothing else in the interpreter learns about references (SPEC.md 150.26).
 .vrefop:
     cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
     jae .over
@@ -5336,7 +5336,7 @@ bas_exec:
     sub di, BAS_SLOT
     jmp .next
 
-; --- the string ops (SPEC.md 126.28) --------------------------------------
+; --- the string ops (SPEC.md 150.28) --------------------------------------
 ; A string on the value stack is the slot's FIRST TWO WORDS: a DS offset and
 ; a length. The other four bytes of the slot are not read, and no slot says
 ; which kind it holds - the compiler knows every expression's type from the
@@ -5352,7 +5352,7 @@ bas_exec:
     add di, BAS_SLOT
     jmp .next
 
-; **A READ TAKES A COPY**, and that is not an accident (SPEC.md 126.28).
+; **A READ TAKES A COPY**, and that is not an accident (SPEC.md 150.28).
 ; Pushing the variable's own offset would put a reference to the VARIABLES'
 ; region on the value stack - and an allocation later in the same expression
 ; may compact that region and slide those bytes out from under it. Copying
@@ -5397,7 +5397,7 @@ bas_exec:
     jmp .done
 
 ; **THE STORE COPIES THE BYTES**, which is what gives every arena string
-; exactly one owner and makes compaction a slide (SPEC.md 126.28).
+; exactly one owner and makes compaction a slide (SPEC.md 150.28).
 .sstore:
     cmp di, bas_stk + BAS_SLOT
     jb .under
@@ -5474,7 +5474,7 @@ bas_exec:
     pop bx
     jmp .done
 
-; --- the eight built-ins at run time (SPEC.md 126.29) --------------------
+; --- the eight built-ins at run time (SPEC.md 150.29) --------------------
 ; Each of the five that answers text ALLOCATES A TEMPORARY, which is what
 ; makes `a$ = MID$(a$, 2)` correct: the result cannot alias its own source.
 .slen:
@@ -5509,7 +5509,7 @@ bas_exec:
     mov si, bas_e_ascempty
     jmp bas_err
 
-; **A COPY WITH A NUL AFTER IT** (SPEC.md 126.29): fp_atof reads to a
+; **A COPY WITH A NUL AFTER IT** (SPEC.md 150.29): fp_atof reads to a
 ; terminator and a string here is counted, so the parser would run off the
 ; end of the last one in the arena.
 .sval:
@@ -5727,7 +5727,7 @@ bas_exec:
     pop bx
     jmp .done
 
-; --- the array ops (SPEC.md 126.31) --------------------------------------
+; --- the array ops (SPEC.md 150.31) --------------------------------------
 ; **THE BOUNDS CHECK IS THE POINT.** An 8086 has none of its own, and a
 ; subscript one past the end would read or write whatever the arena holds
 ; next - another array, or the string region - so it is refused by name with
@@ -5799,7 +5799,7 @@ bas_exec:
     pop bx
     jmp .done
 
-; **AN ELEMENT OWNS ITS BYTES** (SPEC.md 126.28's one-owner rule, which is
+; **AN ELEMENT OWNS ITS BYTES** (SPEC.md 150.28's one-owner rule, which is
 ; what makes compaction a slide): a string on the value stack is a literal
 ; or a temporary, and a temporary dies at the end of the statement - so
 ; storing the pair without copying would leave the element pointing at bytes
@@ -5891,7 +5891,7 @@ bas_exec:
     pop bx
     jmp .next
 
-; **-1, 0 or 1 AS A NUMBER** (SPEC.md 126.28), so 126.18's six relations
+; **-1, 0 or 1 AS A NUMBER** (SPEC.md 150.28), so 150.18's six relations
 ; serve strings with no second table and no second convention.
 .scmp:
     cmp di, bas_stk + 2*BAS_SLOT
@@ -5924,7 +5924,7 @@ bas_exec:
     jne .done
     jmp .next
 
-; --- the six comparisons, as ONE body (SPEC.md 126) -------------------------
+; --- the six comparisons, as ONE body (SPEC.md 150) -------------------------
 ; .binary leaves the opcode in BX - it is the word it indexed bas_bintab with
 ; - so the operator is still in hand here and six bodies collapse to one
 ; table of masks. fp_cmpab answers -1, 0 or 1 and keeps both accumulators;
@@ -5958,7 +5958,7 @@ bas_exec:
     call fp_i2a
     jmp .store
 
-; --- OP_LOAD / OP_STORE: a scalar variable (SPEC.md 126.4) ------------------
+; --- OP_LOAD / OP_STORE: a scalar variable (SPEC.md 150.4) ------------------
 ; The index is one byte in the op stream, resolved at compile time, so neither
 ; of these searches. EIGHT BYTES BY HAND rather than `rep movsb`, for the
 ; reason OP_PUSHN carries: movsb writes to ES:DI and ES is the KERNEL'S
@@ -5975,7 +5975,7 @@ bas_exec:
     mov bl, [bas_alias + bx]        ; ...which variable that REALLY is: the
                                     ; table is identity but where a VAR
                                     ; parameter points at the caller's
-                                    ; (SPEC.md 126.26)
+                                    ; (SPEC.md 150.26)
     push si                         ; ...and the op cursor, out of the way
     call bas_varat                  ; SI = the entry
     add si, BAS_VAR_VAL
@@ -6087,7 +6087,7 @@ bas_exec:
     mov si, bas_e_deep
     jmp bas_err
 
-; --- the dispatch tables (SPEC.md 126.5) ------------------------------------
+; --- the dispatch tables (SPEC.md 150.5) ------------------------------------
 ; One row per opcode, IN OPCODE ORDER, and the two `times` pairs under each
 ; make a missing or spare row a build error: add an op, forget its row, and
 ; the jump would otherwise land on whatever word follows the table - which
@@ -6293,13 +6293,13 @@ bas_word:
     ; not as it: `i2` is a name and `2` is a number, and bas_c_fact tells
     ; them apart by the first character alone, so a word that could start
     ; with a digit would swallow every literal in the language. Letters only
-    ; is what this read until SPEC.md 126.26's row wanted a procedure called
+    ; is what this read until SPEC.md 150.26's row wanted a procedure called
     ; `outer2`, which was refused as "not a statement this wave knows" - the
     ; dispatch had read `outer` and found `2` where it wanted `(`.
     or cx, cx
     jz .end
     cmp al, '$'                     ; **A SIGIL ENDS A NAME AND IS PART OF
-    je .sigil                       ; IT** (SPEC.md 126.4, 126.28): `a$` and
+    je .sigil                       ; IT** (SPEC.md 150.4, 150.28): `a$` and
                                     ; `a` are different variables, and the
                                     ; table interns a name by where it is in
                                     ; the program text, so they are already
@@ -6431,7 +6431,7 @@ bas_emit:
 ; in:  A = the value; out: nothing; clobbers AX/BX/CX/DX/SI/DI
 ;
 ; SEVEN significant digits, which is what the reference prints and therefore
-; what this must: a bare literal is a SINGLE (SPEC.md 126.4), SINGLE arithmetic
+; what this must: a bare literal is a SINGLE (SPEC.md 150.4), SINGLE arithmetic
 ; stays SINGLE, and seven digits is what a SINGLE is worth. Checked against it
 ; rather than chosen - `PRINT 1/3` is ` .3333333 ` there, not sixteen digits.
 ;
@@ -6439,7 +6439,7 @@ bas_emit:
 ; fp_ftoa does not know, so it is trimmed here. And the sign's place and the
 ; trailing separator are QuickBASIC's, as bas_sayint already does them.
 ;
-; This computes in DOUBLE and prints seven digits, where SPEC.md 126.4 says a
+; This computes in DOUBLE and prints seven digits, where SPEC.md 150.4 says a
 ; SINGLE must also NARROW to 32 bits on every store. There is no store yet -
 ; wave 1c has no variables - so the two agree on every value a program can
 ; currently produce. The narrowing is owed when `!` variables arrive.
@@ -6497,7 +6497,7 @@ bas_sayint:
     ret
 
 ; --- bas_err - SI = a NUL reason. Say it with the line number and stop -------
-; SPEC.md 126.7's discipline: a refusal is reported BY NAME, with its reason,
+; SPEC.md 150.7's discipline: a refusal is reported BY NAME, with its reason,
 ; at the line that has it - never as a wrong answer and never silently.
 bas_err:
     push si

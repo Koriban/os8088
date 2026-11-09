@@ -468,7 +468,7 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           "\\": ("backslash", 0),
           # ...and the comparisons, for the same reason
           "<": ("comma", 1), ">": ("dot", 1),
-          # ...and what a program needs to hold TEXT (SPEC.md 126.28): the
+          # ...and what a program needs to hold TEXT (SPEC.md 150.28): the
           # quotation mark around a literal and the sigil that makes a name
           # a string one. US layout again - shift-apostrophe and shift-4.
           '"': ("apostrophe", 1), "$": ("4", 1)}

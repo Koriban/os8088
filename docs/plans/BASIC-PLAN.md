@@ -5,7 +5,7 @@ it and `BASIC/nw` is the TypeScript reference it is measured against.
 
 **Status: wave 0 complete 2026-11-04 (0a frame, 0b console, 0c editor);
 12,753 of 65,024 bytes, 19.6%.** Branch `basic-o88`. The diary is
-`docs/HOW-BASIC-WAS-BUILT.md`; SPEC.md §126 is the contract.
+`docs/HOW-BASIC-WAS-BUILT.md`; SPEC.md §150 is the contract.
 
 BASIC/nw is a QuickBASIC 4.5-line structured BASIC with a complete
 implementation in TypeScript at `~/Src/Prj_8086/basicnw/` — a lexer, parser,
@@ -22,7 +22,7 @@ of the 43 spellings BASIC/nw refuses, 26 refuse nothing this OS lacks.
 **The goal is not a BASIC that runs. It is a BASIC you can write OS/8088
 applications in** — GUI or text — which is what GFA-BASIC was on the ST.
 
-**It is GFA's SHAPE that is wanted, not its substance** (SPEC §126). What is
+**It is GFA's SHAPE that is wanted, not its substance** (SPEC §150). What is
 being copied is that a BASIC can be an operating system's application
 language: three tiers of reach with the raw one first, and an event loop the
 programmer pumps in plain sight. What is not being copied is its keywords, its
@@ -146,7 +146,7 @@ measured rather than asserted.
 
 AMOS is the outlier and the useful one: 745 names, **419 instructions against
 211 functions**, plus two embedded sub-languages (47 `Interface Instruction`s,
-10 `AMAL Instruction`s). Nothing of that shape belongs in §126, but it is the
+10 `AMAL Instruction`s). Nothing of that shape belongs in §150, but it is the
 richest catalogue in the set of *what a BASIC can be asked to do*.
 
 **The 218 GFA-only names divide, and most are already answered:**
@@ -156,7 +156,7 @@ richest catalogue in the set of *what a BASIC can be asked to do*.
 | GEM bindings | 76 | no counterpart — one `OSAPI` verb replaces the lot (§0.4) |
 | graphics | 33 | tier A, `BASIC-GUI-PLAN.md` wave G6 |
 | windows, menus, events | 21 | tier A, waves G1–G4 |
-| TOS and hardware | 12 | refused, SPEC §126.7 |
+| TOS and hardware | 12 | refused, SPEC §150.7 |
 | the `MAT` sublanguage | 6 | declined — a library, not a language |
 | **language-level** | **70** | **the real work, and the only group needing a decision each** |
 
@@ -174,7 +174,7 @@ agree.** Nine of the twelve were not previously recorded, and two of those
 outrank everything in `BASIC-PORTING-NOTES.md`:
 
 - **`TYPE`** is a *function* in GFA (returns a variable's type code) and a
-  *record declaration* here. One parser cannot have both; §126 should say
+  *record declaration* here. One parser cannot have both; §150 should say
   which wins, and it is almost certainly the record, since `FIELD` and random
   access depend on it.
 - **`STORE`** is GFA's "write a string array to a channel" — and BASIC/nw
@@ -183,7 +183,7 @@ outrank everything in `BASIC-PORTING-NOTES.md`:
   up the four-keyword design.
 
 Also worth acting on: **`INP` is a channel read in GFA and a hardware port
-here**, so §126.7's refusal should name the port explicitly or a GFA
+here**, so §150.7's refusal should name the port explicitly or a GFA
 programmer will read it as refusing their file I/O.
 
 The older framing, kept because it is still true: A shared
@@ -207,7 +207,7 @@ directives. Positions, to be revisited rather than assumed:
   `REPEAT`/`UNTIL`, `SWITCH`, `EXIT IF`, `LOCAL`.
 - **decline**: the `MAT` sublanguage (a library, not a language), `SPRITE`
   (the OS composites differently), `LINE-A` (no analogue).
-- **decide**: `INLINE`. It is §126.7's question wearing different clothes.
+- **decide**: `INLINE`. It is §150.7's question wearing different clothes.
 
 ### 0.4 GFA's tiers B and C are GEM-shaped; what they map to here
 
@@ -284,7 +284,7 @@ them is what keeps the language safe:
 | the need | the tool | |
 | --- | --- | --- |
 | give the kernel a buffer | **`@obj`** | pin-and-pass: the interpreter computes the address, pins the object, makes the call, unpins. The **program never sees a number** |
-| get data out of, or into, your own buffer | **`FIELD buf, n AS f$, …`**, then the `CV*`/`MK*` pair | `FIELD` takes a buffer as well as a channel now (SPEC §126.16), so a kernel structure is read by **name** — `CVL(sz$)` rather than `CVL(MID$(ent$, 19, 4))`, and 19 is the kind of number that outlives the structure it describes |
+| get data out of, or into, your own buffer | **`FIELD buf, n AS f$, …`**, then the `CV*`/`MK*` pair | `FIELD` takes a buffer as well as a channel now (SPEC §150.16), so a kernel structure is read by **name** — `CVL(sz$)` rather than `CVL(MID$(ent$, 19, 4))`, and 19 is the kind of number that outlives the structure it describes |
 | refer to a kernel object | **an opaque integer handle** | `OPENW 1` and tier B's `BX = win ptr` are handles to pass back, never to dereference |
 
 **So I was wrong to call this an argument from necessity.** An earlier draft of
@@ -297,7 +297,7 @@ What would be left for an **address-taking** `PEEK` and `POKE` is therefore
 exactly **memory that is not yours** — video RAM, kernel records, hardware.
 
 **That question is closed, and not in the way this section first framed it**
-(SPEC §126.7, §126.11). `POKE` is dropped with its name kept reserved. `PEEK`
+(SPEC §150.7, §150.11). `POKE` is dropped with its name kept reserved. `PEEK`
 is **kept**, and points somewhere else entirely: it reads the *running
 program* rather than an address, so it is not in this group at all and never
 was a pointer tool. Neither of the two takes an address, which is why the
@@ -448,11 +448,11 @@ kernel owns it** — not *the machine cannot*.
   which this language spells `INPUT$`/`CV*` and `EMIT`/`MK*` already, so the
   refusal message names `INPUT$` as well as the port.
 - **Kept, and pointed elsewhere**: `PEEK` and `WAIT`. `WAIT` was the sixth of
-  the group until §126.15 gave it the ordinary meaning of the word — `WAIT`
+  the group until §150.15 gave it the ordinary meaning of the word — `WAIT`
   yields once, `WAIT KEY` yields until a keystroke is waiting — which also
-  answers the hole §126.8 leaves, a text-mode program having no `ON MENU` loop
+  answers the hole §150.8 leaves, a text-mode program having no `ON MENU` loop
   to yield in. **`SLEEP` waits for time, `WAIT` waits for the machine.** It was the seventh of that group
-  until SPEC §126.11 gave the spelling a different job — reading the running
+  until SPEC §150.11 gave the spelling a different job — reading the running
   program's own variables rather than an address. `PEEK(1047)` is still
   refused by name; `PEEK$("total")` is the language.
 - **Refuse while true, revisit by name**: `LPRINT` (until PRINT-PLAN lands),
@@ -470,7 +470,7 @@ error and never as a type mismatch blamed on the author.
 Reordered for the §0 target. The old order built a language and reached the OS
 at the end; this one reaches the OS in wave 1 and is a usable tool from wave 4.
 
-**Wave 0 — the seam.** §126 written. `BASIC.O88` is a window with a menu bar,
+**Wave 0 — the seam.** §150 written. `BASIC.O88` is a window with a menu bar,
 an `os88text.inc` editor, an `os88con.inc` output pane and a `RUN` that does
 nothing. Proves the UI, the overlay seam and the size budget before any
 language work. Exit: it builds, opens, types, and `make` reports image+bss.
@@ -487,7 +487,7 @@ nothing else.
 with ranges and lists, `FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP` both ends,
 `REPEAT`/`UNTIL`, `EXIT IF`, labels and `GOTO`, `PROCEDURE`/`FUNCTION` with
 `LOCAL`, recursion, values by value and **by reference** (`VAR`), `@proc`
-and `~func`/`VOID`. SPEC.md §126.19-§126.27 are the contract and
+and `~func`/`VOID`. SPEC.md §150.19-§150.27 are the contract and
 `docs/HOW-BASIC-WAS-BUILT.md` the account; `basiclang` and `basiclang2` are
 the rows.
 
@@ -497,18 +497,18 @@ guessing. **`SELECT CASE` is QuickBASIC's spelling and not GFA's** — entry
 `OTHERWISE` and `ENDSWITCH` as its own synonyms. And **`STATIC` is not
 GFA's at all**: entry 239 has only `LOCAL`, the pairing here came from the
 wider dialect survey, and its effect is this language's default anyway
-(§126.26).
+(§150.26).
 
 **Wave 3 — strings and arrays. MOSTLY DONE.** Gap 3 (the string heap) is
-closed: SPEC.md §126.28 is the string model, §126.29 the eight built-ins a
-program cannot be written without, §126.31 arrays numeric and string, and
-§126.32 the compaction root an array element is. `DIM` with `a TO b`, two
+closed: SPEC.md §150.28 is the string model, §150.29 the eight built-ins a
+program cannot be written without, §150.31 arrays numeric and string, and
+§150.32 the compaction root an array element is. `DIM` with `a TO b`, two
 dimensions, `OPTION BASE`, `LBOUND`/`UBOUND`.
 
 Still open in it, in this order: `REDIM` (which loses the contents) and
 `ERASE` (which clears in place), a third dimension, `SWAP`, `LSET`/`RSET`,
 `TYPE` records with their dotted names, and `BYTE`/`WORD` — which want the
-type system §126.4 describes and nothing yet builds. The other 56 built-ins
+type system §150.4 describes and nothing yet builds. The other 56 built-ins
 are wave 5's, in the overlay.
 
 **Wave 4 — the event loop and tier A windows.** The wave that makes it GFA.
@@ -546,7 +546,7 @@ table.
 *line* and departs from it on purpose — the four channel keywords,
 `DEF PROC`/`DEF FUN`, fixed `RND`/`TIMER`, IEEE-754 `MKS$`, no immediate mode —
 so accepting QuickBASIC source is a courtesy and **no QuickBASIC program is a
-specification for this language** (SPEC §126.9).
+specification for this language** (SPEC §150.9).
 
 `reference/gorillas/gorilla.bas` is a **sample**, and a useful one: 1,135 lines
 of real-world QuickBASIC is good evidence about what programs of this kind
@@ -588,12 +588,12 @@ buffer and read it back off a BMP export.
    that never calls it never yields and does not need to.
 2. ~~**`PEEK`, `POKE` and `INLINE`**~~ — **decided, except `INLINE`.**
 
-   **`POKE` is dropped, its name kept reserved** (SPEC §126.7): refused by
+   **`POKE` is dropped, its name kept reserved** (SPEC §150.7): refused by
    name with its reason, not freed as a variable and not quietly absent.
-   §126.7's permanent group is **six** now — `POKE`, `VARPTR`, `DEF SEG`,
+   §150.7's permanent group is **six** now — `POKE`, `VARPTR`, `DEF SEG`,
    `OUT`, `INP`, `WAIT`.
 
-   **`PEEK` is kept and points somewhere else** (SPEC §126.11). It no longer
+   **`PEEK` is kept and points somewhere else** (SPEC §150.11). It no longer
    reads an address; it reads the *running program* — a variable, a constant,
    an array element, a record field — and gives back the value.
    `PEEK$(name$)` renders any type as text, `PEEK(name$)` answers for the

@@ -2,7 +2,7 @@
 
 **Status: reference, 2026-11-04. NOT a requirement.** Branch `basic-o88`.
 
-**GFA compatibility is not a goal** (SPEC §126): what is wanted from GFA is
+**GFA compatibility is not a goal** (SPEC §150): what is wanted from GFA is
 its shape — a BASIC that an operating system's applications are written in —
 and not its substance. If its substance were the goal, porting GFA itself
 would be the honest course.
@@ -12,7 +12,7 @@ nothing in it obliges BASIC/8088 to do anything. Its real value is the second
 one: it is the clearest statement anywhere of how far the two languages
 actually are apart, which is worth knowing before borrowing an idea from one
 into the other. Companion to `BASIC-PLAN.md`, `BASIC-GUI-PLAN.md` and SPEC
-§126.
+§150.
 
 Everything below was checked against the manuals in
 `_LIBRARY/languages/basic/gfa-basic/` and, where it concerns BASIC/nw, by
@@ -90,7 +90,7 @@ legal and means exactly what it reads.
 ### 2.1 `VAR` is taken, and means something else here
 
 `VAR` is **not** a reserved word in BASIC/nw, and the name has been claimed for
-BASIC.O88's **declaration** keyword — `VAR count AS INTEGER`, SPEC §126.13 —
+BASIC.O88's **declaration** keyword — `VAR count AS INTEGER`, SPEC §150.13 —
 which is the sense Pascal and most languages since have used it in, and which
 reads better than `DIM`-ing a scalar.
 
@@ -132,9 +132,9 @@ screen statement you wanted.
 ## 5. What is refused, and what that costs
 
 Six spellings are refused permanently — `POKE`, `VARPTR`, `DEF SEG`, `OUT`,
-`INP`, `WAIT` (SPEC §126.7) — because an 8086 has no MMU and a cooperative
+`INP`, `WAIT` (SPEC §150.7) — because an 8086 has no MMU and a cooperative
 kernel cannot hand out arbitrary writes. `PEEK` keeps its name for
-introspection instead (§126.11), so **`PEEK(address)` is refused by name** and
+introspection instead (§150.11), so **`PEEK(address)` is refused by name** and
 a program that reads memory has to be rethought rather than translated.
 
 `INLINE` is undecided. `PALETTE` is refused per adapter, being real on VGA and
@@ -157,7 +157,7 @@ map to nothing because a window already has a surface.
 
 The dialog family — `RSRC_LOAD`, `FORM_DO`, `OBJC_*`, `TEDINFO`, `ICONBLK` —
 has no counterpart. Dialogs are built by calls here (`DLG NEW`, `DLG BUTTON`,
-`DLG RUN`; SPEC §126.12), so a resource-driven dialog is rewritten rather than
+`DLG RUN`; SPEC §150.12), so a resource-driven dialog is rewritten rather than
 ported.
 
 ## 7. Menus

@@ -6617,9 +6617,9 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
 
-# BASIC (SPEC.md 126): the language as a package. WAVE 0 is the SEAM - the
+# BASIC (SPEC.md 150): the language as a package. WAVE 0 is the SEAM - the
 # window, the two panes, the menu bar and the command path, and no language at
-# all. The size this prints is the baseline SPEC.md 126.6's overlay split is
+# all. The size this prints is the baseline SPEC.md 150.6's overlay split is
 # decided against: the interpreter has to fit beside sixty-four built-ins, an
 # editor and a console in one 63.5KB segment, and that arithmetic is worth
 # nothing until the empty frame has been measured.
@@ -7232,7 +7232,7 @@ $(BUILD)/wire.img: $(BUILD)/wire.o88 tools/os88disk.py
 $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/wire.o88
 
-# --- BASIC's disk (SPEC.md 126) ----------------------------------------------
+# --- BASIC's disk (SPEC.md 150) ----------------------------------------------
 # WIREFRAME's shape above and for the same reason: BASIC does not ship yet
 # (apps/RETIRED.txt's `building` line), so no shipped floppy carries it and
 # there has to be somewhere to LOOK at it.

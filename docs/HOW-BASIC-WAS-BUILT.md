@@ -1,6 +1,6 @@
 # How BASIC was built
 
-The diary for SPEC.md §126 and `docs/plans/BASIC-PLAN.md`. Written as the work
+The diary for SPEC.md §150 and `docs/plans/BASIC-PLAN.md`. Written as the work
 happens, for later reuse: decisions, constraints, discoveries, pictures and
 measured results, with observations kept apart from intentions.
 
@@ -20,7 +20,7 @@ sentence reordered everything, because GFA's value was never its keyword count
 but its three tiers of access to the machine, and a binding project that builds
 those in the wrong order stalls.
 
-Four documents came out of it before any code: SPEC.md §126 (the contract, 14
+Four documents came out of it before any code: SPEC.md §150 (the contract, 14
 subsections), `BASIC-PLAN.md` (the language), `BASIC-BINDINGS-PLAN.md` (tiers
 B and C — the OS/8088 answer to GEM's call layer), `BASIC-GUI-PLAN.md` (tier A,
 the keywords) and `BASIC-PORTING-NOTES.md` (what GFA source needs changed).
@@ -48,7 +48,7 @@ whole of tier C collapses to one verb. **Tier C gets smaller, not larger.**
 
 ## Wave 0 — the seam
 
-**What it is for.** §126.6 splits the interpreter across `BASIC.O88` and
+**What it is for.** §150.6 splits the interpreter across `BASIC.O88` and
 `BASIC.OVL` on the arithmetic that it cannot fit beside sixty-four built-ins,
 an editor and a console in one 63.5KB segment. That arithmetic is worth nothing
 until the empty frame has been measured, so wave 0 builds the frame and
@@ -93,7 +93,7 @@ chip / BASIC / File / Run, a framed **Program** pane above and a framed
 the glass. Picking Run → Run writes
 
 ```
-No interpreter yet - wave 0 is the seam (SPEC.md 126)
+No interpreter yet - wave 0 is the seam (SPEC.md 150)
 ```
 
 into the output pane, which is the smallest thing that proves a menu pick
@@ -152,7 +152,7 @@ that is the teletype's own business.
 appends one more, scrolling:
 
 ```
-BASIC for os8088 - SPEC.md 126
+BASIC for os8088 - SPEC.md 150
 Wave 0b: the console pane is real.
 Ready
 No interpreter yet - wave 0 is the seam.
@@ -212,7 +212,7 @@ left for the language.** Out of that the numerics still have to come —
 of code — so call it **~49KB for the lexer, the parser, the compiler, the op
 interpreter, the string heap and sixty-four built-ins**.
 
-That is the arithmetic §126.6's overlay split was asserted on before anyone had
+That is the arithmetic §150.6's overlay split was asserted on before anyone had
 measured it, and it holds: it does not fit, and the split is not optional. What
 the numbers add is *where* to cut. The resident side has to carry the window,
 the editor, the console, the lexer and the op interpreter — the inner loop and
@@ -225,7 +225,7 @@ compiler, the double formatter, `PRINT USING` and the built-in library go to
 Scanner, compiler and interpreter, in `apps/basic/baslang.inc`: `PRINT` of an
 integer expression with `+ - *` and `\`, parentheses, unary minus, `REM`, `'`
 and `END`. The compiler emits **postfix into a flat op stream** and the
-interpreter is a stack machine, which is §126.5's shape and the reason for it —
+interpreter is a stack machine, which is §150.5's shape and the reason for it —
 on an 8086 the inner loop is one dispatch where a tree walk would be a
 recursive descent through far pointers at run time.
 
@@ -368,7 +368,7 @@ The grep behind the original claim searched for
 `fp_fmt|fp_tostr|fp_str|fp_parse|fp_fromstr`, matched SHEET's thunk names and
 nothing in the include — because the routines are called **ftoa** and **atof**.
 *A name you did not think of reads as a thing that is not there.* The plan and
-§126 are corrected.
+§150 are corrected.
 
 ### Two defects, one caught by reading and one by running
 
@@ -402,7 +402,7 @@ arithmetic stays SINGLE; and **no leading zero** — BASIC prints `.3333333`,
 not `0.3333333`, which `fp_ftoa` does not know and `bas_sayfp` trims.
 
 One simplification stated rather than hidden: this computes in double and
-prints seven digits, where §126.4 requires a SINGLE to **narrow to 32 bits on
+prints seven digits, where §150.4 requires a SINGLE to **narrow to 32 bits on
 every store**. There is no store yet — wave 1c has no variables — so the two
 agree on every value a program can currently produce. The narrowing is owed
 when `!` variables arrive.
@@ -439,7 +439,7 @@ layout, the same thirty-three keystrokes typed into the editor:
 | with the fix | ` 36` |
 | the layout as it shipped | `-2.668453E+307` |
 
-A wrong answer that looks like an answer, which is the one thing §126.7's
+A wrong answer that looks like an answer, which is the one thing §150.7's
 discipline exists to prevent, in the layer that discipline is about.
 
 **The fix is not the `*BAS_SLOT`.** The chain is laid out twice now: once as
@@ -488,7 +488,7 @@ drew the text box straight over it. The card now takes the keystroke too.
 `bas_e_slash`, `bas_e_over` with the `.over` label that was its only caller,
 and `bas_s_norun` — **256 bytes of image**, none of it reachable.
 
-The text was worse than the code. The **About card** still read *"SPEC.md 126
+The text was worse than the code. The **About card** still read *"SPEC.md 150
 — wave 0, the seam"* and the **startup banner** *"Wave 0b: the console pane
 is real"*, four waves after both stopped being true, on the two surfaces a
 user actually reads. `baslang.inc`'s header stated *"`/` IS REFUSED BY NAME"*
@@ -505,14 +505,14 @@ has to be edited every wave, and it was not.
 
 ### Three claims the documents made and the code did not
 
-- **The indexed jump.** §126.5, `BASIC-PLAN.md` and `baslang.inc`'s own
+- **The indexed jump.** §150.5, `BASIC-PLAN.md` and `baslang.inc`'s own
   header all promised `jmp [table + bx]`. `bas_exec` has always been a
   compare chain — twelve ops, the five binary ones grouped behind the
   operand-unpack prologue they share, which is also what makes the table
   awkward rather than obvious. Honest at twelve, and `OP_ADD`/`OP_MUL`, which
   every expression runs, sit at the back behind seven compares. All three now
-  say so, and §126.5 owes the table to wave 2.
-- **`BASIC.OVL`.** §126.6 described the split in the present tense. There is
+  say so, and §150.5 owes the table to wave 2.
+- **`BASIC.OVL`.** §150.6 described the split in the present tense. There is
   no overlay; the package is 19,283 of 65,024 and the wall is not in sight.
   The section now says what it fixes is *where* the cut goes.
 - **"Fills the slot's own registers."** `BASIC-BINDINGS-PLAN.md` §3 said the
@@ -523,7 +523,7 @@ has to be edited every wave, and it was not.
   order, wrong for the rest: the shape of defect that looks like it works.
   The plan now documents the real rule and owes the per-slot list to tier B.
 
-One finding was **retracted**. §126.8's *"one verb taking a slot number"*
+One finding was **retracted**. §150.8's *"one verb taking a slot number"*
 looked like a divergence from a gateway that far-calls a raw offset, until
 §20.1 settled it: *a slot is a pinned address*, and this project calls
 `0x0068` a slot number. The code matches the contract.
@@ -583,7 +583,7 @@ procedures, and not one of them works without a variable to loop on or
 compare. So this is the floor: `x = 7`, `y = x * 6`, `PRINT y`, and the
 answer on the console is **42**.
 
-The design is in SPEC.md 126.17. The one choice worth repeating here is that
+The design is in SPEC.md 150.17. The one choice worth repeating here is that
 **an entry does not hold the name** — it holds an offset into the program
 text and a length. A fixed-width name field would quietly make two long
 names one variable; comparing against the program's own text cannot. It also
@@ -644,7 +644,7 @@ bss = 20,079 of 65,024, 30.9%.**
 ### Owed from here
 
 The op dispatch is still a compare chain and wave 2 has just added two more
-ops to it; SPEC.md 126.5 owes the indexed jump, and it should land before
+ops to it; SPEC.md 150.5 owes the indexed jump, and it should land before
 the control-flow ops rather than after, as its own verified step. And the
 row that runs a program and compares the answer — which would have caught
 all three of the above without a human driving QEMU — still waits on a
@@ -652,7 +652,7 @@ system disk.
 
 ## Wave 2b — the indexed jump, and the first `\` this language ever ran
 
-SPEC.md 126.5 promised `jmp [table + bx]` for three waves and `bas_exec` was
+SPEC.md 150.5 promised `jmp [table + bx]` for three waves and `bas_exec` was
 a run of compares the whole time; wave 2a added two more ops to it. So the
 table came before the control-flow ops rather than after, as its own step.
 
@@ -761,7 +761,7 @@ neither could `WHILE` or `UNTIL`.
 
 `= <> < > <= >=`, binding looser than all arithmetic, answering **-1 for
 true and 0 for false** — an ordinary number, so `PRINT 1 < 2` prints -1.
-SPEC.md 126.18 is the contract. Three details worth keeping:
+SPEC.md 150.18 is the contract. Three details worth keeping:
 
 - the six comparisons are **one body**, not six. They are binaries like any
   other, and `.binary` leaves the opcode in BX, so the operator is still in
@@ -817,14 +817,14 @@ The change the loops needed, and the reason they could not exist before:
 op stream per line. Nothing can jump backwards over statements that no
 longer exist. So `bas_run` compiles the lot and then runs it, and `WHILE`,
 `FOR` and eventually the block `IF` all follow from that one paragraph
-(SPEC.md 126.19).
+(SPEC.md 150.19).
 
 Two things came with it that are contract rather than detail. The op stream
 must now hold the whole program (4KB, and one too big is refused by name).
 And **the line number has to ride in the stream** — `OP_LINE`, three bytes a
 statement — because `[bas_line]` at run time is otherwise the last line
 *compiled*: a division by zero on line 3 of a thirty-line program would have
-been reported against line 30, and 126.7's rule that a refusal names its
+been reported against line 30, and 150.7's rule that a refusal names its
 line would have quietly stopped being true.
 
 `WHILE`/`WEND` tests at the top. `FOR`/`NEXT` evaluates its limit **once**,
@@ -1067,7 +1067,7 @@ The third thing was a gap rather than a defect. `GOTO`'s legality rule asks
 so a `GOTO` from a procedure into the main program was allowed, which GFA
 forbids as firmly as jumping out of a `FOR`. Outside a loop the answer is
 now the procedure's own number with the top bit set: an op offset cannot
-reach `0x8000`, so the two kinds of answer cannot collide, and §126.22's one
+reach `0x8000`, so the two kinds of answer cannot collide, and §150.22's one
 word still carries the whole rule.
 
 And the row's expectations had to learn execution order. Every part until now
@@ -1100,7 +1100,7 @@ the duplication would have bitten next.
 
 ## `FUNCTION`, and an opcode that had been pinned before it was written
 
-§126.23 promised four opcodes and three were enough. `OP_RETV` was going to
+§150.23 promised four opcodes and three were enough. `OP_RETV` was going to
 pop the value, restore the frame and push the value back — and `OP_RET`
 touches the value stack **not at all**, so a function's value is simply
 still there when the caller's expression continues. The frame mechanism was
@@ -1185,7 +1185,7 @@ resolve through in one byte-read each. It is saved and restored beside the
 value in each save record, so `OP_LOCAL` resets it and recursion through a
 `VAR` parameter costs nothing extra. True reference semantics rather than
 copy-in-copy-out, which would differ observably the moment a callee's callee
-also reads the caller's variable — easy to do under §126.23's dynamic scope,
+also reads the caller's variable — easy to do under §150.23's dynamic scope,
 and the row has that case.
 
 The first run of it got `25` and `16` — GFA's own entry-238 example and its
@@ -1264,7 +1264,7 @@ occupies in the variable table, so **the table did not grow**.
 
 Three things fell out of facts the package already had.
 
-**The type is the name's spelling.** §126.4 already requires `a$` and `a` to
+**The type is the name's spelling.** §150.4 already requires `a$` and `a` to
 be different variables, and the table interns a name by *where it is in the
 program text* — so they were already different entries, and giving a name a
 type meant one change to the scanner. The compiler therefore knows every
@@ -1402,7 +1402,7 @@ which settled four things I would have guessed:
 * `CHR$` out of 0..255 and `ASC("")` are refused by name, because the
   reference does not say and either guess is worse than a sentence.
 
-Reading the two plans first — which I had never opened — paid twice. §126.30
+Reading the two plans first — which I had never opened — paid twice. §150.30
 exists because of it: the bindings plan's `@` operator hands a *buffer* to a
 kernel call, and a kernel call wants a **NUL-terminated** string in the
 caller's own segment while a BASIC string is counted and may contain a NUL.
@@ -1484,7 +1484,7 @@ left in AL. A stale register has no name — the same shape as the orphaned
 where it should always have been.
 
 **And the array table was not reset per run**, so the second part to `DIM a`
-was refused as a duplicate. §126.17 says this about the variable table in as
+was refused as a duplicate. §150.17 says this about the variable table in as
 many words — an entry keys on where its name is in a text the next `RUN`
 will have replaced — and the array table is the same shape. Four words
 added beside the four that were already there.
@@ -1527,14 +1527,14 @@ it failed.
 ## String arrays, and the root that was pinned first
 
 `DIM m$(3)`, elements read and assigned, used in expressions and passed to
-the built-ins. It cost **one opcode**, and the reason is §126.28's
+the built-ins. It cost **one opcode**, and the reason is §150.28's
 representation: an element is eight bytes and a string value is the first
 four of them, so `OP_ALOAD` copies the right thing already and only the
 *store* needed a sibling — `OP_ASSTORE`, which allocates in the variables'
 region and copies, because a string on the value stack is a literal or a
 temporary and a temporary dies at the end of the statement.
 
-**§126.32's root cost less than writing it down did.** A root is a pointer
+**§150.32's root cost less than writing it down did.** A root is a pointer
 to an (offset, length) **word pair**, and that is all the walk needs to know
 about it — so one abstraction covers both kinds, because a string variable's
 `BAS_VAR_SOFF` and `BAS_VAR_SLEN` are adjacent words and so are an
@@ -1548,7 +1548,7 @@ The part that proves it is three lines: fill the string arena from a
 elements back. If the walk did not cover them, their bytes have moved and
 those lines print rubbish. They print `File`, `Edit`, `Help`.
 
-Writing §126.32 before the code was the right call for a reason I did not
+Writing §150.32 before the code was the right call for a reason I did not
 expect: it made the *representation* the design, so by the time the code was
 written there was nothing to decide. The three defects the variables'
 version cost were all in the interaction between allocation and compaction,
