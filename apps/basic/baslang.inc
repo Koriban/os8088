@@ -138,7 +138,12 @@ OP_SWAP     equ 50                  ; + TWO index bytes: exchange two
 OP_ASWAP    equ 51                  ; + TWO index bytes: exchange two arrays'
                                     ; TWELVE descriptor bytes - not sixteen,
                                     ; the first four being the name's place
-OP_N        equ 52                  ; how many there are, table included
+; --- LSET and RSET (SPEC.md 150.35) --------------------------------------
+OP_LSET     equ 52                  ; + an index byte: pop text and justify it
+OP_RSET     equ 53                  ; ...LEFT or RIGHT inside that string's
+                                    ; EXISTING length, which never changes -
+                                    ; so neither of them allocates
+OP_N        equ 54                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -564,6 +569,12 @@ bas_c_stmt:
     mov si, bas_kw_swap
     call bas_wordis
     je .swap
+    mov si, bas_kw_lset             ; node [164], and its one sentence: "the
+    call bas_wordis                 ; actual content of a$ is irrelevant:
+    je .lset                        ; only its length is significant"
+    mov si, bas_kw_rset
+    call bas_wordis
+    je .rset
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -1932,6 +1943,54 @@ bas_c_stmt:
     jmp bas_err
 .swapmix:
     mov si, bas_e_swapmix
+    jmp bas_err
+
+; --- LSET / RSET a$ = b$ (SPEC.md 150.35) -------------------------------
+; ONE BODY, and which opcode it ends in is decided before the parse starts,
+; because that is the only thing the two spellings differ in.
+.lset:
+    mov al, OP_LSET
+    jmp short .lsetgo
+.rset:
+    mov al, OP_RSET
+.lsetgo:
+    push ax                         ; [1] the opcode, through the parse
+    call bas_skipsp
+    call bas_word
+    jc .lsetnotstr
+    call bas_isstrname              ; CF=0 when the name ends in '$'
+    jc .lsetnotstr
+    call bas_varfind                ; AX = its index
+    jc .lsetpop1
+    push ax                         ; [2] ...the index, through the value
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '='
+    jne .lsetnoeq
+    inc word [bas_src]
+    call bas_c_str                  ; the text to justify
+    cmp byte [bas_bad], 0
+    jne .lsetpop2
+    pop bx                          ; [2] the index...
+    pop ax                          ; [1] ...and the opcode
+    call bas_emit                   ; bas_emit preserves BX
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, bl
+    jmp bas_emit
+.lsetpop2:
+    pop ax
+.lsetpop1:
+    pop ax
+    ret
+.lsetnotstr:
+    pop ax
+    mov si, bas_e_lsetstr
+    jmp bas_err
+.lsetnoeq:
+    pop ax
+    pop ax
+    mov si, bas_e_lseteq
     jmp bas_err
 .x:
     ret
@@ -6430,6 +6489,92 @@ bas_exec:
     ; test can fail gets a check that can.
     times BAS_ARR_LO0 - 4 db 0
     times 4 - BAS_ARR_LO0 db 0
+
+; --- OP_LSET / OP_RSET (SPEC.md 150.35) ---------------------------------
+; NEITHER ALLOCATES. The field's length does not change, so the bytes are
+; written where they already are and no arena work and no compaction can
+; follow - which is also why a zero-length a$ is a no-op rather than an
+; error. A source can never overlap the field: a slice allocates a
+; temporary and copies into it (bas_stmpalloc), a literal lies in the
+; program text, and every other string owns its bytes alone (150.28).
+.lsetop:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    xor ax, ax                      ; AL = 0: justify LEFT
+    jmp short .lsetrun
+.rsetop:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    mov ax, 1                       ; AL = 1: justify RIGHT
+.lsetrun:
+    sub di, BAS_SLOT                ; DI = the source slot, and it is spent
+    push bx
+    push cx
+    push dx
+    push di                         ; [A] the value stack pointer
+    push si                         ; [B] the op cursor
+    push ax                         ; [C] which of the two
+    mov dx, [di + 2]                ; the source's length...
+    mov bx, [di]                    ; ...and where its bytes are
+    push bx                         ; [D]
+    mov bl, [si]
+    xor bh, bh
+    mov bl, [bas_alias + bx]        ; VAR's indirection, as OP_SSTORE's
+    call bas_varat                  ; SI = the entry (and SI is clobbered)
+    mov cx, [si + BAS_VAR_SLEN]     ; CX = THE FIELD'S WIDTH, which is the
+    mov di, [si + BAS_VAR_SOFF]     ; whole of what a$ contributes
+    pop si                          ; [D] SI = the source's bytes
+    pop ax                          ; [C]
+    cmp dx, cx
+    jbe .lsn
+    mov dx, cx                      ; LONGER THAN THE FIELD: the first CX of
+.lsn:                               ; it, one rule for both (SPEC.md 150.35)
+    or al, al
+    jnz .rsetbody
+    xor bx, bx                      ; --- LEFT: the bytes, then spaces ----
+.lsb:
+    cmp bx, dx
+    jae .lsp
+    mov al, [si + bx]
+    mov [di + bx], al
+    inc bx
+    jmp short .lsb
+.lsp:
+    mov al, ' '
+.lsps:
+    cmp bx, cx
+    jae .lsdone
+    mov [di + bx], al
+    inc bx
+    jmp short .lsps
+.rsetbody:
+    sub cx, dx                      ; --- RIGHT: spaces, then the bytes ---
+    xor bx, bx                      ; CX = the padding, and the width is not
+    mov al, ' '                     ; wanted again
+.rsps:
+    cmp bx, cx
+    jae .rscp
+    mov [di + bx], al
+    inc bx
+    jmp short .rsps
+.rscp:
+    add di, cx                      ; the bytes begin after the padding, so
+    xor bx, bx                      ; ONE index serves here too
+.rsb:
+    cmp bx, dx
+    jae .lsdone
+    mov al, [si + bx]
+    mov [di + bx], al
+    inc bx
+    jmp short .rsb
+.lsdone:
+    pop si                          ; [B] the op cursor
+    inc si                          ; past the index byte
+    pop di                          ; [A] the value stack pointer
+    pop dx
+    pop cx
+    pop bx
+    jmp .next
 .under:
     mov si, bas_e_stk
     jmp bas_err
@@ -6504,6 +6649,8 @@ bas_optab:
     dw bas_exec.afill               ; OP_AFILL
     dw bas_exec.swap                ; OP_SWAP
     dw bas_exec.aswap               ; OP_ASWAP
+    dw bas_exec.lsetop              ; OP_LSET
+    dw bas_exec.rsetop              ; OP_RSET
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -6926,6 +7073,8 @@ bas_kw_ubound:  db 'UBOUND', 0
 bas_kw_clr:     db 'CLR', 0
 bas_kw_afill:   db 'ARRAYFILL', 0
 bas_kw_swap:    db 'SWAP', 0
+bas_kw_lset:    db 'LSET', 0
+bas_kw_rset:    db 'RSET', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -7011,5 +7160,7 @@ bas_e_afillno:  db 'ARRAYFILL wants an array that has been DIMmed', 0
 bas_e_swapkind: db 'SWAP wants two of the same kind', 0
 bas_e_swapmix:  db 'SWAP takes two variables or two arrays, not one of each', 0
 bas_e_swapname: db 'SWAP wants two names', 0
+bas_e_lsetstr:  db 'LSET and RSET want a $ name', 0
+bas_e_lseteq:   db 'LSET and RSET go LSET a$ = b$', 0
 bas_e_notarr:   db 'that is not an array', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

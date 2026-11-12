@@ -251912,6 +251912,51 @@ the exchange each name still owns exactly one run of bytes. Swapping the
 pairs cannot create a second owner, so the compaction walk sees what it saw
 before and the arena is untouched.
 
+### 150.35 `LSET` and `RSET`, which never allocate
+
+```basic
+a$ = "xxxxx"               ' the FIELD, and only its length matters
+LSET a$ = "7"              ' -> "7    "
+RSET a$ = "7"              ' -> "    7"
+LSET a$ = "abcdefgh"       ' -> "abcde" - the field does not grow
+LSET n = 2                 ' REFUSED BY NAME - not a `$` name
+```
+
+**The field's LENGTH is the whole of what `a$` contributes**, which is node
+[164] in as many words: *"If `b$` is shorter than `a$` (the normal
+situation) spaces will be inserted to make up the original length of `a$`.
+Note that the actual content of `a$` is irrelevant: only its length is
+significant."* So these two are the one place in this chapter where a
+string's existing bytes are overwritten rather than replaced.
+
+**NEITHER ALLOCATES, AND THAT IS THE DESIGN.** The length does not change,
+so the bytes are written where they already lie: no `bas_svaralloc`, no
+temporary, and therefore no compaction can happen inside either statement.
+That removes the whole class of defect §150.28 and §150.32 are about - an
+offset read before an allocation that moves it - from these two by
+construction rather than by care.
+
+**A source can never overlap the field**, so the copy needs no direction
+test. A slice allocates a temporary and copies into it, a literal lies in
+the program text, and every other string owns its bytes alone (§150.28).
+The one identical case, `LSET a$ = a$`, copies each byte onto itself.
+
+**A SOURCE LONGER THAN THE FIELD KEEPS ITS FIRST N CHARACTERS, in both
+spellings, and the reference does not say so.** Node [164] documents only
+the shorter case - "the normal situation" - so this is a decision and is
+recorded as one. One rule for both is the reason: the alternative is `RSET`
+keeping its LAST n, which reads as reasonable until a program formats a
+column of numbers too wide for it and gets `23` where `LSET` in the same
+field gives `12`. A truncation that depends on which spelling did it is a
+difference nobody can hold in their head, and `RSET`'s own purpose - the
+right-justified column of node [164]'s example - is already defeated once
+the value does not fit.
+
+**A zero-length field is a no-op, not a refusal.** `LSET e$ = "zz"` where
+`e$` is `""` writes nothing, which falls out of the width being the bound
+and agrees with §150.28's rule that a zero-length string is skipped
+everywhere else.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

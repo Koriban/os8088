@@ -22022,8 +22022,8 @@ SOAK = [
         "procedure's body is written below the call that runs it, so a line "
         "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang3", "soak", py("tests/basiclang.py", "--arrays"), 240.0,
-        "SPEC.md 150.33 and 150.34: CLR, ARRAYFILL and SWAP. EVERY NUMBER IT "
+    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 300.0,
+        "SPEC.md 150.33 to 150.35: CLR, ARRAYFILL, SWAP, LSET and RSET. EVERY NUMBER IT "
         "ASSERTS IS THE REFERENCE'S OWN - the plan's differential oracle "
         "cannot answer here, `basicnw` being the QuickBASIC line and having "
         "no ARRAYFILL at all, so the authority is the manual's worked "
@@ -22045,7 +22045,14 @@ SOAK = [
         "the name fields afterwards, and the twelve are held by a `times` "
         "pair in baslang.inc instead. Four refusals, one part each, because "
         "a refusal ends the program and a second in the same part would "
-        "never run.",
+        "never run. LSET and RSET close it, and they are the one place in "
+        "the chapter that overwrites a string's existing bytes rather than "
+        "replacing them - the field's LENGTH being the whole of what the "
+        "target contributes (node [164]), so neither allocates and no "
+        "compaction can happen inside either. Every answer there is "
+        "BRACKETED, because a console line comes out of a space-padded cell "
+        "buffer where \"7\" and \"7    \" read alike and the padding IS the "
+        "statement.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "

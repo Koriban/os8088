@@ -1006,25 +1006,60 @@ PART34 = [
      "Error at line 4: SWAP takes two variables or two arrays, not one of each"),
 ]
 
+# --- LSET and RSET (SPEC.md 150.35) -------------------------------------
+# EVERY ANSWER IS DELIMITED. A console line is read out of a cell buffer
+# that is space-padded to its width, so trailing spaces cannot be asserted
+# on their own - "7" and "7    " read alike. The closing `>` is what makes
+# the padding visible, and the padding IS the statement.
+#
+# `<` AND `>` RATHER THAN BRACKETS, which is not a style choice: the typist
+# drives a real keyboard through QEMU and os88qemu._QCHAR has no qcode for
+# `[`, so the first version of this part died mid-run with "no qcode for
+# '['" after six parts had passed. `<` and `>` are already in that table.
+PART35 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('a$ = "xxxxx"',                     None),
+    ('LSET a$ = "7"',                    None),
+    ("PRINT LEN(a$)",                    "5"),       # the field's width
+    ('PRINT "<" + a$ + ">"',             "<7    >"), # ...kept, and padded
+    ('RSET a$ = "7"',                    None),
+    ('PRINT "<" + a$ + ">"',             "<    7>"),
+    ('LSET a$ = "abcdefgh"',             None),      # longer than the field
+    ('PRINT "<" + a$ + ">"',             "<abcde>"),
+    ('RSET a$ = "abcdefgh"',             None),
+    ('PRINT "<" + a$ + ">"',             "<abcde>"), # the SAME first five:
+    ('e$ = ""',                          None),      # one rule for both
+    ('LSET e$ = "zz"',                   None),
+    ("PRINT LEN(e$)",                    "0"),       # a zero field: no-op
+]
+
+PART36 = [
+    ("CLS",                              None),
+    ("n = 1",                            None),
+    ("LSET n = 2",
+     "Error at line 3: LSET and RSET want a $ name"),
+]
+
 # THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
 # is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
-# through SELECT, `--late` is GOTO, labels and procedures, and `--arrays` is
-# 150.33 and 150.34; no flag runs the lot, which is what a developer typing
-# the file's name means.
+# through SELECT, `--late` is GOTO, labels and procedures, and `--w3tail` is
+# wave 3's tail - 150.33 to 150.35; no flag runs the lot, which is what a
+# developer typing the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
-ARRAYS = (PART29, PART30, PART31, PART32, PART33, PART34)
-PARTS = EARLY + LATE + ARRAYS
+W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35, PART36)
+PARTS = EARLY + LATE + W3TAIL
 
 if "--early" in sys.argv:
     PARTS = EARLY
 elif "--late" in sys.argv:
     PARTS = LATE
-elif "--arrays" in sys.argv:
-    PARTS = ARRAYS
+elif "--w3tail" in sys.argv:
+    PARTS = W3TAIL
 
 FAILED = []
 
