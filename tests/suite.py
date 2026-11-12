@@ -22022,6 +22022,31 @@ SOAK = [
         "procedure's body is written below the call that runs it, so a line "
         "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
+    Row("basiclang3", "soak", py("tests/basiclang.py", "--arrays"), 240.0,
+        "SPEC.md 150.33 and 150.34: CLR, ARRAYFILL and SWAP. EVERY NUMBER IT "
+        "ASSERTS IS THE REFERENCE'S OWN - the plan's differential oracle "
+        "cannot answer here, `basicnw` being the QuickBASIC line and having "
+        "no ARRAYFILL at all, so the authority is the manual's worked "
+        "examples, which print their results: node [94] prints 0 and 3 after "
+        "`CLR x`, node [95] prints 2 and 1 after `SWAP x,y`, and node [73] "
+        "prints 0 before `ARRAYFILL x(),5+1` and 6 after. Reading those "
+        "nodes is also what corrected the plan: it had REDIM, which is in "
+        "none of the reference's 542, and had ERASE clearing in place when "
+        "node [94] deletes whole arrays with it. The whole-array SWAP is the "
+        "part that earns its keep - node [95] exchanges DESCRIPTORS and not "
+        "elements, so the BOUNDS have to travel with the contents: swap only "
+        "BAS_ARR_AT and LBOUND/UBOUND come back the old array's, swap only "
+        "the bounds and the elements do, and both are red. So LBOUND and "
+        "UBOUND are asserted on both names after the swap, not just the "
+        "values. What it does NOT pin, "
+        "measured: whether that swap takes twelve descriptor bytes or all "
+        "sixteen - a build taking all sixteen passes it unchanged, an "
+        "array's index being resolved at compile time so that nothing reads "
+        "the name fields afterwards, and the twelve are held by a `times` "
+        "pair in baslang.inc instead. Four refusals, one part each, because "
+        "a refusal ends the program and a second in the same part would "
+        "never run.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "
         "that asks for it, DHCP bound to slirp's address, and the browser "

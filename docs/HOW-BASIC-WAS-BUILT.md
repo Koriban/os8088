@@ -1562,13 +1562,117 @@ which is what `bas_wantnum` says at every other site. My test expectation
 had assumed the better message; rather than weaken the test to match the
 code, the code now matches what a reader deserves.
 
+## `CLR`, `ARRAYFILL`, `SWAP`, and a claim no test could fail
+
+Wave 3's remaining list said `REDIM`, `ERASE`, a third dimension, `SWAP`,
+`LSET`/`RSET`, `TYPE`. I read the reference's nodes for the first two before
+writing anything, which by now is habit rather than virtue, and the list was
+wrong in three places.
+
+**`REDIM` is in none of the 542 command nodes.** It is QuickBASIC's word.
+The plan did not merely list it — it described *"which the reference says
+loses the contents"*, a claim about a node that does not exist. That is the
+third time this chapter has borrowed from the wrong dialect: `SELECT CASE`
+in §150.21 and `STATIC` in §150.26 were the first two, and all three got
+into the plan the same way, from the general BASIC survey rather than from
+the manual beside it.
+
+**`ERASE` is the reference's, and does the opposite of what I had written.**
+Node [94] carries three statements, and `ERASE z1(),z2()` *deletes* whole
+arrays and releases their memory, after which they may be `DIM`med again.
+My sentence had it "clearing in place". The word for clearing in place is
+`ARRAYFILL`, node [73] — which I had not listed at all, along with `CLR`,
+which sits in the same node as `ERASE` and which I had also missed. So the
+list named one thing that does not exist, described a second backwards, and
+omitted the two that do the job.
+
+My own prose is what misled me. The sentence had been in the plan since the
+wave was planned and in SPEC.md §150.31 since the arrays shipped, and in
+neither place had anyone — me — gone back to the node. Both corrections are
+left visible in those files rather than tidied, for that reason.
+
+**`CLR` cost no opcode, which is the nicest thing about it.** `CLR x` *is*
+`x = 0` and `CLR x$` is `x$ = ""`, and both are paths this file already had
+and the rows already covered. So `CLR` is a comma loop in the compiler that
+emits a push and a store, and nothing at run time at all. A new opcode would
+have been a second implementation of a store, and the op table is the thing
+it is cheapest not to grow.
+
+### The twelve bytes, and the mutation that indicted my reason rather than my code
+
+A whole-array `SWAP` exchanges descriptors, not elements — node [95] is
+explicit, and it means two arrays of different sizes swap in constant time
+and each name afterwards sees the other's bounds. The descriptor is sixteen
+bytes and the first four are where the NAME is, so the statement moves
+twelve, from `BAS_ARR_LO0` to the record's end.
+
+I wrote down why: swapping all sixteen "would exchange the names and the
+statement would be a no-op that looked like it worked". It went into
+SPEC.md, into the test part's comment, and into the row's registry entry. I
+then built the mutation to prove the part could catch it.
+
+**It could not. The sixteen-byte build passed, every answer unchanged.** An
+array's index is resolved at COMPILE time and rides in the op stream as one
+byte, and §150.19 compiles the whole program before any of it runs — so
+nothing reads `BAS_ARR_SRC` after compilation, and no execution can tell the
+two swaps apart. The twelve bytes are right, and my reason for them was
+wrong, and I had written the reason in three files and built a test to
+confirm it.
+
+What the part does pin is the thing node [95] actually claims: the bounds
+travel with the contents. Swap only `BAS_ARR_AT` and `LBOUND`/`UBOUND` come
+back the old array's; swap only the bounds and the elements do. Both are
+red, which is why the part asserts `LBOUND` and `UBOUND` on both names after
+the swap and not just the values — an elements-only assertion would have
+passed a half-done swap.
+
+The name half gets a `times` pair beside the loop instead, asserting the
+name's two fields are the first four bytes, which is what the loop's
+starting offset actually rests on. **A claim no test can fail is worth
+either a check that can or an admission that it is a convention**, and
+writing it as though a test covered it was worse than either.
+
+The other mutation worked as intended: filling only the first element came
+back `0 6 0` where `6 6 6` was wanted, caught by the two lines that read
+`w(0)` and `w(10)` rather than only the middle.
+
+### The one table of eight with no size assertion
+
+Reading the array indexer to write `OP_ASWAP` I went past `bas_varat`, and
+it computes `i*4 + i*8` for a twelve-byte record with no `times` pair under
+it. Seven of this file's eight record indexers have one — labels, forwards,
+procedures, calls, frames, saves, arrays — and the variable table, the
+widest-used of them, did not. Nothing is wrong today. But `BAS_CAL_SZ` is
+the one that already cost a session: it went to ten while its indexer still
+shifted by eight, entry 1 began inside entry 0, and the symptom named the
+counting code, which was correct. Added, and verified to fail: the record at
+fourteen bytes now stops the build instead of overlapping itself.
+
+### The first green row was testing the old binary
+
+The suite runner pre-builds a row's declared artefacts with `make`, and
+`make` on this tree exits 1 on the fast tier's inherited budget overrun. It
+got as far as assembling `basic.bin` with the new statements and died before
+packaging `basic.img` — so the row ran against a disk image from an hour
+earlier, and would have reported `CLR` as "not a statement this wave knows",
+a defect in code that was correct. I caught it by checking the image's mtime
+against the source before trusting the run, which is now written down in
+`docs/UPSTREAM.md` beside the budget note. **A row whose artefact is stale
+is not a row that failed; it is a row that answered about a different
+program.**
+
 ## Next
 
-**Wave 3: strings and arrays** — the string heap, `DIM`, and the string
-built-ins. `PRINT` cannot print a literal yet, which is the thing standing
-between this and a program anyone would write with `LOCAL`/`STATIC` and recursion,
-which close wave 2. Procedures want a call stack and a frame convention
-pinned in SPEC.md before any of it is written — the `OSAPI` gateway, which is
-perhaps two hundred bytes and from which every kernel facility becomes
-reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
-A registered test row comes with it.
+**The rest of wave 3**, in the order the nodes put it: `ERASE`, which needs
+the array arena to reclaim and so is §150.28's compaction again in a second
+arena; `LSET`/`RSET` from node [164], fixed-length because *"only its length
+is significant"*; a third dimension, which the reference allows seven of but
+which costs `BAS_ARR_SZ` its power of two and therefore the indexer its
+shift; `DIM?()` for the element count, whose `?` the lexer does not yet
+accept; and `TYPE` records with their dotted names plus `BYTE`/`WORD`, which
+want the type system §150.4 describes and nothing yet builds.
+
+**Then wave 4**, which is the one that makes it GFA: `OPENW`, `MENU`,
+`ALERT`, `FILESELECT`, the mouse words, and `ON MENU` inside a `DO…LOOP` the
+programmer writes. It is unblocked, and the overlay split of §150.3 is
+becoming the gating decision — the package is at 46,669 of 65,024.

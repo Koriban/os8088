@@ -130,7 +130,15 @@ OP_ABOUND   equ 47                  ; + an index byte and a which byte: push
                                     ; LBOUND or UBOUND
 OP_ASSTORE  equ 48                  ; + an index byte: pop TEXT and the
                                     ; subscripts, COPY it into that element
-OP_N        equ 49                  ; how many there are, table included
+; --- clearing, filling, swapping (SPEC.md 150.33, 150.34) -----------------
+OP_AFILL    equ 49                  ; + an index byte: pop ONE value and write
+                                    ; it into every element of that array
+OP_SWAP     equ 50                  ; + TWO index bytes: exchange two
+                                    ; variables' eight bytes
+OP_ASWAP    equ 51                  ; + TWO index bytes: exchange two arrays'
+                                    ; TWELVE descriptor bytes - not sixteen,
+                                    ; the first four being the name's place
+OP_N        equ 52                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -547,6 +555,15 @@ bas_c_stmt:
     mov si, bas_kw_option
     call bas_wordis
     je .option
+    mov si, bas_kw_clr              ; CLR, ARRAYFILL and SWAP: node [94]'s
+    call bas_wordis                 ; and [73]'s and [95]'s, which divide the
+    je .clr                         ; job between them (SPEC.md 150.33)
+    mov si, bas_kw_afill
+    call bas_wordis
+    je .afill
+    mov si, bas_kw_swap
+    call bas_wordis
+    je .swap
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -1762,6 +1779,160 @@ bas_c_stmt:
 .pbare:
     mov al, OP_NEWL                 ; a bare PRINT is a blank line
     jmp bas_emit
+
+; --- CLR, which costs no opcode (SPEC.md 150.33) ------------------------
+; `CLR x` IS `x = 0` and `CLR x$` is `x$ = ""`, and both of those are paths
+; this file already has and already tests. So this is a comma loop over two
+; emissions and nothing at run time at all - a new opcode here would have
+; been a second implementation of a store.
+.clr:
+    call bas_skipsp
+    call bas_word                   ; DI/CX = the name
+    jc .clrnoname
+    call bas_arrfind                ; ...and an ARRAY by that name is the
+    jnc .clrarr                     ; other word, with or without its parens
+    call bas_isstrname
+    jc .clrnum
+    call bas_varfind                ; AX = its index
+    jc .x
+    push ax
+    mov al, OP_SPUSHL
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .clrpop
+    xor ax, ax
+    call bas_emitw                  ; WHERE does not matter...
+    cmp byte [bas_bad], 0
+    jne .clrpop
+    xor ax, ax
+    call bas_emitw                  ; ...because the LENGTH is zero (150.28)
+    cmp byte [bas_bad], 0
+    jne .clrpop
+    mov al, OP_SSTORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .clrpop
+    pop ax
+    call bas_emit
+    jmp short .clrmore
+.clrnum:
+    call bas_varfind
+    jc .x
+    push ax
+    xor ax, ax
+    call bas_emitnum                ; 0, through the one routine that knows
+    cmp byte [bas_bad], 0           ; how a number rides in the op stream
+    jne .clrpop
+    mov al, OP_STORE
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .clrpop
+    pop ax
+    call bas_emit
+.clrmore:
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .x
+    inc word [bas_src]
+    jmp .clr                        ; the next name in the list
+.clrpop:
+    pop ax
+    ret
+.clrarr:
+    mov si, bas_e_clrarr            ; the reference says it in as many words:
+    jmp bas_err                     ; "Arrays cannot be used with CLR, see
+.clrnoname:                         ; ARRAYFILL"
+    mov si, bas_e_swapname
+    jmp bas_err
+
+; --- ARRAYFILL x(), aexp (SPEC.md 150.33) -------------------------------
+; The value is compiled ONCE, before the op, so the statement's cost does
+; not depend on how many elements it writes.
+.afill:
+    call bas_skipsp
+    call bas_word
+    jc .afillnoname
+    call bas_isstrname              ; CF=0 when the name ends in '$'
+    jnc .afillstr
+    call bas_arrfind                ; BX = which array
+    jc .afillno
+    push bx
+    call bas_bopen                  ; the empty parens the reference writes
+    jc .afillpop
+    call bas_bclose
+    jc .afillpop
+    call bas_bcomma
+    jc .afillpop
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .afillpop
+    call bas_wantnum                ; ...and it must BE a number
+    jc .afillpop
+    mov al, OP_AFILL
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .afillpop
+    pop ax                          ; which array, as the index byte
+    jmp bas_emit
+.afillpop:
+    pop ax
+    ret
+.afillstr:
+    mov si, bas_e_afillstr          ; node [73]'s own limit, and 150.28's:
+    jmp bas_err                     ; 512 copies of one string, each a root
+.afillno:
+    mov si, bas_e_afillno
+    jmp bas_err
+.afillnoname:
+    mov si, bas_e_swapname
+    jmp bas_err
+
+; --- SWAP a,b and SWAP x(),y() (SPEC.md 150.34) -------------------------
+; Both operands are read by one helper, which answers WHAT each one is; the
+; kinds must agree and so must the arrayness, and both are compile-time
+; questions because a name's spelling is the only place its kind is written.
+.swap:
+    call bas_swapone                ; AL = index, AH = flags
+    jc .x
+    push ax
+    call bas_bcomma
+    jc .swappop
+    call bas_swapone
+    jc .swappop
+    pop dx                          ; DL = the first index, DH = its flags
+    mov bl, ah
+    xor bl, dh
+    test bl, 2                      ; one '$' and one not
+    jnz .swapkind
+    test bl, 1                      ; one array and one scalar
+    jnz .swapmix
+    push ax
+    mov al, OP_SWAP
+    test dh, 1
+    jz .swapemit
+    mov al, OP_ASWAP
+.swapemit:
+    call bas_emit                   ; bas_emit preserves DX, which is where
+    cmp byte [bas_bad], 0           ; the first operand still is
+    jne .swappop
+    mov al, dl
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .swappop
+    pop ax                          ; ...and the second rides after it
+    jmp bas_emit
+.swappop:
+    pop ax
+    ret
+.swapkind:
+    mov si, bas_e_swapkind
+    jmp bas_err
+.swapmix:
+    mov si, bas_e_swapmix
+    jmp bas_err
 .x:
     ret
 
@@ -4109,6 +4280,64 @@ bas_arrfind:
     stc
     jmp .out
 
+; --- bas_swapone - one of SWAP's two operands (SPEC.md 150.34) ----------
+; out: AL = the index (a variable's, or an array's), AH bit 0 set when it is
+;      an array and bit 1 set when its name ends in '$'. CF=1 and refused by
+;      name. BOTH indices fit a byte - BAS_VAR_MAX is 16 and BAS_ARR_MAX is
+;      8 - which is what lets one register carry the answer and the flags.
+bas_swapone:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call bas_skipsp
+    call bas_word                   ; DI/CX = the name
+    jc .s1none
+    xor dh, dh
+    call bas_isstrname
+    jc .s1nos
+    mov dh, 2                       ; a '$' name, so a string either way
+.s1nos:
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    je .s1arr
+    call bas_varfind                ; AX = its index, created if new
+    jc .s1out
+    mov dl, al
+    jmp short .s1done
+.s1arr:
+    call bas_arrfind                ; BX = which array
+    jc .s1noarr
+    mov dl, bl
+    or dh, 1
+    call bas_bopen                  ; `x()` - and the parens stay empty,
+    jc .s1out                       ; an element swap being a different
+    call bas_bclose                 ; statement nobody has asked for
+    jc .s1out
+.s1done:
+    mov al, dl                      ; AX is not pushed, so it survives the
+    mov ah, dh                      ; pops below - and `pop` leaves CF alone
+    clc
+.s1out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.s1none:
+    mov si, bas_e_swapname
+    call bas_err
+    stc
+    jmp .s1out
+.s1noarr:
+    mov si, bas_e_afillno
+    call bas_err
+    stc
+    jmp .s1out
+
 ; --- bas_c_subs - the (i) or (i,j) after an array's name ---------------
 ; in:  BX = which array. Emits the subscripts as ORDINARY EXPRESSIONS, in
 ;      order, so the element ops pop them in reverse.
@@ -4990,6 +5219,13 @@ bas_varat:
     add si, bas_vars
     pop ax
     ret
+    times BAS_VAR_SZ - 12 db 0      ; THE SHIFTS ARE THE RECORD'S SIZE, and
+    times 12 - BAS_VAR_SZ db 0      ; this was the one table of eight with no
+                                    ; such pair - the widest-used of them,
+                                    ; where an added field would have made
+                                    ; entry 1 start inside entry 0 and the
+                                    ; symptom would have named whatever read
+                                    ; it second (bas_calat's lesson, 150.24)
 
 ; --- bas_upper - AL to upper case, ASCII letters only ------------------------
 bas_upper:
@@ -6080,6 +6316,120 @@ bas_exec:
     pop si
     mov si, bas_e_wide
     jmp bas_err
+
+; --- OP_AFILL, OP_SWAP, OP_ASWAP (SPEC.md 150.33, 150.34) ---------------
+; Each reads its index byte(s) from the op stream, and each must SAVE SI
+; around bas_arrat/bas_varat, which answer in SI and so clobber the cursor.
+.afill:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    push cx
+    push dx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_arrat                  ; SI = the entry
+    mov ax, [si + BAS_ARR_N0]       ; the element count is 150.31's own
+    cmp word [si + BAS_ARR_DIM], 2  ; arithmetic, as bas_aelem's is
+    jne .afin
+    mul word [si + BAS_ARR_N1]
+.afin:
+    mov cx, ax
+    mov ax, [si + BAS_ARR_AT]
+    add ax, bas_arena
+    sub di, BAS_SLOT                ; the value's slot, and it is consumed
+    mov si, ax                      ; SI = the first element
+    jcxz .afidone
+.afielem:
+    xor bx, bx
+.afib:
+    mov ax, [di + bx]               ; EIGHT BYTES BY HAND, for OP_PUSHN's
+    mov [si + bx], ax               ; reason: ES is the KERNEL's segment
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .afib
+    add si, BAS_SLOT
+    loop .afielem
+.afidone:
+    pop si                          ; the op cursor again
+    pop dx
+    pop cx
+    pop bx
+    jmp .next
+.swap:
+    push bx
+    push dx
+    push di
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_varat                  ; SI = the first entry
+    mov dx, si
+    pop si
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_varat                  ; SI = the second
+    mov di, si
+    mov si, dx
+    xor bx, bx
+.swb:
+    mov ax, [si + bx + BAS_VAR_VAL] ; for a '$' pair these eight bytes are
+    mov dx, [di + bx + BAS_VAR_VAL] ; 150.28's offset and length, so the
+    mov [si + bx + BAS_VAR_VAL], dx ; exchange cannot make a second owner
+    mov [di + bx + BAS_VAR_VAL], ax ; and the arena is untouched
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .swb
+    pop si
+    pop di
+    pop dx
+    pop bx
+    jmp .next
+.aswap:
+    push bx
+    push dx
+    push di
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_arrat
+    mov dx, si
+    pop si
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_arrat
+    mov di, si
+    mov si, dx
+    mov bx, BAS_ARR_LO0             ; FROM THE BOUNDS ON, not from zero: the
+.aswb:                              ; first four bytes are where the NAME is,
+    mov ax, [si + bx]               ; and swapping those too would exchange
+    mov dx, [di + bx]               ; the names and do nothing at all
+    mov [si + bx], dx
+    mov [di + bx], ax
+    add bx, 2
+    cmp bx, BAS_ARR_SZ              ; ...and it ends at the record's end, so
+    jb .aswb                        ; a field added later moves with the rest
+    pop si
+    pop di
+    pop dx
+    pop bx
+    jmp .next
+    ; THE NAME IS THE FIRST FOUR BYTES, and that is what the loop's starting
+    ; offset rests on - so it is asserted here rather than trusted. NO RUN
+    ; CAN CHECK IT: an index is resolved at compile time and nothing reads
+    ; BAS_ARR_SRC afterwards, so a build that swapped all sixteen passed
+    ; basiclang3 with every answer unchanged (SPEC.md 150.34). A claim no
+    ; test can fail gets a check that can.
+    times BAS_ARR_LO0 - 4 db 0
+    times 4 - BAS_ARR_LO0 db 0
 .under:
     mov si, bas_e_stk
     jmp bas_err
@@ -6151,6 +6501,9 @@ bas_optab:
     dw bas_exec.astore              ; OP_ASTORE
     dw bas_exec.abound              ; OP_ABOUND
     dw bas_exec.asstore             ; OP_ASSTORE
+    dw bas_exec.afill               ; OP_AFILL
+    dw bas_exec.swap                ; OP_SWAP
+    dw bas_exec.aswap               ; OP_ASWAP
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -6570,6 +6923,9 @@ bas_kw_option:  db 'OPTION', 0
 bas_kw_base:    db 'BASE', 0
 bas_kw_lbound:  db 'LBOUND', 0
 bas_kw_ubound:  db 'UBOUND', 0
+bas_kw_clr:     db 'CLR', 0
+bas_kw_afill:   db 'ARRAYFILL', 0
+bas_kw_swap:    db 'SWAP', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -6649,5 +7005,11 @@ bas_e_arrto:    db 'a size runs low TO high', 0
 bas_e_arrdims:  db 'DIM takes one or two sizes here', 0
 bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0
 bas_e_baseval:  db 'OPTION BASE takes 0 or 1', 0
+bas_e_clrarr:   db 'CLR takes variables; ARRAYFILL fills an array', 0
+bas_e_afillstr: db 'ARRAYFILL cannot fill a string array', 0
+bas_e_afillno:  db 'ARRAYFILL wants an array that has been DIMmed', 0
+bas_e_swapkind: db 'SWAP wants two of the same kind', 0
+bas_e_swapmix:  db 'SWAP takes two variables or two arrays, not one of each', 0
+bas_e_swapname: db 'SWAP wants two names', 0
 bas_e_notarr:   db 'that is not an array', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

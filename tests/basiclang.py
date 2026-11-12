@@ -906,21 +906,125 @@ PART28 = [
      "Error at line 3: that mixes text and numbers"),
 ]
 
-# TWO ROWS, ONE FILE. The whole set is thirteen minutes of typing, which is
-# too slow to iterate against and too slow to sit in one soak slot while
+# --- CLR, ARRAYFILL and SWAP (SPEC.md 150.33, 150.34) -------------------
+# EVERY NUMBER BELOW IS THE REFERENCE'S OWN, not this implementation's. The
+# oracle of plan §8 cannot answer here - `basicnw` is the QuickBASIC line
+# and has no ARRAYFILL - so the authority is the manual's worked examples,
+# which print their results: node [94] runs `x=2 : y=3 : CLR x` and prints 0
+# and 3, node [95] runs `x=1 : y=2 : SWAP x,y` and prints 2 and 1, and node
+# [73] runs `ARRAYFILL x(),5+1` and prints 0 before it and 6 after.
+PART29 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("x = 2",                            None),
+    ("y = 3",                            None),
+    ("CLR x",                            None),
+    ("PRINT x",                          "0"),
+    ("PRINT y",                          "3"),       # ...and ONLY x moved
+    ('s$ = "gone"',                      None),
+    ("CLR s$",                           None),
+    ("PRINT LEN(s$)",                    "0"),       # a `$` name goes to ""
+    ("n = 5",                            None),
+    ("m = 6",                            None),
+    ("CLR n, m",                         None),      # the comma list
+    ("PRINT n + m",                      "0"),
+    ("a = 1",                            None),
+    ("b = 2",                            None),
+    ("SWAP a, b",                        None),
+    ("PRINT a",                          "2"),
+    ("PRINT b",                          "1"),
+    ('p$ = "left"',                      None),
+    ('q$ = "right"',                     None),
+    ("SWAP p$, q$",                      None),
+    ("PRINT p$",                         "right"),   # two offset/length
+    ("PRINT q$",                         "left"),    # pairs, no arena work
+    ("DIM w(10)",                        None),
+    ("PRINT w(4)",                       "0"),
+    ("ARRAYFILL w(), 5 + 1",             None),
+    ("PRINT w(4)",                       "6"),
+    ("PRINT w(0)",                       "6"),       # EVERY element, and the
+    ("PRINT w(10)",                      "6"),       # two ends are the test
+]
+
+# A WHOLE-ARRAY SWAP MOVES NO ELEMENTS, and this part says the BOUNDS TRAVEL
+# WITH THE CONTENTS, which is node [95]'s actual claim: swap only
+# BAS_ARR_AT and LBOUND/UBOUND come back the old array's; swap only the
+# bounds and the elements do. Both are red here, which is why LBOUND and
+# UBOUND are asserted on both names after the swap and not just the values.
+#
+# WHAT IT DOES NOT PIN, measured rather than assumed: whether the swap takes
+# twelve bytes or all sixteen. A build swapping all sixteen - the name's two
+# fields included - passed this part with every answer unchanged, because an
+# array's index is resolved at COMPILE time and nothing reads BAS_ARR_SRC
+# after that (SPEC.md 150.19, 150.34). The twelve are held by a `times` pair
+# in baslang.inc instead. The first version of this comment claimed the
+# opposite and would have been believed.
+PART30 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("DIM r(2)",                         None),
+    ("DIM c(1 TO 4)",                    None),
+    ("r(0) = 11",                        None),
+    ("c(1) = 22",                        None),
+    ("SWAP r(), c()",                    None),
+    ("PRINT r(1)",                       "22"),      # r sees c's elements...
+    ("PRINT LBOUND(r)",                  "1"),       # ...and c's bounds
+    ("PRINT UBOUND(r)",                  "4"),
+    ("PRINT c(0)",                       "11"),      # ...and the other way
+    ("PRINT UBOUND(c)",                  "2"),
+]
+
+# THE FOUR REFUSALS, ONE PART EACH, because a refusal ends the program and a
+# second one in the same part would never be reached (PART28's shape).
+PART31 = [
+    ("CLS",                              None),
+    ("DIM q(3)",                         None),
+    ("CLR q()",
+     "Error at line 3: CLR takes variables; ARRAYFILL fills an array"),
+]
+
+PART32 = [
+    ("CLS",                              None),
+    ("DIM t$(3)",                        None),
+    ("ARRAYFILL t$(), 1",
+     "Error at line 3: ARRAYFILL cannot fill a string array"),
+]
+
+PART33 = [
+    ("CLS",                              None),
+    ("a = 1",                            None),
+    ('b$ = "x"',                         None),
+    ("SWAP a, b$",
+     "Error at line 4: SWAP wants two of the same kind"),
+]
+
+PART34 = [
+    ("CLS",                              None),
+    ("DIM g(3)",                         None),
+    ("a = 1",                            None),
+    ("SWAP a, g()",
+     "Error at line 4: SWAP takes two variables or two arrays, not one of each"),
+]
+
+# THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
+# is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
-# through SELECT and `--late` is GOTO, labels and procedures; no flag runs
-# the lot, which is what a developer typing the file's name means.
+# through SELECT, `--late` is GOTO, labels and procedures, and `--arrays` is
+# 150.33 and 150.34; no flag runs the lot, which is what a developer typing
+# the file's name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
-PARTS = EARLY + LATE
+ARRAYS = (PART29, PART30, PART31, PART32, PART33, PART34)
+PARTS = EARLY + LATE + ARRAYS
 
 if "--early" in sys.argv:
     PARTS = EARLY
 elif "--late" in sys.argv:
     PARTS = LATE
+elif "--arrays" in sys.argv:
+    PARTS = ARRAYS
 
 FAILED = []
 

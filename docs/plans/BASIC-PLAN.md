@@ -505,11 +505,37 @@ program cannot be written without, §150.31 arrays numeric and string, and
 §150.32 the compaction root an array element is. `DIM` with `a TO b`, two
 dimensions, `OPTION BASE`, `LBOUND`/`UBOUND`.
 
-Still open in it, in this order: `REDIM` (which loses the contents) and
-`ERASE` (which clears in place), a third dimension, `SWAP`, `LSET`/`RSET`,
-`TYPE` records with their dotted names, and `BYTE`/`WORD` — which want the
-type system §150.4 describes and nothing yet builds. The other 56 built-ins
-are wave 5's, in the overlay.
+**`CLR`, `ARRAYFILL` and `SWAP` are in** — SPEC.md §150.33 and §150.34, row
+`basiclang3`. And reading the nodes for them corrected this list, which is
+the third time that has happened in this chapter after `SELECT CASE` and
+`STATIC`:
+
+- **`REDIM` is in none of the reference's 542 command nodes.** It is
+  QuickBASIC's word. The sentence above had it as GFA's and described what
+  "the reference says" about it; the reference says nothing, because it does
+  not have it.
+- **`ERASE` is the reference's, and does the opposite of what was written
+  here.** Node [94] gives `ERASE z1(),z2()` as *deleting* whole arrays and
+  releasing their memory, after which they may be `DIM`med again — not
+  "clears in place". Clearing in place is `ARRAYFILL`'s job, node [73], and
+  that node is also where the limit comes from: it cannot fill a string
+  array.
+- **`CLR` was missing from the list entirely**, though it is in the same
+  node as `ERASE` — `CLR x,y` for scalars, with the reference's own note
+  that arrays go to `ARRAYFILL` instead.
+- **A whole-array `SWAP` moves no elements.** Node [95]: only the
+  descriptors are exchanged, *"having the effect of also exchanging the
+  dimensioning of the two arrays"*.
+
+Still open in it, in this order: **`ERASE`** (which needs the array arena to
+reclaim, so it is §150.28's compaction in a second arena), **`LSET`/`RSET`**
+(node [164], and fixed-length: *"only its length is significant"*), **a
+third dimension** (the reference allows seven, product under 65535, and this
+record's size is a power of two for the indexer's sake — so the third costs
+it the shift), **`DIM?()`** for the element count, and **`TYPE` records with
+their dotted names** plus **`BYTE`/`WORD`**, which want the type system
+§150.4 describes and nothing yet builds. The other 56 built-ins are wave
+5's, in the overlay.
 
 **Wave 4 — the event loop and tier A windows.** The wave that makes it GFA.
 `OPENW`/`CLOSEW`/`CLEARW`/`TITLEW`/`TOPW`/`FULLW`, `MENU` from a string array,

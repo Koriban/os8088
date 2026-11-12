@@ -251773,10 +251773,24 @@ element wastes buy the absence of a second allocator. 4,096 bytes, so 512
 elements across every array in a program, refused by name when the next
 `DIM` will not fit.
 
-**Not here, and in this order when it is:** `REDIM` (which the reference
-says loses the contents) and `ERASE` (which clears in place), a third
-dimension, `SWAP`, `LSET`/`RSET`, and `TYPE` records with their dotted
-names.
+**Not here, and in this order when it is:** a third dimension (the
+reference allows seven, with the product of the counts under 65535, and
+this record's size is a power of two for the indexer's sake, so the third
+costs the record its shift), `LSET`/`RSET` (§150.33), `TYPE` records with
+their dotted names, and `BYTE`/`WORD`.
+
+**AND THIS PARAGRAPH USED TO NAME TWO THINGS THE REFERENCE DOES NOT HAVE**,
+which is why the correction is left visible rather than tidied away. It said
+"`REDIM` (which the reference says loses the contents) and `ERASE` (which
+clears in place)". `REDIM` appears in NONE of the reference's 542 command
+nodes - it is QuickBASIC's word, and the same wrong-dialect borrowing that
+put `SELECT CASE` and `STATIC` in §150.21 and §150.26 before the nodes were
+read. And `ERASE` is the reference's, but it does the opposite of what that
+sentence claimed: node [94] gives `ERASE z1(),z2()` as DELETING whole
+arrays and releasing their memory, after which they may be `DIM`med again,
+and clearing in place is `ARRAYFILL`'s job (node [73]). A plan's own prose,
+once written, stops being questioned - so it is the nodes that settle this
+and §150.33 that states the result.
 
 ### 150.32 A string array element is a second kind of root
 
@@ -251797,6 +251811,106 @@ terminates.
 **This is written down before the code**, because the alternative is finding
 it the way the variables' version was found — a program that fills the arena
 and then reads a string that has moved.
+
+### 150.33 `CLR`, `ARRAYFILL`, and the two that are not the same thing
+
+```basic
+CLR x, y$, n%              ' scalars back to 0 and ""
+ARRAYFILL rows(), 5 + 1    ' EVERY element of a numeric array
+CLR rows()                 ' REFUSED BY NAME, and it names ARRAYFILL
+```
+
+**From the nodes, not from memory.** Node [94] carries three statements -
+`CLEAR`, `CLR x,y` and `ERASE z1(),z2()` - and node [73] carries
+`ARRAYFILL x(),y`. They divide the job in a way worth keeping: `CLR` takes
+SCALARS by name, `ARRAYFILL` takes a numeric ARRAY and a value, and the
+reference says in as many words that *"Arrays cannot be used with `CLR`, see
+`ARRAYFILL`"*. So `CLR rows()` is refused by name and the refusal names
+`ARRAYFILL`, because a program that meant one and typed the other should be
+told which word it wanted rather than silently given neither.
+
+**`CLR` COSTS NO OPCODE.** `CLR x` is `x = 0` and `CLR x$` is `x$ = ""`,
+and those are two paths this chapter already has and has tested - so `CLR`
+is a compiler that emits them, a loop over a comma list, and nothing at run
+time at all. A new opcode would have been a second implementation of a
+store, and §150.19's op table is the thing it is cheapest not to grow.
+
+**`ARRAYFILL` is refused for a `$` array**, which is the reference's own
+limit (node [73]: *"It is not possible to use the `ARRAYFILL` command with
+string arrays"*) and here it is also §150.28's: a filled string array would
+need one copy of the bytes per element, each its own compaction root
+(§150.32), and `ARRAYFILL rows$(), x$` on a 512-element array would ask the
+4,096-byte arena for 512 copies of `x$`. The refusal is the honest answer,
+not a missing feature.
+
+**The value is written once and copied, not re-evaluated.** The expression
+is evaluated ONCE, before the loop, which is what the reference's
+`ARRAYFILL x(),5+1` example means and is also the only reading that makes
+the statement's cost independent of the array's size.
+
+`ERASE` is the third of node [94]'s and is NOT in this section, because it
+releases an array's space and this chapter's array arena is a bump
+allocator (§150.31): freeing a middle array means sliding the ones above it
+and rewriting their `BAS_ARR_AT`, which is §150.28's compaction again in a
+second arena. It is named here so the next pass starts from the node and
+not from the old sentence §150.31 corrects.
+
+### 150.34 `SWAP`, and the twelve bytes that move
+
+```basic
+SWAP a, b                  ' two scalars of the same kind
+SWAP a$, b$
+SWAP rows(), cols()        ' two arrays: the DESCRIPTORS, not the elements
+SWAP a, b$                 ' REFUSED BY NAME - the kinds differ
+```
+
+**An array swap moves no elements.** Node [95] is explicit about why -
+*"The process is fast, since in fact only the associated Descriptors are
+exchanged, having the effect of also exchanging the dimensioning of the two
+arrays"* - and that is the whole statement here: two arrays of different
+sizes swap in constant time, and each name afterwards sees the other's
+bounds as well as its other's contents. `LBOUND`/`UBOUND` answer the new
+dimensions because they read the descriptor, which is the same reason
+nothing else had to change.
+
+**TWELVE of the record's sixteen bytes move, not sixteen.** `BAS_ARR_SRC`
+and `BAS_ARR_LEN` are WHERE THE NAME IS (§150.31); the twelve from
+`BAS_ARR_LO0` on - both bounds, both counts, the dimension count and
+`BAS_ARR_AT` - are what an array IS, and the first four are what it is
+CALLED.
+
+**AND SWAPPING ALL SIXTEEN IS NOT OBSERVABLE - this section first claimed
+the opposite, and a mutation said so.** The sentence here used to be that
+exchanging the names too "would be a no-op that looked like it worked", the
+implication being that a test could catch it. No test can. An array's index
+is resolved at COMPILE time and rides in the op stream as one byte, and
+§150.19 compiles the whole program before any of it runs - so nothing reads
+`BAS_ARR_SRC` after compilation, and a run cannot tell a twelve-byte swap
+from a sixteen-byte one. MEASURED: a build whose `OP_ASWAP` swaps all
+sixteen passes `basiclang3` with every answer unchanged.
+
+What the row DOES pin is that the bounds travel with the contents, which is
+node [95]'s actual claim: swap only `BAS_ARR_AT` and `LBOUND`/`UBOUND` come
+back the old array's, swap only the bounds and the elements do. Both are
+red. It is the NAME half alone that no execution can see, so that half is
+pinned structurally instead - a `times` pair beside the loop asserts the
+name's two fields are the first four bytes, which is what the loop's
+starting offset actually rests on. A claim no test can fail is worth either
+a check that can or an admission that it is a convention; this one gets the
+check.
+
+**A kind mismatch is refused by name, at compile time.** An array's and a
+scalar's kind is its name's spelling (§150.28) and is stored nowhere, so
+`SWAP a, b$` cannot be caught at run time by inspecting a value - there is
+nothing to inspect. The compiler knows both spellings and refuses there,
+which is the same place and the same reason §150.31 decides `a(3)` is an
+element rather than a call.
+
+**A string scalar swap is two offset/length pairs**, and needs no arena
+work: §150.28's rule is one owner per string, assignment copies, and after
+the exchange each name still owns exactly one run of bytes. Swapping the
+pairs cannot create a second owner, so the compaction walk sees what it saw
+before and the arena is untouched.
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
