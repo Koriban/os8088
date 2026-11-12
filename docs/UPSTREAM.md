@@ -275,6 +275,34 @@ git ls-files build | wc -l                        # must be 0 (SPEC.md §16)
 ls kernel/taskmgr.inc                             # must NOT exist (SPEC.md §28 moved it to apps/taskmgr)
 ```
 
+## Things in `main` this fork works around, and what to tell them
+
+Carried forward so the next merge recognises them instead of re-diagnosing.
+
+- **`tools/wirefleet_fx.py` calls `cell.get_flattened_data()`**, which is not
+  a Pillow 10.2.0 method, and `apps/wirefleet/art/fx.inc` fails outright on a
+  tree where that rule fires - which a FRESH CHECKOUT does, every file having
+  the same mtime. This branch has `cell.getdata()` since 366f944f, so `make`
+  is green here and red in a control worktree at `main`; that asymmetry cost
+  an hour once. Worth a one-line PR.
+- **`t_hotpar` checks kern_small only when `build/smallk` holds a CURRENT
+  build** - `current_map()` wants `kernel-full.bin` beside the map and newer
+  than `newest_source()`, and otherwise prints "not checked". So `main` can
+  carry a kern_small whose twelve hot routines violate its own `HOT["small"]`
+  without anything going red, and the 2026-11-12 merge inherited exactly that.
+  When kern_small flips at a merge, BUILD THE CONTROL before re-measuring:
+  same symbols at the same addresses means it is `main`'s move, not ours.
+- **The fast tier is over its own budget on both sides** (`main` declares
+  65.8s against 30s), so `make` exits 1 with zero failures. Read the
+  `os88test:` lines, not the exit code; `--no-budget` reports without failing.
+  AND IT IS NOT COSMETIC: `os88test.py` pre-builds a row's declared
+  artefacts with `make`, so the budget failure makes that pre-build report
+  `make failed before the declared artefacts` - and whether the artefact got
+  built before the tier step failed is then an accident of ordering. A soak
+  row can run against a STALE image and pass. Check the artefact's mtime
+  against its sources yourself before believing a soak result taken this way
+  (`basiclang`/`basiclang2`, 2026-11-12: checked, current, both green).
+
 ## The PR back to main
 
 Base `jggonz/os8088:main`, head the fork's integration branch. It will be
