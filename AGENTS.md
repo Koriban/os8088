@@ -77,7 +77,9 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/plans/completed/FTP-PERF.md](docs/plans/completed/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/FLOPPY-WRITING.md](docs/FLOPPY-WRITING.md)** | answering "which image do I write, and how" for a FLOPPY — which disk a machine wants, the four ways to get it wrong, and `tools/os88flop.py`, which generates the command list out of `build/` rather than carrying one that would go stale. LIVE-MEDIA.md is the same guide for the USB stick and the CD |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
+| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | touching PageDesk (`apps/pagedesk/`, the PDF viewer/editor: the primary, its overlay and the `PDENG`/`PDREND`/`PDWRT` C modules) — its binding contract, cited as `PAGEDESK-SPEC §N`. `docs/plans/PAGEDESK-PLAN.md` is the story list and `docs/PAGEDESK-GUIDE.md` the user guide. **Every segment is at its cap** (PAGEDESK-SPEC 20.20.1), and two fast gates guard what breaks silently. `pdstk` statically bounds every call chain, because the UI task's stack is 512 bytes and a module verb runs on the private stack of 20.15. `pdkgate` checks that every kernel call a module makes is a gate slot |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
+| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | anything in PageDesk (§128, `apps/pagedesk/`, `PAGEDESK.O88`) — the binding contract, outside SPEC.md on the WEAVE-SPEC precedent, cited as `PAGEDESK-SPEC §N`: the XT PDF profile, the three C modules and their exchange-block ABI (`apps/pagedesk/pdabi.h` is its C side and is the lead's), 16.16/pt16 numbers and the ONE view transform in `pdmath`, the annotation representations and the incremental writer. **[docs/plans/PAGEDESK-PLAN.md](docs/plans/PAGEDESK-PLAN.md)** is the story list PD-01 to PD-30 and the capability matrix |
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 | **[docs/plans/SHEET-GAPS-PLAN.md](docs/plans/SHEET-GAPS-PLAN.md)** | picking up SHEET — what is left, in the order to do it. **Its section 4 is the current list** (re-measured 2026-09-22): the macro language is finished (`docs/plans/SHEET-MACRO-PLAN.md`, §81.83-§81.97), the two defects it opened with are closed, and so is the menu's-tail defect (its section 0.1, §81.98). The gaps are grouped by what they cost rather than by menu, under a resident-headroom constraint that is down to 756 bytes, so nearly everything left is module work. **Printing is out of scope in it by decision**, which removes six of the missing menu commands and none of the work. §81.39 is the inventory — re-measure it, never quote it |
@@ -236,24 +238,22 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # BIOS answering CF=0 for a transfer it did not make).
               # BOOTDIAG.COM rides on all six for a machine that boots DOS
               # but not this. Nothing here ever writes to a disk
+make debugdisks # THE DEBUG DISKS (SPEC.md 128): a system disk that boots
+              # straight into a report on one subsystem, for a user with a
+              # camera and no debugger - bootdiag's sibling for a machine
+              # that DOES boot. debug-sound{,-120,-720,-360}.img (in `all`
+              # and the release zip's DEBUG/): SOUND.DRV built from the
+              # shipped source with -DSNDDIAG (drivers/sound/snddiag.inc,
+              # every hook empty without it - t_debugdisk holds the shipped
+              # driver byte-identical), and \AUTOSTRT opening SNDDIAG.O88:
+              # the probes, a ten-second tone a row a second, the registers.
+              # A probe added to a driver is a line added to its debug disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
-make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
-make test-soak   #   budget CHARGED IN CPU, not wall clock, so a loaded box
-                 #   cannot fail it — the runner FAILS a tier that
-                 #   overruns, so a row that no longer fits is a decision
-                 #   somebody takes rather than a drift nobody notices.
-                 #   fast ~2s, host-side only, and it already runs as part of
-                 #     `all`: the API table decoded out of kernel.bin and
-                 #     compared with the SDK, a constant mirrored in two files,
-                 #     every shipped floppy walked by an independent FAT12
-                 #     reader, unreachable code, the doc gate, and that every
-                 #     test in tests/ is registered somewhere or says why not
-                 #   full ~50s, THE PRE-MERGE GATE — adds the knob kernels and
-                 #     kern_small (every configuration `all` does NOT build, so
-                 #     the only thing keeping them assembling), the C toolchain
-                 #     and a boot to a desktop on both 1bpp adapters
-                 #   soak no budget — the rest of tests/, one subject each:
-                 #     `python3 tools/os88test.py soak -k 'disp*'`
+make test-full   #   tests/suite.py). fast (host-side, run by every `make`)
+make test-soak   #   and full (did you obviously break the OS?) fail over a
+                 #   CPU-charged budget. soak is the rest, one subject a
+                 #   row, and takes a -k: `os88test.py soak -k 'disp*'`.
+                 #   The knob kernels are `soak -k buildmatrix`
 make zcheck   # play every Z-machine story to a script and diff it against
               # dfrotz (§61.13). `make zh` builds the harness interpreter;
               # `tools/zharness.py <story> --repl` types at one by hand. This
@@ -763,6 +763,22 @@ All but `QMP_SOCK`/`QEMU_PID` are stamp-tracked, so changing one rebuilds what i
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
 exactly like the feature being broken.
 
+**The `KHP_*` knobs are NASM defines, not make variables** (kernel hot-paths
+pass 1; `kernel/kernel.asm`'s KHP block is the list and the authority, and
+docs/plans/khp1/LOG.md L.2-L.3 the measurements). Each selects the REWRITTEN
+body of one hot path; undefined, the source assembles to the body it
+replaced, byte for byte. Which kernel carries which is set in that block, not
+on the command line: kern_mega the ten VGA/window-manager ones (`KHP_VGASAVE`
+`KHP_VGAFILL` `KHP_VGAEDGE` `KHP_VGABLITP` `KHP_FRAME` `KHP_FPG` `KHP_RELIT`
+`KHP_CAPTION` `KHP_DMGSTALE` `KHP_RAISEOL`) and `KHP_LZ`; kern_big and
+kern_emu `KHP_LZ` alone; kern_small none. Six more (`KHP_MONORECT`
+`KHP_MONOSCROLL` `KHP_MONOPAT` `KHP_ICONWORD` `KHP_STRRUN` `KHP_LAZYEND`) are
+built and OFF on every kernel, kept so they outlive the branch they were
+measured on - `tests/unit/t_khpknobs.py` (fast) assembles kern_big and
+kern_small with every knob on, so none can rot unseen. Turning one on for
+another kernel is a `%define` in that block and a re-measure; a new one goes
+behind its knob with `tools/os88knob.py`, whose `merge` is the safe form.
+
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
@@ -799,7 +815,7 @@ the eight `286-525-*` application machines (`-z`, `-word`,
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `pentium-ess` (`pentium` with an ESS ES1868 in place of its SB16, booting the sound debug disk - SPEC.md §127; 86Box's ESS treats `D1h`/`D3h` as no-ops), `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
@@ -945,10 +961,44 @@ getting Windows to boot here cost.
 Building out a feature's **user stories or open items in parallel** - each
 independent item to a sub-agent of its own in its own worktree on a cheaper
 model, one shared brief, a Monitor armed on every long-running agent, each
-finished branch verified and improved by an Opus reviewer before it is
-integrated into the feature's PR, and the final pass run once - is
+finished branch integrated into the feature's PR as it lands with no review
+between steps, then ONE QA testing run in emulation once every feature is in,
+a fix round for what it finds, and the final pass run once - is
 `.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
-`LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
+`LESSONS.md` is what the WIN16 Phase B/C, WIN16-NEXT and PageDesk any-PDF
+rounds learned.
+
+## Pull requests show the change
+
+**Every pull request that changes what the machine draws carries screenshots
+of the change in its description.** This is the owner's rule (2026-11-09),
+and it binds every contributor and every agent. `.github/pull_request_template.md`
+is the shape, and `.github/workflows/pr-screenshots.yml` fails a pull request
+that touches `apps/`, `kernel/`, `drivers/`, `faces/` or `boot/` when its
+description has neither an image nor a reason.
+
+- **Coverage.** Take one screenshot for each adapter the change reaches: VGA,
+  CGA and Hercules, plus EGA where it has its own layout. Crop and zoom a small
+  change (`tools/shot.py --crop --zoom`) so the reader can see it. Where
+  something changed rather than appeared, show it before and after.
+- **Source.** Take them on the glass: QEMU (`tools/shot.py`), MartyPC, 86Box
+  or real hardware. Name which one under each picture. A host-side render, such
+  as a harness bitmap or a mock-up, is labelled as one and never stands in for
+  the machine.
+- **Hosting.** Commit them under `docs/<subject>/` on the pull request's
+  branch, as `docs/waverack/` did, and link
+  `https://raw.githubusercontent.com/<owner>/<repo>/<commit SHA>/docs/...`.
+  Pin the link to a SHA, not a branch, so it survives the branch's deletion.
+  Alternatively, drop them into the description on github.com. Never commit
+  them under `build/`.
+- **No visible change.** A change with nothing to see (a host tool, a gate,
+  docs, a refactor whose pixels are identical) writes a line
+  `No visible change: <why>` in the description's Screenshots section. The
+  reason is the claim a reviewer checks, so "pixels identical" names the row
+  or A/B that showed it.
+- **Updates.** A description rewritten after review (a refresh, a fan-out's
+  final pass, a fork review's fixes) keeps or replaces the screenshots so
+  that they show the head being merged, not an earlier one.
 
 ## Shared agent skills
 
@@ -1011,7 +1061,8 @@ user gives a different workflow. The worked example is
   `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
 - **Near model.** CS = DS = `KERNEL_SEG` for kernel code and every task;
   **SS = `LOW_SEG`**, because task stacks live outside the kernel's segment.
-  Every inter-module kernel call is near — there is no far code (§33).
+  Calls between modules in `.text` are near; `.cold` is a code segment of its
+  own, entered far (§2.6).
   **SS ≠ DS, so `[bp+disp]` addresses SS**: kernel code holding a pointer in BP
   needs `[ds:bp+…]`.
 - **Register discipline.** Public routines preserve every register but their
@@ -1030,7 +1081,7 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 90 sites in 23 files, every one
+  finished** (§6.6.5): the registry stands at 89 sites in 23 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. (It read 59 in 20 here until the 2026-10-14 merge -
   stale on BOTH sides, and it did not conflict because neither side had
@@ -1059,7 +1110,9 @@ user gives a different workflow. The worked example is
   `MEGA_RESIDENT` - its size less the `.cold` and `.mega` rungs it moves above
   1MB). `kern_big` and `kern_small` boot on 128KB and `kern_mega` on a 1MB
   machine's 640KB (`MEGA_BOOT_KB`), and `.text` + `.bss` stay inside one 64KB
-  window (`KERN_CODE_MAX`). Development may run 2KB over a budget
+  window (`KERN_CODE_MAX`) - on kern_big the near-called VGA rung shares that
+  window above the FAT window and LOW, so its guard binds first (`kernsize`'s
+  `window` line, docs/KERNEL-MEMORY.md). Development may run 2KB over a budget
   (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
   release. **Raising any of them is a decision to take with whoever asked for
   the feature, not a build fix.**
@@ -1196,13 +1249,12 @@ The rules that fall out:
 7. **Degrade by tier.** `OSAPI_CPU_INFO` answers `CPU_8086` for the target
    machine, which is a fact the code can test rather than a guess about speed.
 
-Three defects are **invisible in an emulator** and cost this project bug after
-bug: a **visible redraw** (seconds on real hardware), a **double-draw flash**
-(anything drawn twice), and **input overrun**. None showed in a screendump;
-every one was found on hardware or by counting.
+Three defects cost this project bug after bug: a **visible redraw**, a
+**double-draw flash** and **input overrun**. A screendump shows none of them;
+MartyPC's `flicker()`/`pace()` measure them (PERFORMANCE.md Part 3.1/3.2).
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
-itself for one of four reasons — it is 6,553 lines and over half is a log of
+itself for one of four reasons — it is over 15,000 lines and most of it is a log of
 field measurements:
 
 - **Part 5** before touching a redraw path — the standing budget names the
@@ -1360,7 +1412,14 @@ in docs/TESTING.md, per capability.
   `setup-cc.sh` + `cc8086.py` (the C toolchain's fetch and its gate, §73);
   `stkwater.py`/`stkdepth.py` (how deep a task stack HAS been, and which
   call chain took it there - docs/KERNEL-MEMORY.md's "Task stacks");
-  `kfzread.py` (the KFZ heartbeat out of a field screenshot).
+  `kfzread.py` (the KFZ heartbeat out of a field screenshot);
+  `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
+  of memory, how the 8088 takes an interrupt, all 256 vectors and which
+  ones os8088 and its DOS hook, and every field after them; ON DEMAND, no emulator. Every os8088
+  claim on it stands on a source anchor `--selfcheck` re-checks, and it
+  will not write a page whose anchors fail. Chapter 2 is the BIOS data
+  area byte by byte, the 0500h page and one floppy read followed through
+  them; docs/plans/completed/INTERRUPT-GUIDE-PLAN.md is how it was built).
 - `docs/` — the maintained accounts. `*-PLAN.md` are design records for work
   that has landed; `FIELD-NOTES.md`/`FIELD-MACHINES.md` are what real hardware
   said.

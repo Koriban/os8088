@@ -303,6 +303,78 @@ kind = "program"
 summary = "A four-function desk calculator with a fold-out history. Click a past answer to start the next sum from it."
 short = "Desk calculator with history"
 
+["PAGEDESK.O88"]
+title = "PageDesk"
+kind = "program"
+summary = "Reads and marks up PDF files. Highlights, notes, text boxes and drawings are saved into a new copy; pages can be rotated, moved, extracted and inserted from another file."
+short = "PDF viewer and editor"
+
+["PAGEDESK/"]
+title = "PageDesk"
+kind = "folder"
+summary = "PageDesk's decoders for compressed images, fonts and encrypted files. They are read from here when a page needs them, so leave the folder where it is."
+short = "PageDesk's helper modules"
+
+["PDFONTS.TXT"]
+title = "PageDesk font licence"
+kind = "document"
+summary = "The licence of the Liberation fonts PageDesk draws text in. Opens in Note Pad."
+short = "Font licence for PageDesk"
+
+["PDFONTX.RES"]
+title = "PageDesk extra font sizes"
+kind = "data"
+summary = "The other text sizes PageDesk uses for pages set in 6 to 24 pixel type. Optional: without it PageDesk scales the nearest size it has."
+short = "Extra text sizes for PageDesk"
+
+["HELLO.PDF"]
+title = "Hello (PDF)"
+kind = "document"
+summary = "A one-page sample with text and simple drawings, the quickest file to try PageDesk on. Opens in PageDesk."
+short = "One-page sample"
+
+["XTGUIDE.PDF"]
+title = "XT guide (PDF)"
+kind = "document"
+summary = "A twelve-page illustrated guide with a table of contents and links between pages. Opens in PageDesk."
+short = "Twelve-page sample with links"
+
+["MARKUP.PDF"]
+title = "Markup worksheet (PDF)"
+kind = "document"
+summary = "A two-page worksheet to practise highlights, notes and text boxes on. Opens in PageDesk."
+short = "Sample to mark up"
+
+["PAGES.PDF"]
+title = "Pages (PDF)"
+kind = "document"
+summary = "Eight pages in different sizes and rotations, for trying page rotation, moving, extracting and inserting. Opens in PageDesk."
+short = "Sample for page operations"
+
+["LATIN.PDF"]
+title = "Latin text (PDF)"
+kind = "document"
+summary = "A sample of text in several encodings, with accented letters and punctuation in the standard fonts. Opens in PageDesk."
+short = "Accented-text sample"
+
+["MONOIMG.PDF"]
+title = "Black and white pictures (PDF)"
+kind = "document"
+summary = "A sample with one-bit, grey and stencil images. Opens in PageDesk."
+short = "Image sample"
+
+["FLATE.PDF"]
+title = "Compressed streams (PDF)"
+kind = "document"
+summary = "A sample whose page is stored compressed, as most PDFs are. Opens in PageDesk."
+short = "Compressed sample"
+
+["ACROFORM.PDF"]
+title = "Form (PDF)"
+kind = "document"
+summary = "A sample with form fields. PageDesk shows the form as printed and does not fill it. Opens in PageDesk."
+short = "Form sample"
+
 ["NOTEPAD.O88"]
 title = "Note Pad"
 kind = "program"
@@ -425,6 +497,18 @@ kind = "program"
 summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
 short = "Plays .V88 videos"
 
+["VBATTLE.O88"]
+title = "Video Battle"
+kind = "program"
+summary = "A turn-based battle whose picture is video: an idle loop plays while you pick commands from a menu, and each command's clip joins the loop and returns to it, over the battle's music."
+short = "Battles made of video clips"
+
+["VBATTLED.O88"]
+title = "Video Battle, with a play record"
+kind = "program"
+summary = "Video Battle built to write a record of each play, VBPROF1.DAT, beside itself, for finding out why a battle stutters on a machine."
+short = "Video Battle that logs each play"
+
 ["INSTALL.O88"]
 title = "Install"
 kind = "program"
@@ -436,6 +520,12 @@ title = "System Check"
 kind = "program"
 summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove. Also checks, repairs and defragments any disk, with FSCHECK.DRV."
 short = "Installed system checker"
+
+["SNDDIAG.O88"]
+title = "Sound Debug"
+kind = "program"
+summary = "Shows what the sound driver found on this machine - where each card answered, its version, its interrupt, its mixer - and plays a ten-second tone, a line a second, to show whether the card keeps playing. On the sound debug disk, for photographing and sending to the project."
+short = "Sound card report"
 
 ["TASKMGR.O88"]
 title = "Task Manager"
@@ -712,6 +802,18 @@ kind = "document"
 summary = "Notes on what is on this disk and how to use it. On the system disk it is the whole os8088 manual. Double-click to read it in Note Pad."
 short = "Read this first"
 
+["SNDDEBUG.TXT"]
+title = "Sound debug notes"
+kind = "document"
+summary = "What the sound debug disk is for, what its three pages show, and the photographs to send when sound does not work. Opens in Note Pad."
+short = "How to use the sound debug disk"
+
+["SNDDIAG.LNK"]
+title = "Sound Debug startup link"
+kind = "data"
+summary = "The link in the sound debug disk's startup folder that opens Sound Debug as soon as the machine has started."
+short = "Opens Sound Debug at startup"
+
 ["WELCOME.TXT"]
 title = "Welcome note"
 kind = "document"
@@ -785,6 +887,24 @@ title = "Logo video"
 kind = "video"
 summary = "A short looping animation of the os8088 logo burning into a computer chip. Plays in the Video Player."
 short = "Looping logo animation"
+
+["BATTLE.VBT"]
+title = "Demo battle"
+kind = "video"
+summary = "The demo battle for CGA: ARI and BRAM against the BEETLE, drawn and scored for this project. The 1.44MB and 1.2MB disks carry the whole battle; the 720KB and 360KB disks a shorter one, without the Limit clip and with two bars of its music. Double-click it to play it in Video Battle."
+short = "Demo battle, CGA"
+
+["BATTLEV.VBT"]
+title = "Demo battle, VGA"
+kind = "video"
+summary = "The demo battle in eight VGA colours. Video Battle plays it on a VGA in place of BATTLE.VBT when the two are side by side."
+short = "Demo battle, VGA colours"
+
+["BATTLEH.VBT"]
+title = "Demo battle, Hercules"
+kind = "video"
+summary = "The demo battle for a Hercules card, in its 720 x 348 black and white. Video Battle needs it on a Hercules; a CGA battle does not play there."
+short = "Demo battle, Hercules"
 
 # --- music --------------------------------------------------------------------
 
@@ -1007,6 +1127,24 @@ kind = "document"
 summary = "WIN16's licence, the GNU General Public License, version 2."
 short = "GNU General Public License"
 
+["ARCADE.O88"]
+title = "ARCADE"
+kind = "program"
+summary = "Seven arcade games played on their boards' own programs, in a cabinet: Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert and Pac-Man. Bring your own ROM sets."
+short = "Arcade games, your ROMs"
+
+["ARCADE/"]
+title = "ARCADE"
+kind = "folder"
+summary = "The ARCADE program and its notes."
+short = "ARCADE and its notes"
+
+["ARCADE.TXT"]
+title = "ARCADE notes"
+kind = "document"
+summary = "How to add your ROM sets, the keys for each game, settings and sound. Double-click to read it in Note Pad."
+short = "Notes on ARCADE"
+
 ["CWORD.O88"]
 title = "Word, C edition"
 kind = "program"
@@ -1030,6 +1168,12 @@ title = "Welcome document"
 kind = "document"
 summary = "A sample document introducing the word processor. Open it from the program's File menu, or double-click it once the program has run."
 short = "Sample welcome document"
+
+["SCRIBE/"]
+title = "Scribe"
+kind = "folder"
+summary = "Scribe and its welcome document, as a Word .DOC and as an .RTF."
+short = "Scribe and its welcome files"
 
 ["SCRIBE.O88"]
 title = "Scribe"
@@ -1060,6 +1204,143 @@ title = "Frotz"
 kind = "program"
 summary = "Plays interactive fiction: text adventures in the Infocom story format."
 short = "Text adventure player"
+
+# --- the story library (the live USB image and CD only) -----------------------
+# Fetched at build time and never committed (tools/getstories.py's MANIFEST),
+# so these lines are owed only when a built image carries the stories, which
+# every live release does. Titles, authors and notes are the manifest's.
+
+["STORIES/"]
+title = "Stories"
+kind = "folder"
+summary = "A library of free text adventures for Frotz, sorted into INFOCOM, CLASSIC and MODERN, with CATALOG.TXT saying what each one is. Double-click a story to play it."
+short = "Text adventures for Frotz"
+
+["INFOCOM/"]
+title = "Infocom stories"
+kind = "folder"
+summary = "Stories Infocom and Activision gave away: Mini-Zork I, the two Infocom Samplers and Zork: The Undiscovered Underground."
+short = "Infocom's free stories"
+
+["CLASSIC/"]
+title = "Classic stories"
+kind = "folder"
+summary = "Freely distributable classics and Inform's own games: Colossal Cave Adventure in two versions, Zork: A Troll's Eye View, Balances and Curses."
+short = "Classic text adventures"
+
+["MODERN/"]
+title = "Modern stories"
+kind = "folder"
+summary = "Stories their authors released free: Photopia, 9:05, A Bear's Night Out, Lost Pig, Bronze and The Dreamhold."
+short = "Newer free text adventures"
+
+["ART/"]
+title = "Story pictures"
+kind = "folder"
+summary = "Pictures that go with the stories: the cover of Bronze."
+short = "Pictures for the stories"
+
+["SAVES/"]
+title = "Saved games"
+kind = "folder"
+summary = "A place to keep the games you save in Frotz."
+short = "Folder for saved stories"
+
+["MINIZORK.Z3"]
+title = "Mini-Zork I"
+kind = "document"
+summary = "Infocom's cut-down Zork I, given away on a UK magazine cover disk. A version 3 story; double-click it to play it in Frotz."
+short = "Infocom's cut-down Zork I"
+
+["SAMPLER1.Z3"]
+title = "Infocom Sampler I"
+kind = "document"
+summary = "Infocom's free demo disk: the openings of Zork I, Planetfall and Infidel. A version 3 story; double-click it to play it in Frotz."
+short = "Three Infocom openings"
+
+["SAMPLER2.Z3"]
+title = "Infocom Sampler II"
+kind = "document"
+summary = "Infocom's second free demo disk. A version 3 story; double-click it to play it in Frotz."
+short = "Infocom's second demo"
+
+["ZTUU.Z5"]
+title = "Zork: The Undiscovered Underground"
+kind = "document"
+summary = "By Michael Berlyn and Marc Blank, released free by Activision in 1997 to promote Zork Grand Inquisitor. A version 5 story; double-click it to play it in Frotz."
+short = "Activision's free 1997 Zork"
+
+["ADVENT.Z3"]
+title = "Colossal Cave Adventure"
+kind = "document"
+summary = "Crowther and Woods' 350-point original, ported by Graham Nelson. A version 3 story; double-click it to play it in Frotz."
+short = "The original Adventure"
+
+["ADVENT5.Z5"]
+title = "Colossal Cave Adventure (v5)"
+kind = "document"
+summary = "The same game as ADVENT.Z3, ported by Graham Nelson as a version 5 story. Double-click it to play it in Frotz."
+short = "Adventure, version 5"
+
+["ZORK285.Z5"]
+title = "Zork: A Troll's Eye View"
+kind = "document"
+summary = "Dean Menezes' port of the 285-point version of the 1977 MIT Zork. A version 5 story; double-click it to play it in Frotz."
+short = "The 1977 MIT Zork"
+
+["BALANCES.Z5"]
+title = "Balances"
+kind = "document"
+summary = "Graham Nelson's demonstration game for Inform, with spell puzzles in the style of Enchanter. A version 5 story; double-click it to play it in Frotz."
+short = "Inform's spell-puzzle demo"
+
+["CURSES.Z5"]
+title = "Curses"
+kind = "document"
+summary = "Graham Nelson's game, the one Inform was written to produce. A version 5 story; double-click it to play it in Frotz."
+short = "Graham Nelson's Curses"
+
+["PHOTOPIA.Z5"]
+title = "Photopia"
+kind = "document"
+summary = "Adam Cadre's winner of the 1998 Interactive Fiction Competition: a story more than a puzzle, with colours that change as it goes. A version 5 story; double-click it to play it in Frotz."
+short = "Adam Cadre's Photopia"
+
+["905.Z5"]
+title = "9:05"
+kind = "document"
+summary = "A short story by Adam Cadre, known for its ending. A version 5 story; double-click it to play it in Frotz."
+short = "Adam Cadre's short 9:05"
+
+["BEAR.Z5"]
+title = "A Bear's Night Out"
+kind = "document"
+summary = "David Dyte's freeware story. A version 5 story; double-click it to play it in Frotz."
+short = "David Dyte's freeware story"
+
+["LOSTPIG.Z8"]
+title = "Lost Pig"
+kind = "document"
+summary = "Admiral Jota's winner of the 2007 Interactive Fiction Competition. A version 8 story; double-click it to play it in Frotz."
+short = "Admiral Jota's Lost Pig"
+
+["BRONZE.Z8"]
+title = "Bronze"
+kind = "document"
+summary = "Emily Short's retelling of Beauty and the Beast. A version 8 story; double-click it to play it in Frotz. Its cover picture is BRONZE.PIX, in ART."
+short = "Emily Short's Bronze"
+
+["DREAMHLD.Z8"]
+title = "The Dreamhold"
+kind = "document"
+summary = "Andrew Plotkin's story written to teach newcomers how to play, with hints built in. The largest story in the library. A version 8 story; double-click it to play it in Frotz."
+short = "Andrew Plotkin's tutorial story"
+
+["BRONZE.PIX"]
+title = "Bronze cover"
+kind = "picture"
+summary = "The cover picture of the story Bronze, in os8088's own .PIX picture format. Double-click it to see it in PiXEL. Frotz draws pictures only for version 6 stories, so it does not show this one."
+short = "Cover of the story Bronze"
 
 ["PACCMAN.O88"]
 title = "PaccMan"
@@ -1138,6 +1419,7 @@ title = "Recorder"
 kind = "program"
 summary = "Records sound from a Sound Blaster and plays it back, with a picture of the wave as it goes."
 short = "Sound recording"
+needs = "A Sound Blaster to record (playback also works on the PC speaker)"
 
 ["CONTENTS.TXT"]
 title = "Contents"
@@ -1232,8 +1514,8 @@ short = "Weave editor and sources"
 ["CATALOG.TXT"]
 title = "Catalog"
 kind = "document"
-summary = "What each Weave app on this disk is, and how to open it."
-short = "List of Weave apps here"
+summary = "What is here and how to open it. On the Weave disk it lists each Weave app; in the STORIES folder of the live USB stick and CD it lists each story, with its author and size."
+short = "List of what is here"
 
 ["FORM.WAB"]
 title = "Greeter demo"

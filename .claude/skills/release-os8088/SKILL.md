@@ -17,10 +17,10 @@ them, all written by `mkzip.py` in step 3a:
 
 | zip | holds |
 |---|---|
-| `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
+| `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `286-PLUS/` inside the first two and `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
 | `os8088-<version>-live.zip` | the live USB image and CD as `LIVEUSB.IMG` and `OS8088.ISO`, the Mac burner as `burn-usb-macos.py`, its own README and SHA256SUMS |
 | `os8088-<version>-videos.zip` | the three 86Box machines with the Video Player demos (`make viddemozip`) |
-| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
+| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Video Battle builder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
 
 The main zip is the one every release has; the other three are written when
 their on-demand targets were built, and named as skipped when not. Eleven
@@ -49,6 +49,10 @@ a program that broke goes there and on the WIN16 Spotlight page,
 4d): `/docs/`'s disk guide, memory model and source-checked articles quote one
 source commit, and a release that ships new disks under last release's Docs is
 a guide describing software nobody can download any more.
+
+**Every release ends with a shareable PDF** (step 6b): the release page and
+any Spotlight page as one white-background document with a screenshot of
+every new addition, saved to `~/Documents` for the user to post in Discord.
 
 **Read "Writing the copy" below before writing a word of any of them.**
 
@@ -235,7 +239,7 @@ pack when line 1 is not this version's date.
 
 ```bash
 cd "$OS_REPO"
-make clean && make && make emu
+make clean && make && make emu && make mega
 ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/os8088-360.img \
       build/apps.img build/apps120.img build/apps720.img build/apps360.img \
@@ -245,21 +249,28 @@ ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/small360.img build/small720.img \
       build/win16.img build/win16-120.img build/win16-720.img \
       build/win16-360.img \
-      build/emu.img
+      build/emu.img \
+      build/mega.img build/megaapps.img build/mega120.img build/megaapps120.img \
+      build/megaxtmp3.img build/megaxtmp3-120.img \
+      build/megawin16.img build/megawin16-120.img \
+      build/arcrelmega.img build/arcrelmega120.img
 ```
 
-All twenty-two must exist -- step 3a refuses to pack without them.
+All thirty-two must exist -- step 3a refuses to pack without them. **`make mega`
+is not optional either** (the owner's, 2026-11-07: kern_mega ships): its ten
+disks go in `1440K/286-PLUS/` and `1200K/286-PLUS/`, and `mkzip.py` refuses a
+kern_mega system disk older than `build/megak/kernel.sys`, or that kernel
+older than `build/kernel.sys` - so it runs after `make`.
 
 **And the published tree** INSTALL upgrades from (SPEC.md 117.10.2):
 
 ```bash
-make mega              # kern_mega's system and apps disks, which the mega tree is cut from
 make nettree           # build/nettree/{big,mega,emu}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
 head -n 1 build/nettree/{big,mega,emu}/SYSTEM/OS88VER.TXT   # each YYYYMMDD
 ```
 
-`make nettree` builds all three trees, so it runs after `make emu` (above)
-and `make mega`: the emu tree is cut from `build/emu.img`, the mega tree from
+`make nettree` builds all three trees, so it runs after `make emu` and
+`make mega` (above): the emu tree is cut from `build/emu.img`, the mega tree from
 `build/mega.img` and `build/megaapps.img`.
 
 There are THREE trees, one per kernel, because kern_big, kern_mega and
@@ -289,8 +300,9 @@ make budget-check
 
 Branch and integration work may run a kernel up to 2KB over its budget
 (`KERN_GRACE`, docs/KERNEL-MEMORY.md) and `make` lets it; **a release may not
-run one byte over**. `budget-check` measures kern_big, kern_small and kern_emu
-against 100,864 / 64,000 / 100,864 and fails naming the one that is over. If it
+run one byte over**. `budget-check` measures kern_big, kern_small, kern_emu and kern_mega
+against 100,864 / 64,000 / 100,864 / 68,096 (kern_mega's RESIDENT figure,
+`MEGA_RESIDENT`) and fails naming the one that is over. If it
 fails, STOP: that is a size pass or a conversation with the owner about the
 budgets, never a raise to get the release out. Report each kernel's
 `KERN_SIZE` and spare from its output.
@@ -330,11 +342,17 @@ make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk midirackdisk            # 1942*.img, midirack*.img
 make waverackdisk                     # waverack*.img -- WaveRack and its clips
+make vbattledisk                      # vbattle*.img -- Video Battle and its
+                                      # demo battle, the four sizes for CGA
+                                      # plus vbattlev (VGA) and vbattleh
+                                      # (Hercules), all in PROGRAMS/VBATTLE
 make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # gallery, which no software disk has
                                       # room for; the 1.44MB disk alone is
                                       # released, as PROGRAMS/PIXEL/PIXEL144.IMG
 make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
+make pagedeskdisk                     # pagedesk*.img -- PageDesk and its eight
+                                      # sample PDFs, PROGRAMS/PAGEDESK
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
@@ -350,7 +368,8 @@ make viddemo viddemozip               # the three 86Box machines with the Video
 make toolszip                         # the firmware and utilities -- the tools
                                       # zip: it cuts the kernel ROMs (`make
                                       # rom`, `socketrom`) against THIS tree
-                                      # and packs the encoder, the Game Boy
+                                      # and packs the encoder, the Video
+                                      # Battle builder, the Game Boy
                                       # precompiler and the splitter bundles
 make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
                                       # DISK (SPEC.md 80.7), the same volume on
@@ -491,7 +510,7 @@ The script does seven things worth knowing about:
   would make `ALL10-144.IMG` and stop it too; that is a naming decision for
   the owner, not a fix to make at release time.
 - **It refuses to pack a partial release.** A missing image that `make` or
-  `make emu` builds stops it; a missing on-demand file is reported and
+  `make emu` or `make mega` builds stops it; a missing on-demand file is reported and
   skipped, and its zip is not written.
 - **It refuses a stale companion.** The live images, the videos zip and the
   tools zip must be newer than `build/kernel.sys` (step 2 says why); one that
@@ -554,7 +573,8 @@ in Notepad as on GitHub, generated from two tables in `mkzip.py`:
 - **`GROUPS`** -- the situations a reader is in, in the order the README takes
   them: *Start here* (the system and software pair per disk size, as a table),
   *More software disks for a 360KB machine*, *A second software disk for a
-  720KB machine*, *A machine with as little as 128KB of memory*, *In an
+  720KB machine*, *A machine with as little as 128KB of memory*, *A 286 or later* (the
+  kern_mega disks), *In an
   emulator or virtual machine* (the emulator disk), *Every program, on a set
   of disks*, *One program per disk*, and *About this zip* (checksums and the
   licence files). Each carries the instructions for using its own files --
@@ -1199,13 +1219,75 @@ to every installed machine. Leave the last release's prefix in the bucket;
 deleting it is the maintainer's, and a machine mid-install is still reading
 it.
 
+### 6b. The shareable PDF, every time
+
+The release also goes out as **one PDF the user can drop into Discord** or
+any chat, for people who will never open the website. Write it last, once the
+notes, the Spotlight page and the zip sizes are final, because it carries all
+three. It is never committed and never attached to the GitHub release.
+
+`pdf/example-20261111.html` is the worked example: PageDesk's release, four
+Letter pages. Copy it into a work folder in your scratchpad, rewrite every
+section for this release, and keep its stylesheet. Three things are fixed by
+the user and are not a matter of taste:
+
+- **A white background.** The page is printed on white with dark ink.
+  `body` sets `background:#fff`, and nothing replaces it with the site's dark
+  theme.
+- **A screenshot of every new addition.** A new program, a new feature or a
+  new look each gets a picture. Take them from what steps 4b and 4e already
+  captured and looked at (`$WEB_REPO/public/img/<subject>/*@2x.png` are the
+  crisp ones). A change with nothing to see gets no picture, and a picture of
+  something that did not change is not added to fill the space. The same rule
+  as a Spotlight page applies: never use a screenshot you have not looked at,
+  and name the emulator and adapter under each.
+- **A Spotlight section for every Spotlight page this release has**, built the
+  way the web page is: the kicker and the title, the lead, a strip of three
+  facts with numbers, cards for what it does, a gallery, what it cannot do
+  yet, and the steps to run it. Take the facts and the words from the page
+  step 4b wrote. Do not write new claims for the PDF.
+
+The shape, from the example:
+
+| page | holds |
+|---|---|
+| 1, Release | the version, date, commit and kernel size; what os8088 is, in one sentence; `summary`; each highlight from `releases.json` with its PR number; a *Good to know* box for `notes`; a *Get it* table of the four zips with their real packed sizes, and where to download them |
+| 2+, Spotlight | one section per Spotlight page, starting on a page of its own |
+| Pictures | a gallery of the new additions, two to a row, each with a caption |
+| last | speed tables, limits and *Run it* steps when the Spotlight page has them, and a footer with the Spotlight URL, the releases page and the source |
+
+A release with no Spotlight page is the release page plus a gallery of what
+changed, and it is fine at two pages.
+
+"Writing the copy" applies to every word, as it does to the website.
+
+```bash
+W=<scratchpad>/relpdf; mkdir -p "$W"
+cp .claude/skills/release-os8088/pdf/example-20261111.html "$W/release.html"
+cp "$WEB_REPO"/public/img/<subject>/<shot>@2x.png "$W"/      # the new additions
+# ...rewrite $W/release.html for this release...
+python3 .claude/skills/release-os8088/mkpdf.py "$W/release.html" --version v1.0.YYYYMMDD
+```
+
+`mkpdf.py` prints the page with headless Chrome. Chrome is the printer
+because it is already installed and needs no Python package; pip was broken
+on this Mac's Python 3.15. The script refuses a page that names a picture
+missing from the folder, warns about a background that is not white, renders
+every page to `$W/pg-N.png`, and copies the PDF to
+`~/Documents/os8088-v1.0.YYYYMMDD-release.pdf`. **Look at every page PNG it
+lists.** The two defects to look for are a section split across a page break
+and a gallery spilling one picture onto a page of its own. Fix those in the
+HTML (`break-inside:avoid` is already on figures, cards and highlights; size
+the grid or cut a picture) and print again.
+
 ### 7. Report
 
 Tell the user: the version, the version-file PR step 1a merged, the PR URL,
 the release URL, the kernel size and its delta, each zip's packed size and
 how many images went into the main one, what step 6a's `--verify` printed
 for each of the three trees, the
-Spotlight page's URL if step 4b ran, the Windows gallery cards step 4e
+Spotlight page's URL if step 4b ran, the PDF step 6b wrote (its path and
+page count), the Windows gallery cards step 4e
 added or changed (or that WIN16 needed none), the Docs snapshot commit step 4d moved
 to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk or companion zip that did not
@@ -1252,6 +1334,9 @@ them in a status line is how they get lost.
   crop of an old shot, or a scene whose click was lost are all the same defect
   to a reader: a picture of something that did not happen. The same goes for
   step 4e's Windows gallery.
+- **Never put a screenshot in the PDF that you have not looked at**, and
+  never commit the PDF or attach it to the GitHub release. It is the user's
+  to share, and it is written from copy that has already been published.
 - **Never commit a Microsoft binary**, in either repository. Step 4e's
   programs come from a private folder, and only the screenshots are
   published.

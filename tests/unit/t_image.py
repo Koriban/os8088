@@ -99,6 +99,13 @@ CLUSTERS = {
 
 SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
                  "os8088-360.img"]
+# ...and the DEBUG disks (SPEC.md 127): bootable volumes with this kernel and
+# boot sector, read by every rule a system disk is, but not system disks to
+# the gates that import SYSTEM_IMAGES - their SOUND.DRV is the -DSNDDIAG build
+# (t_pkg would call it stale) and they carry no Sticky Apps (t_stikcard).
+# t_debugdisk checks what they carry instead.
+DEBUG_IMAGES = ["debug-sound.img", "debug-sound-120.img",
+                "debug-sound-720.img", "debug-sound-360.img"]
 # ...and the 128KB machine's (SPEC.md 24.5.7), shipped since 2026-10-25. They
 # are system disks with a DIFFERENT kernel - build/smallk's - and no
 # BOOTHD.SYS, kern_small having no hard-disk install, so they are read against
@@ -119,7 +126,14 @@ DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "more720.img",
                # ...and WIN16's own disk in four geometries (SPEC.md
                # 124.18.1), DATA images too
-               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
+               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img",
+               # ...and ARCADE's release floppy (ARCADE-SPEC 1.6), DATA images
+               "arcrel.img", "arcrel120.img", "arcrel720.img", "arcrel360.img"]
+# ON-DEMAND data images, read when they have been built: PageDesk's own
+# disks (`make pagedeskdisk`), the 360KB pair among them (PAGEDESK-SPEC
+# 20.22.2.8)
+OPTIONAL_DATA = ["pagedesk.img", "pagedesk120.img", "pagedesk720.img",
+                 "pagedesk360.img", "pagedesk360b.img"]
 
 
 class Vol:
@@ -357,10 +371,15 @@ def main():
     vbr = read(os.path.join(build, "boothd.bin"))
     seen = mp3s = 0
     small = read(os.path.join(build, "smallk", "kernel.sys"))
-    for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
+    for img, is_system in ([(i, True) for i in SYSTEM_IMAGES + DEBUG_IMAGES] +
                            [(i, "small") for i in SMALL_SYSTEM_IMAGES] +
-                           [(i, False) for i in DATA_IMAGES]):
+                           [(i, False) for i in DATA_IMAGES] +
+                           [(i, None) for i in OPTIONAL_DATA]):
         p = os.path.join(build, img)
+        if is_system is None:
+            if not os.path.exists(p):
+                continue
+            is_system, seen = False, seen - 1   # read, not counted below
         if not os.path.exists(p):
             check(False, "%s is missing" % img, "run `make` first")
             continue
@@ -375,7 +394,7 @@ def main():
         elif is_system:
             check_kernel(v, kernel)
             check_hdboot(v, vbr)
-    check(seen == len(SYSTEM_IMAGES) + len(SMALL_SYSTEM_IMAGES) + len(DATA_IMAGES),
+    check(seen == len(SYSTEM_IMAGES) + len(DEBUG_IMAGES) + len(SMALL_SYSTEM_IMAGES) + len(DATA_IMAGES),
           "every shipped image was read", got=seen)
     print("t_image: %d images, kernel %d bytes (%d sectors), %d .MP3 plain"
           % (seen, len(kernel), (len(kernel) + 511) // 512, mp3s))

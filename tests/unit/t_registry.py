@@ -44,6 +44,9 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "vbtrulesdemo.py": "not a test: the Video Battle RULES test battle, a "
+                       "module tests/vbtrules.py and tests/vbtengine.py both "
+                       "import (the battle, its plan, the reference's moves)",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`
@@ -107,6 +110,14 @@ UNREGISTERED = {
                  "tests/pixelstein.py and tests/pxssim.py, and not a test: "
                  "dispcp.py's lesson one entry up, a library registered as a "
                  "row is a row that cannot fail",
+    "brgifs.py": "the FIXTURE BUILDER for the Browser's GIF rows (SPEC.md "
+                 "71.26): the page and its GIFs, made by tools/pixcorpus.py's "
+                 "encoder so nothing binary is committed. It asserts nothing; "
+                 "tests/ethernet.py --gif-fixtures imports it and is the row "
+                 "(brgif, brgifcga, brgifreload)",
+    "brgifref.py": "the REFERENCE ready copy those rows hold the guest's to "
+                   "(SPEC.md 71.26), built from tools/pixelsim.py's decode "
+                   "and plans; imported by tests/ethernet.py --gif-check",
     "imgfix.py": "the FIXTURE BUILDER for tests/imgmount.py (SPEC.md "
                  "18.101): it writes host volumes carrying disk images, one "
                  "of them fragmented by moving its clusters about, and "

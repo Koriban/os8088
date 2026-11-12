@@ -19,7 +19,7 @@ Two rules the entries exist to serve:
   audio report sat here for months as a 5150 report and had come off PCem;
   the 5150 has no sound card.
 
-**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 61, 63, 64, 68, and one residual
+**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, 63, 64, 66, 68, 69, and one residual
 each in 33 and 37.
 
 ---
@@ -643,7 +643,9 @@ mounted a 360KB one (9) switched crossing back on; the word is a boolean now,
 written only on the path where a crossing run passed the canary.
 
 **The BIOS survey** (`build/rdiag360.img`, one boot each; the clone ROMs are in
-`tools/martypc/roms/`, untracked):
+`tools/martypc/roms/`, untracked). Taken while stage 1 read that payload in
+cylinder runs; its loop is track-bounded now, so `rdiag360.img` crosses no head
+and cannot repeat this survey (tests/rdiag.asm's header, note 68):
 
 | BIOS | class | result |
 |---|---|---|
@@ -4295,7 +4297,60 @@ out and green with it.
 that is this fix, or whether the condition simply has not come up again, is
 unknown. If the pointer is ever dead after a play again, reopen this entry.
 
-## 68. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — not reproduced on the tree of 2026-10-21, and THE REPORTING BUILD IS RECONSTRUCTIBLE)
+---
+
+## 68. Pravetz 8088: reported as unable to use cylinder floppy reads, and booting "fine but longer" (OPEN - which disk, and which rescue, are not known)
+
+**The report** (the owner, 2026-11-08, in the big review's answers): one known
+machine, a Pravetz 8088, cannot use cylinder floppy reads; it boots fine
+today, but more slowly. The owner asked whether this meant the boot canary
+(SPEC.md 18.93.1) had broken recently.
+
+**What is established** (docs/reports/big-review-2026-11-08/followup-canary.md,
+from the code and `git log`, nothing booted):
+
+- **No record in the tree says a Pravetz cannot do cylinder reads.** The one
+  Pravetz record is #343 (`974c976d`, 2026-11-06): the Pravetz 16S / CPU12
+  Plus ROM answers `int 15h AH=C0h` with IF left clear, and the serial-mouse
+  reset then waited for ever (SPEC.md 9.7.2). `tests/pravetzboot.py` boots
+  86Box's model of that machine on the 1.44MB disk and reads neither
+  `boot_cylrun` nor `b2_cylok`, so it has never asked this question. This
+  machine is not in note 31's BIOS survey.
+- **"Boots fine but longer" is what a WORKING rescue looks like.** Stage 2 has
+  two: `read_run`'s retry catches a ROM that ERRORS on a crossing run (three
+  attempts, then `.rerun` reloads at the track bound - it does not depend on
+  the canary at all), and the canary catches one that LIES (`CF = 0`, the
+  other head's sectors). Both end in one more full load at the track bound,
+  `boot_cylrun` = 0 and `b2_cylok` = FE, and the kernel cannot tell them
+  apart afterwards.
+- **The canary was inert on the 360KB and 720KB system disks** from
+  2026-09-05 (KZIP the default) until the big review's BR-1 moved it to file
+  sector 57 (2026-11-08, docs/plans/completed/BOOT3-PLAN.md 16.6) - but a LYING ROM
+  booting one of those disks would not have booted fine in that window: the
+  corrupt tail would have been expanded, most likely hanging the decoder. So
+  the report is consistent with an erroring ROM on any disk, or a lying ROM
+  on the 1.44MB disk, where the canary stayed live. It is no evidence that
+  anything broke lately, and none that the old canary worked on 9-sector
+  disks.
+- **The instrument note 31 used no longer asks the question**: `rdiag360.img`
+  is read by stage 1, which is track-bounded now (tests/rdiag.asm's header).
+
+**Not known, and wanted:**
+
+1. Which disk the reporter boots (360KB, 720KB, 1.2MB or 1.44MB), and which
+   kernel (kern_big or kern_small).
+2. Whether the ROM ERRORS or LIES on a crossing run. One run settles it on
+   86Box's model, if that model matches the field machine (the row says it
+   does): `pravetzboot` extended to read `boot_cylrun` and `b2_cylok` at the
+   desktop and to catch `.rerun`'s caller - entered from `read_run`, the ROM
+   errors; from the canary, it lies - on `os8088.img`, and once more with a
+   360KB image on a `525_2dd` drive.
+3. The Floppy page's Reads verdict on the machine itself (SPEC.md 31.14).
+
+**What changes with the answer**: an erroring ROM needs nothing; a lying ROM
+on a 9-sector disk is exactly what the new canary is for, and is the first
+XT-class ROM of that kind on record (note 31 found none).
+## 69. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — not reproduced on the tree of 2026-10-21, and THE REPORTING BUILD IS RECONSTRUCTIBLE)
 
 **THE DESKTOP THIS WAS REPORTED ON NO LONGER EXISTS.** The fork's VBE track -
 `VBE.DRV`, `kernel/vbe.inc` and the 1024x768x16 PLANAR mode `0104h` - was
@@ -4332,7 +4387,7 @@ controller (that is what `Elendilon/os8088`'s `protected-mode` branch calls the
 shared-buffer signature, KERN-MEGA-PLAN 14.62-14.64), and this machine's mouse
 never stopped. Whatever stops the keyboard is keyboard-SPECIFIC.
 
-### 68.1 The instrument
+### 69.1 The instrument
 
 `tests/kbdfsx` was written for this report. It samples, into a report it can
 write to disk, the four things that are keyboard-specific on a PS/2 machine:
@@ -4356,7 +4411,7 @@ never calls `OSAPI_FSX_MODE`, so SPEC.md 53.6 skips the restore and the card is
 never touched; `mode 13h` sets one, which is what a game does and what makes
 the kernel put the VBE desktop back through `VBE.DRV`.
 
-### 68.2 Four runs, and what each one killed
+### 69.2 Four runs, and what each one killed
 
 All four on a current-tree build written to the owner's CF card, at the card's
 own geometry (194 cylinders at 255x63). The transcripts are kept whole in
@@ -4393,7 +4448,7 @@ ran. It is not - a game that hooks `int 09h` and does not chain takes keys
 *before* the ROM stores them, so those pointers do not move while it is up.
 The evidence the games ran is `i09` being back to the kernel's.
 
-### 68.3 What is left, and why it stops here
+### 69.3 What is left, and why it stops here
 
 The one variable not controlled is **the build**. The reporting install
 predated an upstream merge cycle; the test card was built from the tree after
@@ -4508,7 +4563,7 @@ thermal, and an SMI taken for *those* reasons is not switched off by the USB
 legacy setting. That is a hypothesis with nothing behind it yet and is
 recorded as one, not as a finding.
 
-### 68.4 What the report found anyway
+### 69.4 What the report found anyway
 
 The field report caught a defect that had nothing to do with it. On the
 1024x768 desktop, `Sample Now` painted white down the left of the SCREEN:

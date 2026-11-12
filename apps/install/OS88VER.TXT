@@ -1,5 +1,5 @@
-20261106
-* Claim your WireChat nickname
-* Manage WireChat nickname codes
-* One active sign-in per nickname
-* Fix Pravetz freeze during boot
+20261112
+* Browser shows GIF, PNG and JPEG
+* Animated GIFs and image maps
+* Save Image As from the page
+* Browser is now a Wire download

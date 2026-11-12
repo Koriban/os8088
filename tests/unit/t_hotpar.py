@@ -78,13 +78,47 @@ HOT = {
         "mou_p2_isr": 0, "kbm_isr": 1, "cur_move": 0, "cur_move_1": 1,
         "sch_isr": 1, "sch_switch": 1, "ui_task": 0, "dsk_xfer": 1,
         "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
+        # the VGA rung's busiest bodies, pinned where kernel hot-paths pass 1
+        # measured them (docs/plans/khp1/vga.md). The rung starts on a
+        # paragraph, so only `.vga` bytes above them can move these
+        "vga_solid_rect_v": 0, "gfx_fill_gray_raw_v": 1,
+        "vga_save_vram_v": 0, "vga_restore_vram_v": 1,
+        "vga_blit_span": 0, "gfx_blitp_v": 0,
     },
+    # RE-MEASURED AT THE 2026-11-12 UPSTREAM MERGE (19 commits), and this
+    # time it is kern_small that moved: TWELVE of its sixteen, where the
+    # 2026-10-24 note above says kern_small "did not move at all".
+    #
+    # AND THE MOVE IS UPSTREAM'S, NOT THIS FORK'S - measured, not assumed.
+    # kern_small built from origin/main's own sources (0129de48) in a scratch
+    # worktree violates THIS table in the same twelve symbols at the same
+    # twelve addresses: cur_move 20B9, font_run 15B1, font_run_x 15B9,
+    # font_run_cell 17DF, gfx_blit4 0B07, kbm_isr 1A89, mou_isr 1C37,
+    # mou_isr_body 1C45, sch_isr 2547, sch_switch 2636, wm_paint_all 379A,
+    # ui_task 59E0. Identical addresses also say the fork's own divergence
+    # puts nothing in front of them: it is outside kern_small's image.
+    # Upstream does not see it because the row checks kern_small only when
+    # build/smallk holds a CURRENT build, and on a tree where `make small`
+    # has not run to completion current_map() returns None and the row prints
+    # "not checked" instead. Worth a note upstream rather than a fork fix.
+    #
+    # THE TRADE, recorded rather than quietly accepted, in the 2026-10-20 and
+    # 2026-10-24 notes' form. NINE landed ODD and are dearer on a 16-bit bus:
+    # the text renderer's three (font_run, font_run_x, font_run_cell) again,
+    # gfx_blit4, cur_move, kbm_isr, mou_isr, mou_isr_body and sch_isr - so
+    # the whole mouse path has gone back to odd, the same four the 2026-10-24
+    # merge had won by luck and said "the next merge can take it back again".
+    # It took them back. THREE landed EVEN and are cheaper: sch_switch,
+    # ui_task and wm_paint_all. Nothing was padded, which is this file's
+    # standing call - a pad chasing one symbol shifts every symbol behind it,
+    # so it is a measured pass or nothing, and the pass is not this merge's
+    # work.
     "small": {
-        "gfx_blit1_x": 0, "gfx_blit4": 0, "font_run": 0, "font_run_x": 0,
-        "font_run_cell": 0, "mou_isr": 0, "mou_isr_body": 0, "kbm_isr": 0,
-        "cur_move": 0, "sch_isr": 0, "sch_switch": 1, "ui_task": 1,
+        "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 1, "font_run_x": 1,
+        "font_run_cell": 1, "mou_isr": 1, "mou_isr_body": 1, "kbm_isr": 1,
+        "cur_move": 1, "sch_isr": 1, "sch_switch": 0, "ui_task": 0,
         "dsk_xfer": 0, "dsk_runcap": 0, "dsk_next_clus_x": 1,
-        "wm_paint_all": 1,
+        "wm_paint_all": 0,
     },
 }
 

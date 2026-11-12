@@ -1,6 +1,6 @@
 # KBDFSX on the Satellite 4025CDT — four runs, 2026-10-21
 
-The raw transcripts behind docs/FIELD-NOTES.md 68: "the keyboard stops after a
+The raw transcripts behind docs/FIELD-NOTES.md 69: "the keyboard stops after a
 full-screen app, the mouse does not". Written by `tests/kbdfsx` on the owner's
 machine and read off the CF card; kept because the entry's six eliminations
 rest on them and a summary is not evidence.

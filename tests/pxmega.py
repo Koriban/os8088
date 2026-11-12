@@ -24,7 +24,7 @@ than its ground) and not the one before it.
 
 THE FAILING CASE (docs/WRITING-TESTS.md 1): put pxgif.asm's pa_comp back to
 `and di, 15` (one paragraph) and BOUNCE.GIF's first frame is a FAULT; put
-any `mov [es:...]` of pxplan.inc's pl_plan1 back to `[cs:...]` and
+any `mov [es:...]` of pxplan1.inc's pl_plan1 back to `[cs:...]` and
 BALLOONS.PNG takes thousands of traps. Both were measured red when this was
 written.
 """
@@ -52,7 +52,10 @@ class Pixel(object):
 
     def __init__(self, box, build):
         self.box = box
-        self.map = os88sym._parse_map(os.path.join(build, "pixel.map"))[0]
+        # the arm's own map: its resident is its own since MEGA-HUGE-PLAN 3
+        # (SPEC.md 106.8.1)
+        self.map = os88sym._parse_map(os.path.join(build, "megak", "apps",
+                                                   "pixel.map"))[0]
 
     def read(self, label, n):
         return self.box.pkg_read("PiXEL", self.map[label], n)

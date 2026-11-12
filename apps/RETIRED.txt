@@ -102,6 +102,11 @@ building   ledger      # A fork of apps/plan/plan.asm under the owner's name for
                        # apps/plan/plan.asm back byte for byte. No money-manager
                        # feature exists yet; `make ledger` builds it standalone and
                        # `all` keeps it assembling. The owner decides when it ships.
+local      vbattle     # SPEC.md 126. Video Battle: an ENGINE whose battles are bundles
+                       # (.VBT) - the owner's own, made from captured clips, are theirs and
+                       # are never committed. `make vbattledisk` carries the package with
+                       # the original demo battle tools/os88vbt.py builds; no standard
+                       # image carries it while the engine is being built out.
 local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # (2026-10-21, PR #168 merged): its data is the original DOS
                        # Lemmings' 26 files, DMA Design's and still commercially

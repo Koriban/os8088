@@ -38,13 +38,24 @@ IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img", "os8088-360.img",
           # ...and the 128KB machine's system disks (SPEC.md 24.5.7)
           "small360.img", "small720.img",
           # ...and WIN16's own disk in four geometries (SPEC.md 124.18.1)
-          "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
+          "win16.img", "win16-120.img", "win16-720.img", "win16-360.img",
+          # ...and ARCADE's release floppy in four (ARCADE-SPEC 1.6)
+          "arcrel.img", "arcrel120.img", "arcrel720.img", "arcrel360.img",
+          # ...and the sound debug disk in four geometries (SPEC.md 127)
+          "debug-sound.img", "debug-sound-120.img", "debug-sound-720.img",
+          "debug-sound-360.img"]
+# ON-DEMAND images, verified when they have been built: PageDesk's own disks
+# (`make pagedeskdisk`), the 360KB pair among them (PAGEDESK-SPEC 20.22.2.8)
+OPTIONAL = ["pagedesk.img", "pagedesk120.img", "pagedesk720.img",
+            "pagedesk360.img", "pagedesk360b.img"]
 
 
 def main():
     seen = 0
-    for img in IMAGES:
+    for img in IMAGES + OPTIONAL:
         p = os.path.join(ROOT, "build", img)
+        if img in OPTIONAL and not os.path.exists(p):
+            continue
         if not check(os.path.exists(p), "%s exists" % img, "run `make` first"):
             continue
         r = subprocess.run([sys.executable, "tools/os88disk.py", "--verify", p],
