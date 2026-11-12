@@ -251957,6 +251957,18 @@ the value does not fit.
 and agrees with §150.28's rule that a zero-length string is skipped
 everywhere else.
 
+**AND THE CLAMP IS WATCHED BY A NEIGHBOUR, because the target cannot see
+it.** The truncation above is the one part of this section a reading of the
+target is blind to: a missing clamp writes the SOURCE's whole length into
+the field, and `PRINT a$` still shows the field's width, the length
+belonging to the variable and not to the write. The bytes past the end land
+in whatever owns the next of the arena. So `basiclang3` declares a second
+string after the field and reads it AFTER both over-long writes. MEASURED:
+with the clamp removed for `LSET`, a four-byte neighbour of a five-byte
+field came back `fghZ` instead of `ZZZZ`, while both reads of the field
+itself, and the neighbour's own LENGTH, were unchanged - so the content of
+the neighbour is the only assertion that sees it.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

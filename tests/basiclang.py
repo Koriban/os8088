@@ -1025,11 +1025,26 @@ PART35 = [
     ('PRINT "<" + a$ + ">"',             "<7    >"), # ...kept, and padded
     ('RSET a$ = "7"',                    None),
     ('PRINT "<" + a$ + ">"',             "<    7>"),
+    # AND A NEIGHBOUR BEHIND IT, which is what makes the over-long lines an
+    # assertion rather than a decoration. A missing clamp writes the source's
+    # whole length into a field that is five bytes - and `PRINT a$` STILL
+    # SHOWS FIVE, the length being the variable's and not the write's, so
+    # the overrun is invisible here and lands in whatever owns the next
+    # bytes. Measured, both ways: with the two justify mutations applied the
+    # `<abcde>` lines below did not move at all, and with the clamp removed
+    # for LSET this z$ came back `<fghZ>` - the three bytes past a five-byte
+    # field - while both reads of a$ AND `LEN(z$)` stayed correct. So the
+    # neighbour's CONTENT is the only assertion here that sees an overrun.
+    # z$ is allocated after a$ in the same bump arena (150.28), which is why
+    # it is what the stray bytes take, and it is read AFTER both writes.
+    ('z$ = "ZZZZ"',                      None),
     ('LSET a$ = "abcdefgh"',             None),      # longer than the field
-    ('PRINT "<" + a$ + ">"',             "<abcde>"),
+    ('PRINT "<" + a$ + ">"',             "<abcde>"), # the field does not grow
     ('RSET a$ = "abcdefgh"',             None),
     ('PRINT "<" + a$ + ">"',             "<abcde>"), # the SAME first five:
-    ('e$ = ""',                          None),      # one rule for both
+    ('PRINT "<" + z$ + ">"',             "<ZZZZ>"),  # one rule for both...
+    ("PRINT LEN(z$)",                    "4"),       # ...and nothing spilled
+    ('e$ = ""',                          None),
     ('LSET e$ = "zz"',                   None),
     ("PRINT LEN(e$)",                    "0"),       # a zero field: no-op
 ]
