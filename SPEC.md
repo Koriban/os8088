@@ -251785,12 +251785,25 @@ which is why the correction is left visible rather than tidied away. It said
 clears in place)". `REDIM` appears in NONE of the reference's 542 command
 nodes - it is QuickBASIC's word, and the same wrong-dialect borrowing that
 put `SELECT CASE` and `STATIC` in §150.21 and §150.26 before the nodes were
-read. And `ERASE` is the reference's, but it does the opposite of what that
-sentence claimed: node [94] gives `ERASE z1(),z2()` as DELETING whole
-arrays and releasing their memory, after which they may be `DIM`med again,
-and clearing in place is `ARRAYFILL`'s job (node [73]). A plan's own prose,
-once written, stops being questioned - so it is the nodes that settle this
-and §150.33 that states the result.
+read.
+
+**`ERASE`'s half was NOT a wrong description - it was the right one with
+the wrong source attached, and that is a sharper trap.** Both parentheticals
+are true of `basicnw`, the TypeScript implementation this chapter uses as
+its oracle (§150.9): its `ERASE` builds a fresh array of the SAME dimensions
+(`interp.ts`, `new QbArray(arr.dims, ...)`) so it clears in place, and its
+`REDIM` builds one with NEW dimensions so the contents go. The defect is the
+phrase "the reference says", written after the target had become GFA. THERE
+ARE TWO AUTHORITIES HERE AND ONE WORD WAS USED FOR BOTH: the GFA Compendium,
+which is what the language is measured against, and `basicnw`, which is what
+its answers are compared with. GFA's `ERASE` is a different statement
+wearing the same name - node [94] DELETES whole arrays and releases their
+memory, after which they may be `DIM`med again - and clearing in place is
+`ARRAYFILL`'s job there (node [73]).
+
+So the rule this leaves is about the WORD, not the dialect: *the reference*
+is ambiguous in this chapter and must not be used. Say the Compendium, or
+say `basicnw`, and a sentence like that one cannot be written again.
 
 ### 150.32 A string array element is a second kind of root
 
@@ -251866,7 +251879,18 @@ both unavailable, and neither for a reason a bigger effort would fix:
 So the refusal names the reason and names `ARRAYFILL`, which is what a
 program reaching for `ERASE` most likely wanted. Reporting it as "not a
 statement this wave knows" would be the wrong reason for a word the
-reference has and this chapter has read.
+Compendium has and this chapter has read.
+
+**And that wording serves BOTH dialects, which is why it is the right
+message rather than a convenient one.** `basicnw`'s `ERASE` clears an array
+in place, keeping its dimensions, so a programmer arriving from the oracle
+wanted what `ARRAYFILL` does and the refusal hands them the word. A
+programmer arriving from the Compendium wanted the memory back, and "frees
+nothing here" is the answer to that. Neither is told to go away; both are
+told which word to type. §150.9's rule still holds - no QuickBASIC program
+is a specification for this language - so `ERASE` is NOT quietly given
+`basicnw`'s meaning, which would be adopting the other dialect's semantics
+for a word the Compendium defines differently.
 
 **What `ERASE` is really waiting on is RUNTIME-SIZED ARRAYS** - `DIM a(n)`
 with an expression, the arena allocated and bounds checked at run time.

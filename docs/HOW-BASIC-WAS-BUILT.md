@@ -1574,22 +1574,43 @@ The plan did not merely list it — it described *"which the reference says
 loses the contents"*, a claim about a node that does not exist. That is the
 third time this chapter has borrowed from the wrong dialect: `SELECT CASE`
 in §150.21 and `STATIC` in §150.26 were the first two, and all three got
-into the plan the same way, from the general BASIC survey rather than from
-the manual beside it.
+into the plan the same way — `510aa0ec`, the FIRST plan commit, titled
+"BASIC/nw as a native package" and written before the GFA target existed, so
+wave 3 was drafted from BASIC/nw's vocabulary. The waves were reordered for
+the new target later that day; their CONTENTS were not re-read.
 
-**`ERASE` is the reference's, and does the opposite of what I had written.**
-Node [94] carries three statements, and `ERASE z1(),z2()` *deletes* whole
-arrays and releases their memory, after which they may be `DIM`med again.
-My sentence had it "clearing in place". The word for clearing in place is
-`ARRAYFILL`, node [73] — which I had not listed at all, along with `CLR`,
-which sits in the same node as `ERASE` and which I had also missed. So the
-list named one thing that does not exist, described a second backwards, and
-omitted the two that do the job.
+**`ERASE` I first called backwards, and that was my own error on top of the
+first one.** I wrote in SPEC.md, the plan and two commit messages that the
+sentence had `ERASE` doing the opposite of node [94], which *deletes* whole
+arrays and releases their memory. Then the owner asked what `ERASE` did in
+BASIC/nw, which I had not checked — and `interp.ts` answers it in four
+lines: `new QbArray(arr.dims, arr.type, ...)`, a fresh array of the SAME
+dimensions. **It clears in place.** The sentence was a correct description
+of `basicnw`'s `ERASE`, and `basicnw`'s `REDIM` does lose the contents too,
+taking new dimensions from runtime expressions.
 
-My own prose is what misled me. The sentence had been in the plan since the
-wave was planned and in SPEC.md §150.31 since the arrays shipped, and in
-neither place had anyone — me — gone back to the node. Both corrections are
-left visible in those files rather than tidied, for that reason.
+So the defect was never the description. It was the three words *"the
+reference says"*, written once the target had become GFA. **This chapter has
+TWO authorities and one word for both**: the GFA Compendium, which the
+language is measured against, and `basicnw`, which its answers are compared
+with (§8). Two statements share the name `ERASE` and mean different things,
+and the sentence picked the right meaning under the wrong label.
+
+That makes the rule a narrower and more useful one than "read the node":
+**never write "the reference" in this chapter.** Write the Compendium, or
+write `basicnw`. A sentence that names its authority cannot make this
+mistake, and no amount of node-reading would have caught a sentence that was
+already true.
+
+What stands from the first pass: `REDIM` really is in none of GFA's 542
+nodes, `ARRAYFILL` and `CLR` really were missing from the list, and `CLR`
+was missing for a reason worth knowing — it lives inside node [94] with
+`ERASE`, and the keyword-gap generator reads node TITLES, so it is invisible
+to the table the list was drawn from. That blind spot is now measured in
+BASIC-PLAN.md §0.3: 53 of the 136 words filed as BASIC/nw-only are GFA's.
+
+And the correction to the correction is left visible, like the first one.
+Both were my prose, and prose is what the next reader trusts.
 
 **`CLR` cost no opcode, which is the nicest thing about it.** `CLR x` *is*
 `x = 0` and `CLR x$` is `x$ = ""`, and both are paths this file already had

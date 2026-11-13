@@ -537,12 +537,19 @@ the third time that has happened in this chapter after `SELECT CASE` and
   QuickBASIC's word. The sentence above had it as GFA's and described what
   "the reference says" about it; the reference says nothing, because it does
   not have it.
-- **`ERASE` is the reference's, and does the opposite of what was written
-  here.** Node [94] gives `ERASE z1(),z2()` as *deleting* whole arrays and
-  releasing their memory, after which they may be `DIM`med again — not
-  "clears in place". Clearing in place is `ARRAYFILL`'s job, node [73], and
-  that node is also where the limit comes from: it cannot fill a string
-  array.
+- **`ERASE`'s description was RIGHT, with the wrong source attached.**
+  "Clears in place" is exactly what `basicnw`'s `ERASE` does — a fresh array
+  of the SAME dimensions, `interp.ts`'s `new QbArray(arr.dims, ...)` — and
+  `basicnw`'s `REDIM` does lose the contents, taking new dimensions from
+  runtime expressions. What was wrong is the phrase *"the reference says"*,
+  written once the target was GFA. **This chapter has TWO authorities and
+  used one word for both**: the Compendium, which the language is measured
+  against, and `basicnw`, which its answers are compared with (§8). GFA's
+  `ERASE` is a different statement with the same name — node [94] deletes
+  whole arrays and releases their memory — and clearing in place is
+  `ARRAYFILL`'s job there, node [73], which is also where the limit comes
+  from: it cannot fill a string array. **So: never write "the reference"
+  here. Write the Compendium, or write `basicnw`.**
 - **`CLR` was missing from the list entirely**, though it is in the same
   node as `ERASE` — `CLR x,y` for scalars, with the reference's own note
   that arrays go to `ARRAYFILL` instead.
