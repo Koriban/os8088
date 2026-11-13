@@ -251848,12 +251848,34 @@ is evaluated ONCE, before the loop, which is what the reference's
 `ARRAYFILL x(),5+1` example means and is also the only reading that makes
 the statement's cost independent of the array's size.
 
-`ERASE` is the third of node [94]'s and is NOT in this section, because it
-releases an array's space and this chapter's array arena is a bump
-allocator (§150.31): freeing a middle array means sliding the ones above it
-and rewriting their `BAS_ARR_AT`, which is §150.28's compaction again in a
-second arena. It is named here so the next pass starts from the node and
-not from the old sentence §150.31 corrects.
+**`ERASE` IS REFUSED BY NAME, AND THAT IS A DECISION RATHER THAN A GAP.**
+It is the third of node [94]'s statements, and on this implementation it
+would do NOTHING A PROGRAM COULD OBSERVE. Its two documented effects are
+both unavailable, and neither for a reason a bigger effort would fix:
+
+- *"releases their memory"* - the array arena is handed out while the
+  program is COMPILED (`bas_c_dim` advances the allocator and writes
+  `BAS_ARR_AT` there), so by the time any line runs every array's slice is
+  already assigned and there is no later allocation that freed bytes could
+  go to;
+- *"which can then be redimensioned if required"* - a second `DIM` of one
+  name is refused at compile time (§150.31), and `DIM` takes a CONSTANT
+  here where the reference takes an `iexp`, so there is no computed size to
+  re-dimension to even if it were not.
+
+So the refusal names the reason and names `ARRAYFILL`, which is what a
+program reaching for `ERASE` most likely wanted. Reporting it as "not a
+statement this wave knows" would be the wrong reason for a word the
+reference has and this chapter has read.
+
+**What `ERASE` is really waiting on is RUNTIME-SIZED ARRAYS** - `DIM a(n)`
+with an expression, the arena allocated and bounds checked at run time.
+That is the feature behind both of its uses, and in the reference both rest
+on conditions this machine does not share: arrays up to 128KB where memory
+is genuinely scarce, and a size read from the data. Until `DIM` takes an
+expression, `ERASE` is a no-op with a misleading name - which is likely why
+node [94]'s own memo says *"The command ERASE should be avoided as it can
+lead to many hard to find errors."*
 
 ### 150.34 `SWAP`, and the twelve bytes that move
 

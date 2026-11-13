@@ -575,6 +575,9 @@ bas_c_stmt:
     mov si, bas_kw_rset
     call bas_wordis
     je .rset
+    mov si, bas_kw_erase            ; node [94]'s third, REFUSED by name and
+    call bas_wordis                 ; with the reason (SPEC.md 150.33)
+    je .erase
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -1991,6 +1994,9 @@ bas_c_stmt:
     pop ax
     pop ax
     mov si, bas_e_lseteq
+    jmp bas_err
+.erase:
+    mov si, bas_e_erase
     jmp bas_err
 .x:
     ret
@@ -7075,6 +7081,7 @@ bas_kw_afill:   db 'ARRAYFILL', 0
 bas_kw_swap:    db 'SWAP', 0
 bas_kw_lset:    db 'LSET', 0
 bas_kw_rset:    db 'RSET', 0
+bas_kw_erase:   db 'ERASE', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -7162,5 +7169,12 @@ bas_e_swapmix:  db 'SWAP takes two variables or two arrays, not one of each', 0
 bas_e_swapname: db 'SWAP wants two names', 0
 bas_e_lsetstr:  db 'LSET and RSET want a $ name', 0
 bas_e_lseteq:   db 'LSET and RSET go LSET a$ = b$', 0
+; REFUSED WITH A REASON, not as an unknown word (SPEC.md 150.7): ERASE is the
+; reference's and leaving it out is a decision, so the message says so and
+; names the word a program reaching for it probably wanted. SHORT BECAUSE THE
+; CONSOLE IS 80 COLUMNS - the first draft ran to 135 with `Error at line N: `
+; on it, which WRAPS, and a wrapped refusal is two console lines where every
+; gate asserts one. The whole reason is SPEC.md 150.33's, not a message's.
+bas_e_erase:    db 'ERASE frees nothing here - ARRAYFILL clears one in place', 0
 bas_e_notarr:   db 'that is not an array', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

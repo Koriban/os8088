@@ -1056,6 +1056,19 @@ PART36 = [
      "Error at line 3: LSET and RSET want a $ name"),
 ]
 
+# ERASE IS REFUSED WITH ITS REASON, and the row asserts the REASON and not
+# merely that something was refused - "not a statement this wave knows"
+# would pass a test that only looked for an error, and it is the wrong
+# answer for a word the reference has and this chapter decided about
+# (SPEC.md 150.33).
+PART37 = [
+    ("CLS",                              None),
+    ("DIM k(3)",                         None),
+    ("ERASE k()",
+     "Error at line 3: ERASE frees nothing here - ARRAYFILL clears one "
+     "in place"),
+]
+
 # THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
 # is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1066,7 +1079,8 @@ EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
-W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35, PART36)
+W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
+          PART36, PART37)
 PARTS = EARLY + LATE + W3TAIL
 
 if "--early" in sys.argv:

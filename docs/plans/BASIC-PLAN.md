@@ -124,6 +124,29 @@ gap: the 218 names GFA has and this does not are **a menu, not a backlog**.
 A floor rather than a census: the mirror carries one node per *documented*
 command, so a keyword documented inside another's page is not counted.
 
+**AND "A FLOOR" IS TOO SOFT A WORD FOR IT — the number is 53 of 136.** This
+caveat was here from the first draft and it did not stop the error it
+describes: wave 3's list was drawn from the `BASIC/nw only` side, which is
+exactly the column the caveat says is unreliable, and `ERASE` came across as
+a word GFA does not have. It has one: node [94], where `CLR` lives too —
+which is why `CLR` was missing from that list altogether. `LSET` is a third,
+inside node [164].
+
+Measured by scanning each node's BODY for the syntax lines the manual puts
+at its head and diffing against the title-derived set: **53 of the 136 words
+filed as "in BASIC/nw and not in GFA" are GFA's**, among them `ELSE`, `END`,
+`NEXT`, `RETURN`, `GOSUB`, `DATA`, `READ`, `RESTORE`, `UNTIL`, `WEND`,
+`LOOP`, `CASE`, `EXIT` and `OPTION` — several of which this project has
+already built AS GFA features while the table said they were not GFA's at
+all. (The scan is a heuristic and a few of the 53 are noise, `MOD` and the
+word `GFA` among them; the ones listed here are not.)
+
+So the column is not a menu and not a backlog: **it is not evidence.** Read
+the node before putting any word from it into a wave, and when the
+generator is next touched, make it scan node bodies for `^KEYWORD ` syntax
+lines rather than titles alone — at which point the count becomes one worth
+quoting.
+
 **And GFA is no longer the only comparison.** Five dialects' manuals are held
 in `_LIBRARY/languages/basic/` and their keyword lists extracted into one
 corpus by `basicnw/notes/gen-keyword-corpus.py`
@@ -527,10 +550,25 @@ the third time that has happened in this chapter after `SELECT CASE` and
   descriptors are exchanged, *"having the effect of also exchanging the
   dimensioning of the two arrays"*.
 
-Still open in it, in this order: **`ERASE`** (which needs the array arena to
-reclaim, so it is §150.28's compaction in a second arena), **`LSET`/`RSET`**
-(node [164], and fixed-length: *"only its length is significant"*), **a
-third dimension** (the reference allows seven, product under 65535, and this
+**`LSET`/`RSET` are in too** — SPEC.md §150.35, node [164], fixed-length
+because *"only its length is significant"*.
+
+**And `ERASE` is DECIDED, not deferred: refused by name** (§150.33). It
+would do nothing a program could observe here. Its two documented effects
+both rest on run-time allocation that this chapter does not do: the arena
+is handed out while compiling, so freed bytes have no later `DIM` to go to,
+and a second `DIM` of one name is refused at compile time — with `DIM`
+taking a CONSTANT where the reference takes an `iexp`, so there is no
+computed size to re-dimension to anyway.
+
+So the thing `ERASE` was standing in for is **`DIM` of an EXPRESSION**:
+runtime-sized arrays, the arena allocated and the bounds checked at run
+time. That is one coherent piece of work and it is what makes `ERASE`,
+re-`DIM` and a data-driven program size possible at all; it is now the open
+item, in `ERASE`'s place.
+
+Still open, in this order: **`DIM` of an expression** (above), **a third
+dimension** (the reference allows seven, product under 65535, and this
 record's size is a power of two for the indexer's sake — so the third costs
 it the shift), **`DIM?()`** for the element count, and **`TYPE` records with
 their dotted names** plus **`BYTE`/`WORD`**, which want the type system
