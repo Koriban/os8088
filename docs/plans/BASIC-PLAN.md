@@ -589,6 +589,43 @@ their dotted names** plus **`BYTE`/`WORD`**, which want the type system
 program now owns real OS windows and dispatches real events. **Exit: a GUI
 application written in BASIC, with a menu bar, that responds to clicks.**
 
+**ITS PREREQUISITE IS SETTLED FIRST, AND IT IS NOT WHAT §0.1 SETTLED.**
+SPEC.md §150.36 is the other half of the event loop: §0.1 above says what a
+yield LOOKS like in the language, and §150.36 says how the interpreter can
+yield at all — which, in the context `RUN` executes in today, it cannot.
+Three measured facts decided it:
+
+- **`RUN` is an `AM_ONCMD` item, so a program runs on the UI TASK UNDER THE
+  GFX LOCK** (SPEC.md §12.2, and `basic.asm` says so above `bas_oncmd`).
+  `OSAPI_TASK_YIELD` there gives up the slice still holding the lock — and
+  worse, the events `ON MENU` exists to dispatch are delivered BY the UI
+  task, which is the one stuck inside `bas_exec`. No yield from that handler
+  can ever produce one.
+- **`OSAPI_WM_WAKE` is the resume signal.** It posts an `EVT_WAKE` the UI
+  task pops IN ORDER with the mouse and key events, so a wake posted at
+  `ON MENU` arrives behind the clicks already queued: the handlers run on
+  what was waiting, and the program resumes behind them.
+- **The interpreter is ALREADY resumable, for two words.** Nothing rides the
+  host stack across an op boundary — `OP_CALL` stores a `bas_ops`-relative
+  offset in a bss frame rather than pushing a return — so the whole machine
+  at a `.next` is the op cursor and the value-stack pointer. Checked in the
+  shipped code, not assumed.
+
+So `ON MENU` RETURNS out of the handler rather than yielding inside it, and
+a wake brings it back; `ALERT` and `FILESELECT` use the same seam, which is
+also what makes `os88ui_ask`'s asynchronous completion fit a statement that
+appears to block. **And it makes one rule for every opcode from here on: no
+op may leave state on the host stack across a `.next`.** An op that did
+would make the interpreter unwakeable, and the symptom would be a program
+that hangs rather than an opcode that looks wrong.
+
+First slice, in this order: the suspend/resume seam with `ON MENU` doing
+nothing but pumping, then `ALERT` as the first statement that uses it (it
+answers a value, which proves the resume carries data), then `OPENW` and the
+window verbs, then `MENU` from a string array — which is the one with no
+existing kernel facility behind it, `OS88_MENUSET` being an assembly-time
+macro with a five-menu cap where a BASIC program builds its bar at run time.
+
 **Wave 5 — the built-in library, in the overlay.** All 64 of the reference's,
 plus `PRINT USING`. Gap 2 (32-bit mul/div) lands here for `CLNG`/`MKL$`/`CVL`.
 

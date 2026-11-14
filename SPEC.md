@@ -252015,6 +252015,73 @@ field came back `fghZ` instead of `ZZZZ`, while both reads of the field
 itself, and the neighbour's own LENGTH, were unchanged - so the content of
 the neighbour is the only assertion that sees it.
 
+### 150.36 How a program yields, which wave 4 rests on
+
+**Status: DECIDED AND NOT BUILT.** `docs/plans/BASIC-PLAN.md`'s
+event-loop section (0.1 there) settled what a yield LOOKS like in the
+language - `ON MENU` inside a `DO…LOOP` the programmer writes - and left
+open the thing that makes it possible at all. This section
+is that half, written before the code because getting it wrong is a rewrite
+of wave 4 rather than a fix.
+
+**A program runs on the UI task, under the gfx lock, and therefore cannot
+yield where it runs today.** `RUN` is an `AM_ONCMD` item, and §12.2's
+contract for that handler is the UI task with the lock already held -
+`apps/basic/basic.asm` says so in its own comment above `bas_oncmd`. Three
+consequences, and the third is the blocker:
+
+1. a long program freezes every other window, because the task that would
+   repaint them is the one running `bas_exec`;
+2. `OSAPI_TASK_YIELD` from there gives up the slice while HOLDING the lock,
+   so whatever runs next and needs it cannot have it;
+3. **the events `ON MENU` exists to dispatch are delivered BY the UI task**,
+   which is busy inside the interpreter - so no amount of yielding from
+   inside that handler can ever produce one.
+
+**So the interpreter RETURNS rather than yields, and an event resumes it.**
+`ON MENU` saves the op cursor, returns out of the handler - releasing the
+lock the normal way, by ending the callback - and arranges to be called
+again. `OSAPI_WM_WAKE` (§10, §74.1) is the arrangement: it posts an
+`EVT_WAKE` for a window of yours, which the UI task pops IN ORDER with the
+mouse and key events and delivers as a callback. That ordering is the whole
+reason it is the right primitive: a wake posted at `ON MENU` arrives AFTER
+the clicks and picks already queued, so the handlers run on the events that
+were waiting, and the program resumes behind them.
+
+**AND THE INTERPRETER IS ALREADY RESUMABLE, which is why this costs two
+words and not a rewrite.** Measured in the shipped code rather than assumed:
+nothing of `bas_exec`'s state rides the host stack across an op boundary.
+`OP_CALL` does not push a return address - it stores the cursor as a
+`bas_ops`-RELATIVE OFFSET in a frame record in `bas_frms` (§150.23's frame),
+and `OP_RET` reads it back. The value stack, the frames, the save stack, the
+variables, the arrays and both arenas are all bss. So the entire machine at
+an op boundary is the op cursor and the value-stack pointer, and saving two
+words into bss and returning loses nothing.
+
+That is the property wave 4 depends on, so it is now a rule and not a
+coincidence: **no opcode may leave state on the host stack across a `.next`.**
+An op that pushes before dispatching to another op would make the
+interpreter unresumable, and the symptom would be a program that cannot be
+woken rather than an opcode that looks wrong.
+
+**What a blocking statement becomes.** GFA's `ALERT` answers with the button
+the user chose, and `apps/os88ui.inc`'s `os88ui_ask` is ASYNCHRONOUS - it
+takes a completion routine and returns once the alert is up. The two meet
+through the same seam: the `ALERT` opcode raises the alert, saves the cursor
+WITHOUT advancing past itself, and returns; the completion pushes the button
+number and resumes. A BASIC program sees a statement that blocked, and the
+kernel sees a callback that returned promptly, which is what a cooperative
+system requires of both. `FILESELECT` on the chooser is the same shape.
+
+**What it does NOT settle**, left named rather than guessed: whether `RUN`
+should instead spawn a task of its own, which would let a compute-only
+program keep the desktop alive without any `ON MENU` in it. That is a
+different trade - a second task costs a stack and raises the lock discipline
+for every `PRINT` - and it is not needed for wave 4's exit, a GUI program
+being one that loops on events by construction. The resumable interpreter
+above is a prerequisite for either, which is why it is the part that is
+decided.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
