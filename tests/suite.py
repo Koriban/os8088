@@ -22054,6 +22054,25 @@ SOAK = [
         "buffer where \"7\" and \"7    \" read alike and the padding IS the "
         "statement.",
         needs=("qemu",), wants=("build/basic.img",)),
+    Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 120.0,
+        "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "
+        "rests on. A program runs on the UI TASK UNDER THE GFX LOCK (12.2's "
+        "AM_ONCMD contract), so it cannot yield where it runs: the task that "
+        "would deliver the events ON MENU exists to dispatch is the one "
+        "inside bas_exec. So ON MENU saves the op cursor, posts an "
+        "OSAPI_WM_WAKE and RETURNS - ending the callback, releasing the lock "
+        "the ordinary way - and bas_onwake resumes it with the lock taken "
+        "afresh. Two words are the whole machine, because OP_CALL stores its "
+        "return as a bas_ops-relative offset in a bss frame rather than "
+        "pushing it, so nothing rides the host stack across a `.next`; that "
+        "is a RULE for every opcode now, an op breaking it making a program "
+        "unwakeable. The row's answer is `3` after a loop that went round "
+        "three times across three suspensions. VERIFIED TO FAIL by posting "
+        "no wake: the answer after the loop vanishes - and the two parts "
+        "after it still pass, so the window stayed RESPONSIVE through a "
+        "program that never finished, which is the property the seam exists "
+        "for and the only run it can be seen in.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "
         "that asks for it, DHCP bound to slirp's address, and the browser "

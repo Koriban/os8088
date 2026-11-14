@@ -143,7 +143,12 @@ OP_LSET     equ 52                  ; + an index byte: pop text and justify it
 OP_RSET     equ 53                  ; ...LEFT or RIGHT inside that string's
                                     ; EXISTING length, which never changes -
                                     ; so neither of them allocates
-OP_N        equ 54                  ; how many there are, table included
+; --- the event loop (SPEC.md 150.36) -------------------------------------
+OP_ONMENU   equ 54                  ; SUSPEND: save the cursor, post a wake
+                                    ; and RETURN out of the interpreter, so
+                                    ; the callback ends and the UI task gets
+                                    ; its own events delivered
+OP_N        equ 55                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -327,6 +332,11 @@ bas_run:
     ; The cost is that the op stream must now hold the whole program at once
     ; (BAS_OPS_MAX), and a program too big for it is refused BY NAME rather
     ; than wrapping.
+    mov word [bas_susp], 0          ; ...and a program already waiting at an
+                                    ; ON MENU is ABANDONED (SPEC.md 150.36):
+                                    ; F5 while one is suspended starts over,
+                                    ; and a stale wake then finds nothing to
+                                    ; do, which bas_onwake is built for
     mov word [bas_src], bas_prog    ; the scanner's cursor
     mov word [bas_line], 1
     mov word [bas_opn], 0
@@ -578,6 +588,9 @@ bas_c_stmt:
     mov si, bas_kw_erase            ; node [94]'s third, REFUSED by name and
     call bas_wordis                 ; with the reason (SPEC.md 150.33)
     je .erase
+    mov si, bas_kw_on               ; ON MENU - the yield, in plain sight in
+    call bas_wordis                 ; the program text (SPEC.md 150.36)
+    je .onstmt
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -1997,6 +2010,33 @@ bas_c_stmt:
     jmp bas_err
 .erase:
     mov si, bas_e_erase
+    jmp bas_err
+
+; --- ON MENU (SPEC.md 150.36) -------------------------------------------
+; Bare, this wave. `ON MENU GOSUB handler` registers one and is refused by
+; name until MENU exists to dispatch to - a handler with no bar to fire from
+; would be a statement that compiled and could never run.
+.onstmt:
+    call bas_skipsp
+    call bas_word
+    jc .onbad
+    mov si, bas_kw_menu
+    call bas_wordis
+    jne .onbad
+    call bas_skipsp                 ; ...and NOTHING after it, yet
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .onemit
+    cmp al, 10
+    je .onemit
+    mov si, bas_e_onmarg
+    jmp bas_err
+.onemit:
+    mov al, OP_ONMENU
+    jmp bas_emit
+.onbad:
+    mov si, bas_e_onwhat
     jmp bas_err
 .x:
     ret
@@ -5308,6 +5348,22 @@ bas_upper:
 bas_exec:
     mov si, bas_ops
     mov di, bas_stk                 ; DI = the stack pointer, growing up
+    jmp short .next
+; --- bas_exec.resume - carry on from an ON MENU (SPEC.md 150.36) --------
+; TWO WORDS ARE THE WHOLE MACHINE at an op boundary, which is a property of
+; this interpreter and not luck: OP_CALL stores its return as a
+; bas_ops-relative offset in a bss frame rather than pushing it, so nothing
+; of a program's state rides the host stack across a `.next`. That is now a
+; RULE for every opcode - one that left something pushed would make a
+; program unwakeable, and the symptom would be a hang rather than an opcode
+; that reads wrong.
+;
+; Called from bas_onwake with the gfx lock HELD and [bas_susp] already
+; cleared.
+.resume:
+    mov si, [bas_scur]
+    add si, bas_ops
+    mov di, [bas_sdi]
 .next:
     ; ONE INDEXED JUMP (SPEC.md 150.5), not a run of compares. The chain this
     ; replaces tested in emission order, so OP_ADD and OP_MUL - which every
@@ -6496,6 +6552,36 @@ bas_exec:
     times BAS_ARR_LO0 - 4 db 0
     times 4 - BAS_ARR_LO0 db 0
 
+; --- OP_ONMENU (SPEC.md 150.36) -----------------------------------------
+; THE YIELD IS A RETURN. A program runs on the UI task under the gfx lock
+; (SPEC.md 12.2's AM_ONCMD contract), so yielding IN PLACE cannot work: the
+; task that would deliver the events this statement exists to dispatch is
+; the one inside here. So the cursor is saved, a wake is posted, and the
+; interpreter RETURNS - which ends the callback and releases the lock the
+; ordinary way. bas_onwake brings it back.
+;
+; THE WAKE IS POSTED BEFORE THE RETURN and the kernel keeps at most one
+; queued per window, so this cannot fill the event ring however tight the
+; program's loop is (OSAPI_WM_WAKE's own promise). CF=1 means the ring was
+; full of other records: the suspension is undone and the statement is a
+; no-op this pass rather than a program that never wakes.
+.onmenu:
+    mov ax, si                      ; the cursor, PAST this opcode, so the
+    sub ax, bas_ops                 ; resume carries on at the next statement
+    mov [bas_scur], ax
+    mov [bas_sdi], di
+    mov word [bas_susp], 1
+    push bx
+    mov bx, [bas_wn]
+    call OSAPI_WM_WAKE
+    pop bx
+    jc .onmfull
+    ret                             ; ...out of bas_exec altogether
+.onmfull:
+    mov word [bas_susp], 0          ; the ring was full: carry straight on
+    jmp .next                       ; rather than wait for a wake that was
+                                    ; never queued
+
 ; --- OP_LSET / OP_RSET (SPEC.md 150.35) ---------------------------------
 ; NEITHER ALLOCATES. The field's length does not change, so the bytes are
 ; written where they already are and no arena work and no compaction can
@@ -6657,6 +6743,7 @@ bas_optab:
     dw bas_exec.aswap               ; OP_ASWAP
     dw bas_exec.lsetop              ; OP_LSET
     dw bas_exec.rsetop              ; OP_RSET
+    dw bas_exec.onmenu              ; OP_ONMENU
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -7082,6 +7169,8 @@ bas_kw_swap:    db 'SWAP', 0
 bas_kw_lset:    db 'LSET', 0
 bas_kw_rset:    db 'RSET', 0
 bas_kw_erase:   db 'ERASE', 0
+bas_kw_on:      db 'ON', 0
+bas_kw_menu:    db 'MENU', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -7169,6 +7258,8 @@ bas_e_swapmix:  db 'SWAP takes two variables or two arrays, not one of each', 0
 bas_e_swapname: db 'SWAP wants two names', 0
 bas_e_lsetstr:  db 'LSET and RSET want a $ name', 0
 bas_e_lseteq:   db 'LSET and RSET go LSET a$ = b$', 0
+bas_e_onwhat:   db 'ON MENU is the only ON this wave knows', 0
+bas_e_onmarg:   db 'ON MENU takes nothing yet - handlers come with MENU', 0
 ; REFUSED WITH A REASON, not as an unknown word (SPEC.md 150.7): ERASE is the
 ; reference's and leaving it out is a decision, so the message says so and
 ; names the word a program reaching for it probably wanted. SHORT BECAUSE THE

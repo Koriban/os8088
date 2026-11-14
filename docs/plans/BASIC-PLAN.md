@@ -619,10 +619,14 @@ op may leave state on the host stack across a `.next`.** An op that did
 would make the interpreter unwakeable, and the symptom would be a program
 that hangs rather than an opcode that looks wrong.
 
-First slice, in this order: the suspend/resume seam with `ON MENU` doing
-nothing but pumping, then `ALERT` as the first statement that uses it (it
-answers a value, which proves the resume carries data), then `OPENW` and the
-window verbs, then `MENU` from a string array — which is the one with no
+**Slice 1 is IN** — the suspend/resume seam, bare `ON MENU`, row
+`basiclang4`, +226 bytes. The seam is proven by removing the wake post: the
+answer after the loop vanishes AND the window stays responsive, which is
+the whole point of returning rather than yielding. Still to come, in this
+order: `ALERT` as the first statement that USES it (it answers a value,
+which proves the resume carries data, where slice 1 proves only that
+control comes back), then `OPENW` and the window verbs, then `MENU` from a
+string array — which is the one with no
 existing kernel facility behind it, `OS88_MENUSET` being an assembly-time
 macro with a five-menu cap where a BASIC program builds its bar at run time.
 

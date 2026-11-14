@@ -252017,7 +252017,12 @@ the neighbour is the only assertion that sees it.
 
 ### 150.36 How a program yields, which wave 4 rests on
 
-**Status: DECIDED AND NOT BUILT.** `docs/plans/BASIC-PLAN.md`'s
+**Status: the SEAM IS BUILT and bare `ON MENU` works** - `OP_ONMENU`,
+`bas_exec.resume` and `bas_onwake`, row `basiclang4`. What is NOT built is
+everything it exists to carry: `ON MENU GOSUB`, the window verbs, `ALERT`
+and `MENU`, refused by name meanwhile.
+The design below was written before the code, because getting it wrong is a
+rewrite of wave 4 rather than a fix. `docs/plans/BASIC-PLAN.md`'s
 event-loop section (0.1 there) settled what a yield LOOKS like in the
 language - `ON MENU` inside a `DO…LOOP` the programmer writes - and left
 open the thing that makes it possible at all. This section
@@ -252063,6 +252068,15 @@ coincidence: **no opcode may leave state on the host stack across a `.next`.**
 An op that pushes before dispatching to another op would make the
 interpreter unresumable, and the symptom would be a program that cannot be
 woken rather than an opcode that looks wrong.
+
+**MEASURED, by breaking it.** A build whose `OP_ONMENU` suspends and posts
+NO wake loses the answer after its loop - `31415` and then nothing, where
+`31415` then `3` is wanted - which says the suspension is real and the wake
+is what ends it. And the two parts after it in the same run passed
+normally: **the window stayed responsive through a program that never
+finished**, because the callback had already returned. That is the property
+this section exists for, and the mutant is the only run in which it can be
+seen.
 
 **What a blocking statement becomes.** GFA's `ALERT` answers with the button
 the user chose, and `apps/os88ui.inc`'s `os88ui_ask` is ASYNCHRONOUS - it

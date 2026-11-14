@@ -80,6 +80,17 @@ bas_entry:
     mov si, bas_about
     call OSAPI_ABOUT_SET
 
+    ; --- the wake handler (SPEC.md 74.1, 150.36) -----------------------------
+    ; THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK, which is exactly why
+    ; the event loop is built on it: a program that returns out of its
+    ; AM_ONCMD handler at ON MENU is resumed from here, and here may take the
+    ; lock for a stated burst. Installed from the entry proc after
+    ; OSAPI_WM_CREATE, which is this slot's own instruction.
+    mov [bas_wn], bx                ; ...and the window is kept, because
+    mov ax, bas_onwake              ; OSAPI_WM_WAKE wants it in BX and
+    call OSAPI_WM_ONWAKE            ; bas_exec has no spare register to carry
+                                    ; a window in
+
     ; --- the editor (SPEC.md 83) ---------------------------------------------
     ; The BLOCK's non-geometry fields, once: where the buffer is and how big.
     ; The RECT is geometry and belongs in the paint (bas_paint), because a
@@ -519,6 +530,55 @@ bas_repaint:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; bas_onwake - OSAPI_WM_ONWAKE: resume a program suspended at an ON MENU
+; in:  SI = our window, on the UI task, and WITHOUT THE GFX LOCK - the one
+;      callback that is not under it (SPEC.md 74.1, 150.36)
+; out: nothing
+;
+; INDIFFERENT TO HAVING NOTHING TO DO, which the slot requires in as many
+; words: a stale wake after a slot was reused is possible, and the kernel
+; keeps at most one queued per window, so this runs with [bas_susp] clear
+; more often than it does not.
+;
+; IT TAKES THE LOCK ITSELF, because everything the interpreter can do draws -
+; con_say above all - and the slot's contract is that this handler may take
+; it for a burst it can state and may NOT draw before it has.
+;
+; THE RESUME CLEARS [bas_susp] BEFORE IT RUNS, not after: OP_ONMENU sets it
+; again if the program suspends a second time, and a program that ENDS on
+; this pass must not leave it standing or the next stale wake would re-enter
+; a finished program at its OP_END.
+; -----------------------------------------------------------------------------
+bas_onwake:
+    cmp word [bas_susp], 0
+    je .nothing
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call OSAPI_GFX_LOCK
+    mov word [bas_susp], 0
+    call bas_exec.resume
+    cmp word [bas_susp], 0
+    jne .again                      ; suspended again, and OP_ONMENU has
+                                    ; already posted the wake that brings it
+                                    ; back - so nothing is owed here
+    mov si, [bas_wn]                ; it ENDED on this pass, so the status
+    call bas_repaint                ; line and the console are owed a draw
+.again:
+    call OSAPI_GFX_UNLOCK
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.nothing:
+    ret
+
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
 bas_tpl:
     dw 80, 40, BAS_W, BAS_H
@@ -680,7 +740,21 @@ BAS_B_bas_frms   equ BAS_B_bas_nfrm + 2
 BAS_B_bas_nsav   equ BAS_B_bas_frms + BAS_FRM_MAX*BAS_FRM_SZ
 BAS_B_bas_savs   equ BAS_B_bas_nsav + 2
 BAS_B_bas_blk    equ BAS_B_bas_savs + BAS_SAV_MAX*BAS_SAV_SZ
-BAS_B_bas_fp     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
+; --- the suspend/resume seam (SPEC.md 150.36) ----------------------------
+; FOUR WORDS, and they are the whole of what wave 4's event loop costs in
+; bss: the window to kick, whether a program is suspended, and the two
+; registers that ARE the interpreter at an op boundary.
+;
+; HERE AND NOT AT THE CHAIN'S END, because os88fp.inc's scratch is the top
+; and tests/unit/t_fpscratch.py reads it as the top - `BAS_B_bas_fpbuf + 32`
+; is its expression for BAS_BSS_OWN. Appending after it left the sum correct
+; and the gate's model stale, and the gate said so. A field added later
+; belongs here too, above the fp block.
+BAS_B_bas_wn     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
+BAS_B_bas_susp   equ BAS_B_bas_wn + 2
+BAS_B_bas_scur   equ BAS_B_bas_susp + 2
+BAS_B_bas_sdi    equ BAS_B_bas_scur + 2
+BAS_B_bas_fp     equ BAS_B_bas_sdi + 2
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
 BAS_B_fp_ae      equ BAS_B_fp_bs + 1
@@ -945,3 +1019,13 @@ bas_fpend       equ os88_image_end + BAS_B_bas_fpend
 ; digits, a sign, a point and an exponent, so 32 is generous and the cost of
 ; being wrong here is the defect above.
 bas_fpbuf       equ os88_image_end + BAS_B_bas_fpbuf
+bas_wn          equ os88_image_end + BAS_B_bas_wn    ; word: our window, for
+                                    ; OSAPI_WM_WAKE from inside bas_exec,
+                                    ; which has no SI to spare (150.36)
+bas_susp        equ os88_image_end + BAS_B_bas_susp  ; word: non-zero while a
+                                    ; program waits at an ON MENU
+bas_scur        equ os88_image_end + BAS_B_bas_scur  ; word: the op cursor,
+                                    ; bas_ops-RELATIVE, as OP_CALL stores its
+                                    ; return (150.23) - the same convention,
+                                    ; for the same reason
+bas_sdi         equ os88_image_end + BAS_B_bas_sdi   ; word: the value stack

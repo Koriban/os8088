@@ -1069,19 +1069,62 @@ PART37 = [
      "in place"),
 ]
 
+# --- ON MENU: the suspend/resume seam (SPEC.md 150.36) ------------------
+# WHAT THIS PROVES IS THAT THE PROGRAM COMES BACK. Each ON MENU saves the op
+# cursor, posts an OSAPI_WM_WAKE and RETURNS out of bas_exec - ending the
+# AM_ONCMD callback and releasing the gfx lock - and bas_onwake resumes it.
+# So `3` on the console means the loop went round three times across three
+# suspensions, and the two statements after the loop ran on the third
+# resume. Without a wake the program stops dead at the first ON MENU and
+# nothing after it is ever printed, which is exactly the mutation below.
+#
+# IT IS NOT A HANG IF IT BREAKS, which is worth stating: the callback has
+# already returned, so the window stays responsive and the row reads a
+# console missing its answer rather than timing out. That is the whole point
+# of the seam and it is also what makes this row cheap to run.
+PART38 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("i = 0",                            None),
+    ("DO",                               None),
+    ("  i = i + 1",                      None),
+    ("  ON MENU",                        None),
+    ("LOOP UNTIL i >= 3",                None),
+    ("PRINT i",                          "3"),
+]
+
+# THE TWO REFUSALS, one part each. `ON MENU GOSUB` is refused until MENU
+# exists to fire from, and any other ON is refused by name rather than read
+# as a variable called ON.
+PART39 = [
+    ("CLS",                              None),
+    ("x = 1",                            None),
+    ("ON MENU GOSUB handler",
+     "Error at line 3: ON MENU takes nothing yet - handlers come with MENU"),
+]
+
+PART40 = [
+    ("CLS",                              None),
+    ("x = 1",                            None),
+    ("ON ERROR GOSUB oops",
+     "Error at line 3: ON MENU is the only ON this wave knows"),
+]
+
 # THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
 # is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
-# through SELECT, `--late` is GOTO, labels and procedures, and `--w3tail` is
-# wave 3's tail - 150.33 to 150.35; no flag runs the lot, which is what a
-# developer typing the file's name means.
+# through SELECT, `--late` is GOTO, labels and procedures, `--w3tail` is
+# wave 3's tail - 150.33 to 150.35 - and `--wave4` is the event loop,
+# 150.36; no flag runs the lot, which is what a developer typing the file's
+# name means.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37)
-PARTS = EARLY + LATE + W3TAIL
+WAVE4 = (PART38, PART39, PART40)
+PARTS = EARLY + LATE + W3TAIL + WAVE4
 
 if "--early" in sys.argv:
     PARTS = EARLY
@@ -1089,6 +1132,8 @@ elif "--late" in sys.argv:
     PARTS = LATE
 elif "--w3tail" in sys.argv:
     PARTS = W3TAIL
+elif "--wave4" in sys.argv:
+    PARTS = WAVE4
 
 FAILED = []
 
