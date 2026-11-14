@@ -626,8 +626,23 @@ the whole point of returning rather than yielding. **Slice 2 is IN too** — `AL
 and the button control it needs were not compiled into this package at
 all). It proves the seam carries DATA where slice 1 proved only control: a
 completion made to report 9 instead of 0 is caught on one console line.
-Still to come, in this order: `OPENW` and the window verbs, then `MENU`
-from a string array — which is the one with no
+**And the order changes from here, measured rather than assumed:** `OPENW`
+moves BEHIND wave 6 and `MENU` comes next. A window this package can open is
+a window a program cannot draw into — `PRINT` writes a console PANE inside
+this package's own window and no statement targets another, the drawing
+verbs being wave 6's — so `OPENW` today is an empty frame whose only
+assertable property is that it exists. And node [302]'s primary form is a
+four-quadrant model hard-coded to the Atari's 640x400 screen, with
+`OPENW 0` opening no window at all but shifting the coordinate origin to
+protect a 19-line bar; `OPENW #n,x,y,w,h,attr` is the form that maps here.
+SPEC.md §150.38 carries both reasons. The bar first is also what the wave's
+own exit criterion wants: a GUI program with a menu bar that responds to
+clicks needs no second window.
+
+Still to come, in this order: **`MENU m$()` and `ON MENU GOSUB`** (§150.38,
+designed and not built — and note `MENU m$()` is a FOURTH statement the
+keyword table misses, documented inside node [299] rather than in one of its
+own), then `OPENW` and the window verbs with the drawing verbs — which is the one with no
 existing kernel facility behind it, `OS88_MENUSET` being an assembly-time
 macro with a five-menu cap where a BASIC program builds its bar at run time.
 

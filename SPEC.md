@@ -252176,6 +252176,82 @@ that arrives without the user having chosen anything. Zero is outside node
 a question only this machine can answer, and one that does not gets a value
 no button maps to rather than a plausible wrong one.
 
+### 150.38 The menu bar from a string array, and why `OPENW` waits
+
+**Status: DESIGNED AND NOT BUILT.** The contract first, as §150.36's was,
+because the dispatch below reaches into the interpreter and guessing it
+wrong is a rewrite.
+
+**`OPENW` IS DEFERRED BEHIND WAVE 6, and that is a finding rather than a
+delay.** Two reasons, both measured:
+
+- **A window this package can open is a window a program cannot draw into.**
+  `PRINT` writes `os88con.inc`'s console, which is a PANE INSIDE this
+  package's own window (`CON_BSS_AT`, installed by `con_open` in the entry
+  proc). No statement targets another window, and the drawing verbs are
+  wave 6's. So `OPENW` today yields an empty frame whose only assertable
+  property is that it exists.
+- **And the Compendium's primary form does not fit this machine anyway.**
+  Node [302]'s `OPENW n` is a FOUR-QUADRANT TILING MODEL hard-coded to the
+  Atari's 640x400 screen - windows 1 to 4 at `0,19` to `639,399` around one
+  split point - and `OPENW 0` opens no window at all, moving the coordinate
+  origin to `0,19` to protect a 19-line menu bar. None of that has a meaning
+  here: this OS has a window manager with movable, sizable windows, four
+  adapters of different sizes, and drawing that is already window-relative.
+  `OPENW #n,x,y,w,h,attr`, the form node [302] calls "more flexible", is the
+  one that maps - onto `OSAPI_WM_CREATE` - and it is the one that will be
+  built, with the quadrant form a convenience computed from the ACTUAL
+  desktop rather than from 640x400.
+
+So the wave's order changes: **the bar comes before the windows**, which is
+also the order its exit criterion wants - a GUI program with a menu bar that
+responds to clicks needs no second window at all.
+
+**`MENU m$()` TAKES THE COMPENDIUM'S ARRAY AS WRITTEN**, node [299] and
+[300]: `m$(0)` is the first heading, then its entries, then an empty string;
+then heading, entries and an empty string per further menu; then one more
+empty string to end the bar. An entry beginning with `-` is shown and not
+selectable. **The six "reserved for accessories" slots `m$(3)` to `m$(8)`
+are accepted and ignored** - this OS has no desk accessories - **but their
+INDICES still count**, because node [300] says `MENU(0)` numbers "titles,
+entries for Accessories and null strings" alike, and a program written to
+that will index accordingly.
+
+**THE TITLES AND ITEMS ARE COPIED, not pointed at**, which is the one part
+of this that is not obvious and the one that would have cost a wave. A menu
+set is a table of POINTERS to NUL strings (`OS88_MENUSET`'s shape), and a
+BASIC string lives in the arena of §150.28 - which COMPACTS. A pointer into
+it is a dangling pointer the first time a program concatenates anything, and
+the bar would be drawn by the kernel from freed bytes. This chapter has paid
+for that defect class twice already (§150.28, §150.32). So `MENU m$()`
+copies every string it is given into a stable arena of its own and builds
+the pointers into THAT, and the bar is therefore a SNAPSHOT: changing
+`m$()` afterwards changes nothing until the next `MENU m$()`, which is also
+what node [300]'s `MENU x,text$` exists to do.
+
+**FIVE MENUS, NOT EIGHTEEN.** `MENU_APPMAX` is 5 and the kernel drops a
+sixth silently (`OS88_MENUSET_END` asserts it at assembly time for a static
+set, which a run-time one cannot use), against the Compendium's documented
+limit of 18 titles. A sixth is REFUSED BY NAME rather than dropped, because
+a bar quietly missing its last menu is the silent-wrong-answer §150.7
+exists to prevent.
+
+**`ON MENU GOSUB proc` DISPATCHES BY RESUMING THE INTERPRETER AT `proc`,
+which costs no new machinery.** A pick arrives as `AM_ONCMD` on the UI task
+under the gfx lock, with the program suspended at an `ON MENU` (§150.36).
+The handler pushes a BASIC frame whose return is the SAVED CURSOR - the
+continuation of the `ON MENU` that was waiting - sets the cursor to `proc`'s
+first op, and resumes. `OP_RET` then returns to the `ON MENU` exactly as it
+would from any `GOSUB`, because that is precisely what the frame says
+(§150.23). `MENU(0)` is set before the resume and reads as an ordinary
+function.
+
+**Refused by name until they have something to act on:** `MENU OFF`,
+`MENU KILL`, `MENU x,y` (checkmark and grey) and `MENU x,text$`. They edit a
+bar that `MENU m$()` must exist to have put up first, and the kernel's
+menu-item structure has no attribute word for a checkmark, so each needs its
+own decision rather than a guess.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
