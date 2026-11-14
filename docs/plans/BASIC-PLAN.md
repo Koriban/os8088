@@ -622,11 +622,12 @@ that hangs rather than an opcode that looks wrong.
 **Slice 1 is IN** — the suspend/resume seam, bare `ON MENU`, row
 `basiclang4`, +226 bytes. The seam is proven by removing the wake post: the
 answer after the loop vanishes AND the window stays responsive, which is
-the whole point of returning rather than yielding. Still to come, in this
-order: `ALERT` as the first statement that USES it (it answers a value,
-which proves the resume carries data, where slice 1 proves only that
-control comes back), then `OPENW` and the window verbs, then `MENU` from a
-string array — which is the one with no
+the whole point of returning rather than yielding. **Slice 2 is IN too** — `ALERT`, SPEC.md §150.37, +2,287 bytes (the dialog
+and the button control it needs were not compiled into this package at
+all). It proves the seam carries DATA where slice 1 proved only control: a
+completion made to report 9 instead of 0 is caught on one console line.
+Still to come, in this order: `OPENW` and the window verbs, then `MENU`
+from a string array — which is the one with no
 existing kernel facility behind it, `OS88_MENUSET` being an assembly-time
 macro with a five-menu cap where a BASIC program builds its bar at run time.
 

@@ -1093,6 +1093,46 @@ PART38 = [
     ("PRINT i",                          "3"),
 ]
 
+# --- ALERT (SPEC.md 150.37) ---------------------------------------------
+# THE FIRST STATEMENT THAT CARRIES A VALUE BACK, and the seam's data path is
+# the whole subject. `b` is 7 before the ALERT and 0 after it, so printing 0
+# says the resume WROTE the variable rather than leaving it - and 0 is the
+# DISMISSED answer, which no button maps to.
+#
+# ESCAPE RATHER THAN A CLICK, which keeps this row keyboard-only like the F5
+# that runs it: os88ui_ask reports its close box, its minimize box and Esc
+# alike as OS88UI_ACANCEL, so Esc exercises the completion, the wake and the
+# store without a drag whose offsets drift across adapters.
+PART41 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("b = 7",                            None),
+    ('ALERT 1, "Press Escape", 1, "OK", b', None),
+    ("PRINT b",                          "0"),
+    ("#after esc",                       None),
+]
+
+PART42 = [
+    ("CLS",                              None),
+    ("b = 0",                            None),
+    ('ALERT 1, "x", 1, "Left|Right", b',
+     "Error at line 3: those ALERT buttons are not one of the six sets"),
+]
+
+PART43 = [
+    ("CLS",                              None),
+    ("b = 0",                            None),
+    ('ALERT 1, "a|b", 1, "OK", b',
+     "Error at line 3: an ALERT message is ONE line here - no | in it"),
+]
+
+PART44 = [
+    ("CLS",                              None),
+    ('s$ = "x"',                         None),
+    ('ALERT 1, "x", 1, "OK", s$',
+     "Error at line 3: ALERT wants a number variable for the choice"),
+]
+
 # THE TWO REFUSALS, one part each. `ON MENU GOSUB` is refused until MENU
 # exists to fire from, and any other ON is refused by name rather than read
 # as a variable called ON.
@@ -1123,7 +1163,7 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37)
-WAVE4 = (PART38, PART39, PART40)
+WAVE4 = (PART38, PART39, PART40, PART41, PART42, PART43, PART44)
 PARTS = EARLY + LATE + W3TAIL + WAVE4
 
 if "--early" in sys.argv:
@@ -1488,11 +1528,23 @@ def main():
             mo.menu(112, 8, 112, 30)
             os88qemu.pace(m, 2.0)
         t0 = time.time()
+        after = []
         for line, _ in part:
+            # `#after <key>` IS NOT TYPED: it is a keystroke for AFTER the
+            # run begins, which is the only way to answer a statement that
+            # SUSPENDS (SPEC.md 150.36). An ALERT part cannot finish until
+            # its dialog is answered, so the poll below would time out with
+            # the program still correctly waiting.
+            if line.startswith("#after "):
+                after.append(line.split(None, 1)[1])
+                continue
             typ(m, line + "\n")
         print("      part %d: %d lines in %.1fs"
-              % (pn + 1, len(part), time.time() - t0))
+              % (pn + 1, len(part) - len(after), time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
+        for k in after:
+            os88qemu.pace(m, 2.0)               # ...let the dialog come up
+            os88qemu.sendkey(m.path, k)
         # **WAIT FOR THE LAST ANSWER, NOT FOR A CLOCK.** A fixed pace was
         # six seconds, which every part until SPEC.md 150.28's fitted inside
         # - and a loop that reassigns a string 200 times does not. The row

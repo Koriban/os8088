@@ -252096,6 +252096,86 @@ being one that loops on events by construction. The resumable interpreter
 above is a prerequisite for either, which is why it is the part that is
 decided.
 
+### 150.37 `ALERT`, the first statement that carries a value back
+
+```basic
+ALERT 1, "Save this program?", 1, "Save|Discard|Cancel", b
+PRINT b                    ' 1, 2 or 3 - or 0 if it was DISMISSED
+ALERT 0, "Pick one", 1, "Left|Right", b   ' REFUSED BY NAME: see below
+```
+
+**The Compendium's node [309]** gives
+`ALERT icon, message$, default, button$, choice`, with `choice` an *avar* -
+an output VARIABLE, not a returned value - carrying the number 1 to 3 of the
+button chosen. At most three buttons of eight characters, a message of at
+most four lines of thirty separated by `|`, and an icon of 0 to 3.
+
+**IT IS A RE-ENTRANT OPCODE, which is how a blocking statement lives on a
+cooperative system.** §150.36's seam does the work and this is its first
+customer. `apps/os88ui.inc`'s `os88ui_ask` is asynchronous: it takes a
+completion and returns once the alert is UP. So `OP_ALERT` runs twice for
+one statement:
+
+1. the first pass pops the four operands, raises the alert, and saves the
+   cursor **pointing AT itself** rather than past itself - then posts the
+   wake and returns, which ends the callback and drops the gfx lock;
+2. the completion stores the answer and posts a wake; the resume re-enters
+   `OP_ALERT`, which finds an answer pending, writes it into `choice`,
+   steps over its index byte and carries on.
+
+The operands are popped on the FIRST pass only, which is what the pending
+test guards: the value-stack pointer saved at the suspension is already the
+reduced one, so a second pop would take somebody else's slots.
+
+**FOUR DIVERGENCES, STATED, because `os88ui_ask` is a fixed dialog and the
+Compendium's alert is a free one.** This is §150.9's rule in practice: the
+Compendium is the authority on what the language MEANS, and this machine
+decides what it can show.
+
+| | the Compendium | here |
+| --- | --- | --- |
+| buttons | any 3 labels of 8 | one of SIX named sets, others REFUSED BY NAME |
+| message | 4 lines of 30, `|`-split | ONE line of 34, clipped (`OS88UI_AMAX`) |
+| `default` | 0..3, selectable | ignored: each set carries its own ring |
+| `icon` | 0..3 | accepted and IGNORED - the dialog has no icon |
+
+The six sets are `OK`, `Yes|No`, `Save|Discard|Cancel`, `Cancel|Proceed`,
+`OK|Cancel` and `Step|Halt|Continue`, matched on the whole `button$` and
+case-insensitively. **SIX BECAUSE `OK|Cancel` IS WORTH A KNOB.** Three of
+them - `OK|Cancel`, and SHEET's `Step|Halt|Continue` with it - live behind
+`%ifdef OS88UI_AEXTRA`, so this package defines it: `OK|Cancel` is a shape
+a program asks for constantly, and the debugger's row arrives free in the
+same block rather than being worth excluding. **An unmatched list is refused by name and the refusal
+LISTS them**, because the alternative is a program that asked for
+`Left|Right` and silently got `Yes|No` - a wrong answer wearing a right
+one's clothes, which §150.7 exists to prevent. It refuses the Compendium's
+own first example, and that is the honest report of what this dialog can
+do rather than a defect to hide.
+
+**A `|` in `message$` is refused too**, for the same reason: the dialog
+shows one line, so the second and later lines of a four-line message would
+go missing with nothing said. Clipping at 34 characters is NOT refused,
+because node [309] says the Compendium's own alert "crops all strings that
+exceed the set limits" - so a program written against it already expects
+cropping, and only the LINES are a surprise.
+
+**MEASURED, by making the completion lie.** A build whose completion
+reports 9 for a dismissal instead of 0 is caught on exactly one console
+line - `want '0', got '9'`, with the other eight answers of the row
+unchanged - which says the number in `choice` travelled from the
+completion, through the wake, into the variable. §150.36's seam was proven
+to carry CONTROL; this is what proves it carries DATA, and it is why
+`ALERT` was built before the window verbs rather than after them.
+
+**`choice` is 0 when the alert was DISMISSED** - its close box, its minimize
+box or Esc - which the Compendium has no concept of, its alert having no way
+out but a button. `os88ui_ask`'s completion reports it as
+`OS88UI_ACANCEL` and its own header says to handle it: it is the one answer
+that arrives without the user having chosen anything. Zero is outside node
+[309]'s 1..3, which is the point: a program that tests `IF b = 0` is asking
+a question only this machine can answer, and one that does not gets a value
+no button maps to rather than a plausible wrong one.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

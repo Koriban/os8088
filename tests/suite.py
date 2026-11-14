@@ -22054,7 +22054,7 @@ SOAK = [
         "buffer where \"7\" and \"7    \" read alike and the padding IS the "
         "statement.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 120.0,
+    Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "
         "rests on. A program runs on the UI TASK UNDER THE GFX LOCK (12.2's "
         "AM_ONCMD contract), so it cannot yield where it runs: the task that "
@@ -22071,7 +22071,17 @@ SOAK = [
         "no wake: the answer after the loop vanishes - and the two parts "
         "after it still pass, so the window stayed RESPONSIVE through a "
         "program that never finished, which is the property the seam exists "
-        "for and the only run it can be seen in.",
+        "for and the only run it can be seen in. ALERT (150.37) is the "
+        "statement that proves the same seam carries a VALUE: os88ui_ask is "
+        "asynchronous, so OP_ALERT is RE-ENTRANT - the first pass raises it "
+        "and suspends AT ITSELF, and the resume finds the answer pending and "
+        "writes it into `choice`. The row answers Esc, which os88ui_ask "
+        "reports as OS88UI_ACANCEL and 150.37 maps to 0, a number no button "
+        "takes - and `b` is 7 before the statement, so printing 0 says the "
+        "variable was WRITTEN and not merely left. VERIFIED TO FAIL by "
+        "making the completion report 9: one console line differs, the other "
+        "eight unchanged. Three refusals with it - an unmatched button set, "
+        "a `|` in a one-line message, and a `$` name for the choice.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "

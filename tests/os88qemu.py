@@ -471,7 +471,14 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           # ...and what a program needs to hold TEXT (SPEC.md 150.28): the
           # quotation mark around a literal and the sigil that makes a name
           # a string one. US layout again - shift-apostrophe and shift-4.
-          '"': ("apostrophe", 1), "$": ("4", 1)}
+          '"': ("apostrophe", 1), "$": ("4", 1),
+          # ...and the PIPE, which SPEC.md 150.37's ALERT cannot be written
+          # without: the Compendium separates both its message lines and its
+          # button labels with it, so a row that cannot type `|` cannot test
+          # the statement at all. Shift-backslash, the same key as `\\`
+          # above. (`[` and `]` are still absent and have no caller;
+          # tests/basiclang.py uses `<` and `>` where it wants a delimiter.)
+          "|": ("backslash", 1)}
 
 
 class _Sock(object):

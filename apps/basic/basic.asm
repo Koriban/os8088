@@ -619,8 +619,18 @@ bas_ab4:        db 'SPEC.md 150', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) ------------------------------------
 %define OS88UI_ABOUT
-%define OS88UI_NOBTN
-%define OS88UI_ABDISMISS
+%define OS88UI_ABDISMISS            ; ...and NOT OS88UI_NOBTN any more: the
+                                    ; alert's own buttons are os88ui_btn's,
+                                    ; so taking the button control out takes
+                                    ; the alert with it
+%define OS88UI_ALERT                ; ALERT (SPEC.md 150.37) - os88ui_ask and
+                                    ; its unbound dialog window
+%define OS88UI_AEXTRA               ; ...AND ITS EXTRA SETS, for OS88UI_AOKCAN
+                                    ; alone: `OK|Cancel` is a shape a BASIC
+                                    ; program asks for constantly and it sits
+                                    ; in the same block as SHEET's
+                                    ; Step/Halt/Continue, so the sixth set
+                                    ; arrives free with the fifth
 %include "os88ui.inc"
 
 ; --- the console (SPEC.md 70.8) ----------------------------------------------
@@ -754,7 +764,11 @@ BAS_B_bas_wn     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_bas_susp   equ BAS_B_bas_wn + 2
 BAS_B_bas_scur   equ BAS_B_bas_susp + 2
 BAS_B_bas_sdi    equ BAS_B_bas_scur + 2
-BAS_B_bas_fp     equ BAS_B_bas_sdi + 2
+; --- ALERT's half of the seam (SPEC.md 150.37) ---------------------------
+BAS_B_bas_alpend equ BAS_B_bas_sdi + 2
+BAS_B_bas_alans  equ BAS_B_bas_alpend + 2
+BAS_B_bas_almsg  equ BAS_B_bas_alans + 2
+BAS_B_bas_fp     equ BAS_B_bas_almsg + OS88UI_AMAX + 2
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
 BAS_B_fp_ae      equ BAS_B_fp_bs + 1
@@ -1029,3 +1043,10 @@ bas_scur        equ os88_image_end + BAS_B_bas_scur  ; word: the op cursor,
                                     ; return (150.23) - the same convention,
                                     ; for the same reason
 bas_sdi         equ os88_image_end + BAS_B_bas_sdi   ; word: the value stack
+bas_alpend      equ os88_image_end + BAS_B_bas_alpend ; word: an ALERT answer
+                                    ; is waiting, so OP_ALERT's re-entry
+                                    ; stores it instead of raising again
+bas_alans       equ os88_image_end + BAS_B_bas_alans  ; word: 1..3, or 0 for
+                                    ; a DISMISSED alert (SPEC.md 150.37)
+bas_almsg       equ os88_image_end + BAS_B_bas_almsg  ; the message, NUL-
+                                    ; terminated and CLIPPED to OS88UI_AMAX

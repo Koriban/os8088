@@ -148,7 +148,11 @@ OP_ONMENU   equ 54                  ; SUSPEND: save the cursor, post a wake
                                     ; and RETURN out of the interpreter, so
                                     ; the callback ends and the UI task gets
                                     ; its own events delivered
-OP_N        equ 55                  ; how many there are, table included
+OP_ALERT    equ 55                  ; + an index byte: RE-ENTRANT. First pass
+                                    ; raises the alert and suspends AT ITSELF;
+                                    ; the resume finds the answer waiting and
+                                    ; stores it (SPEC.md 150.37)
+OP_N        equ 56                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -591,6 +595,9 @@ bas_c_stmt:
     mov si, bas_kw_on               ; ON MENU - the yield, in plain sight in
     call bas_wordis                 ; the program text (SPEC.md 150.36)
     je .onstmt
+    mov si, bas_kw_alert            ; node [309], and the first statement to
+    call bas_wordis                 ; carry a value back (SPEC.md 150.37)
+    je .alert
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -2037,6 +2044,56 @@ bas_c_stmt:
     jmp bas_emit
 .onbad:
     mov si, bas_e_onwhat
+    jmp bas_err
+
+; --- ALERT icon, message$, default, button$, choice (SPEC.md 150.37) ----
+; Five operands, and the first four are pushed IN ORDER so the op pops them
+; in reverse. The fifth is a VARIABLE and rides as the index byte, which is
+; what makes `choice` an output rather than a value.
+.alert:
+    call bas_c_rel                  ; icon - accepted and ignored (150.37)
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_wantnum
+    jc .x
+    call bas_bcomma
+    jc .x
+    call bas_c_str                  ; message$
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_bcomma
+    jc .x
+    call bas_c_rel                  ; default - ignored: each set rings its own
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_wantnum
+    jc .x
+    call bas_bcomma
+    jc .x
+    call bas_c_str                  ; button$
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_bcomma
+    jc .x
+    call bas_skipsp
+    call bas_word                   ; ...and the choice variable
+    jc .alnovar
+    call bas_isstrname              ; CF=0 means it ends in '$'
+    jnc .alnovar
+    call bas_varfind
+    jc .x
+    push ax
+    mov al, OP_ALERT
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .alpop
+    pop ax
+    jmp bas_emit
+.alpop:
+    pop ax
+    ret
+.alnovar:
+    mov si, bas_e_alvar
     jmp bas_err
 .x:
     ret
@@ -4385,6 +4442,146 @@ bas_arrfind:
     stc
     jmp .out
 
+; --- bas_alset - ALERT's button$ to one of the five sets ----------------
+; in:  DI = the value slot holding it (offset at [di], length at [di+2])
+; out: AX = the OS88UI_A* set, CF=1 and no match. Preserves everything else.
+;
+; CASE-INSENSITIVE AND WHOLE: `button$` is an sexp, so this is a RUN-TIME
+; match and a prefix must not do - `OK` is a set and so is `OK|Cancel`.
+; THE OFFSET AND LENGTH RIDE ON THE STACK because only BX, SI and DI can
+; address memory on an 8086 and three pointers are wanted at once: the
+; pattern, the program's bytes, and the table.
+bas_alset:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [di]
+    mov dx, [di + 2]
+    push bx
+    push dx
+    xor di, di                      ; DI = the table's offset
+.asnext:
+    cmp di, BAS_ALSETS*4
+    jae .asmiss
+    mov si, [bas_altab + di]
+    pop dx
+    pop bx
+    push bx
+    push dx
+    mov cx, dx
+.ascmp:
+    mov al, [si]
+    or al, al
+    jz .asend
+    or cx, cx
+    jz .asno                        ; the program's string ran out first
+    mov ah, al
+    mov al, [bx]
+    call bas_upper                  ; the pattern is stored upper-case
+    cmp al, ah
+    jne .asno
+    inc si
+    inc bx
+    dec cx
+    jmp short .ascmp
+.asend:
+    or cx, cx
+    jnz .asno                       ; ...or is longer than the pattern
+    mov ax, [bas_altab + di + 2]
+    add sp, 4
+    clc
+    jmp short .asout
+.asno:
+    add di, 4
+    jmp short .asnext
+.asmiss:
+    add sp, 4
+    stc
+.asout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_almake - ALERT's message$ into bas_almsg -----------------------
+; in:  DI = the value slot holding it
+; out: CF=1 if it holds a '|', the dialog being ONE line (SPEC.md 150.37).
+;      Otherwise bas_almsg holds it, NUL-terminated and CLIPPED to
+;      OS88UI_AMAX - clipping is what the Compendium's own alert does to an
+;      over-long line, so it is not refused; the LINES are the surprise.
+; IT KEEPS SCANNING AFTER THE CLIP, so a '|' past character 34 is still
+; found: otherwise the refusal would depend on where in the string it sat.
+bas_almake:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, [di]
+    mov cx, [di + 2]
+    mov di, bas_almsg
+    xor bx, bx
+.amlp:
+    or cx, cx
+    jz .amdone
+    mov al, [si]
+    cmp al, '|'
+    je .ambar
+    cmp bx, OS88UI_AMAX
+    jae .amskip
+    mov [di + bx], al
+    inc bx
+.amskip:
+    inc si
+    dec cx
+    jmp short .amlp
+.amdone:
+    mov byte [di + bx], 0
+    clc
+    jmp short .amout
+.ambar:
+    stc
+.amout:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- bas_aldone - os88ui_ask's completion (SPEC.md 150.37) --------------
+; in:  AL = the 0-based button index, or OS88UI_ACANCEL when the alert was
+;      DISMISSED; the gfx lock is held and SI is our window
+; out: nothing; the answer is stored and a wake posted
+;
+; IT DOES NOT RESUME HERE, though the lock is held and it could. One resume
+; path is worth more than a saved wake: resuming from the completion would
+; nest the host stack one alert deeper every time a program answered an
+; alert with another alert, and 150.36's whole shape is that a suspension
+; UNWINDS before it comes back.
+bas_aldone:
+    push ax
+    push bx
+    cmp al, OS88UI_ACANCEL
+    je .adcan
+    xor ah, ah
+    inc ax                          ; 0-based here, 1..3 in the language
+    jmp short .adset
+.adcan:
+    xor ax, ax                      ; DISMISSED: 0, which no button maps to
+.adset:
+    mov [bas_alans], ax
+    mov word [bas_alpend], 1
+    mov bx, [bas_wn]
+    call OSAPI_WM_WAKE
+    pop bx
+    pop ax
+    ret
+
 ; --- bas_swapone - one of SWAP's two operands (SPEC.md 150.34) ----------
 ; out: AL = the index (a variable's, or an array's), AH bit 0 set when it is
 ;      an array and bit 1 set when its name ends in '$'. CF=1 and refused by
@@ -6552,6 +6749,76 @@ bas_exec:
     times BAS_ARR_LO0 - 4 db 0
     times 4 - BAS_ARR_LO0 db 0
 
+; --- OP_ALERT (SPEC.md 150.37) ------------------------------------------
+; RE-ENTRANT, which is how a statement that blocks lives on a system whose
+; alert is asynchronous. The first pass pops the four operands, raises the
+; alert and saves the cursor pointing AT THIS OPCODE; the completion stores
+; the answer and wakes us; the resume lands back here, finds it pending and
+; stores it into `choice`.
+;
+; THE OPERANDS ARE POPPED ON THE FIRST PASS ONLY, which the pending test is
+; what guards: the DI saved at the suspension is already the reduced one, so
+; a second pop would take four slots belonging to somebody else.
+.alert:
+    cmp word [bas_alpend], 0
+    je .alraise
+    mov word [bas_alpend], 0
+    push bx
+    push di                         ; DI is the value stack, and fp_pack_a
+    mov bl, [si]                    ; wants it for the destination
+    xor bh, bh
+    mov bl, [bas_alias + bx]
+    push si
+    call bas_varat                  ; SI = the entry
+    mov ax, [bas_alans]
+    call fp_i2a
+    mov di, si
+    add di, BAS_VAR_VAL
+    call fp_pack_a
+    pop si
+    pop di
+    pop bx
+    inc si                          ; past the index byte, and on
+    jmp .next
+.alraise:
+    cmp di, bas_stk + 4*BAS_SLOT
+    jb .under
+    sub di, BAS_SLOT                ; button$ is the top of the four
+    call bas_alset                  ; AX = the set, CF=1 no match
+    jc .albtnbad
+    push ax
+    sub di, BAS_SLOT                ; `default`: IGNORED (150.37)
+    sub di, BAS_SLOT                ; message$
+    call bas_almake                 ; into bas_almsg, clipped; CF=1 on a '|'
+    jc .almsgbad
+    sub di, BAS_SLOT                ; `icon`: IGNORED
+    ; SUSPEND FIRST, because os88ui_ask wants SI and DI for its own
+    ; arguments and those two registers ARE the interpreter (150.36)
+    mov ax, si
+    dec ax                          ; ...AT this opcode, not past it
+    sub ax, bas_ops
+    mov [bas_scur], ax
+    mov [bas_sdi], di
+    mov word [bas_susp], 1
+    pop ax                          ; the set
+    mov bx, [bas_wn]
+    mov si, bas_almsg
+    mov di, bas_aldone
+    call os88ui_ask                 ; the gfx lock is held either way in:
+    jc .albusy                      ; AM_ONCMD holds it, bas_onwake took it
+    ret                             ; ...and the completion wakes us
+.albusy:
+    mov word [bas_susp], 0
+    mov si, bas_e_albusy
+    jmp bas_err
+.almsgbad:
+    pop ax
+    mov si, bas_e_almsg
+    jmp bas_err
+.albtnbad:
+    mov si, bas_e_albtn
+    jmp bas_err
+
 ; --- OP_ONMENU (SPEC.md 150.36) -----------------------------------------
 ; THE YIELD IS A RETURN. A program runs on the UI task under the gfx lock
 ; (SPEC.md 12.2's AM_ONCMD contract), so yielding IN PLACE cannot work: the
@@ -6744,6 +7011,7 @@ bas_optab:
     dw bas_exec.lsetop              ; OP_LSET
     dw bas_exec.rsetop              ; OP_RSET
     dw bas_exec.onmenu              ; OP_ONMENU
+    dw bas_exec.alert               ; OP_ALERT
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -7171,6 +7439,27 @@ bas_kw_rset:    db 'RSET', 0
 bas_kw_erase:   db 'ERASE', 0
 bas_kw_on:      db 'ON', 0
 bas_kw_menu:    db 'MENU', 0
+bas_kw_alert:   db 'ALERT', 0
+
+; --- ALERT's five button sets (SPEC.md 150.37) ---------------------------
+; STORED UPPER-CASE and matched whole, because `button$` is an sexp and the
+; match is therefore a RUN-TIME one. The set value rides beside the pattern:
+; OS88UI_ASTEP is 4 and absent here (it is behind OS88UI_AEXTRA, SHEET's
+; macro debugger), so the values are not the table's own indices.
+bas_als_ok:     db 'OK', 0
+bas_als_yn:     db 'YES|NO', 0
+bas_als_sdc:    db 'SAVE|DISCARD|CANCEL', 0
+bas_als_cp:     db 'CANCEL|PROCEED', 0
+bas_als_okc:    db 'OK|CANCEL', 0
+bas_als_shc:    db 'STEP|HALT|CONTINUE', 0
+bas_altab:
+    dw bas_als_ok,  OS88UI_AOK
+    dw bas_als_yn,  OS88UI_AYESNO
+    dw bas_als_sdc, OS88UI_ASAVE
+    dw bas_als_cp,  OS88UI_ADANGER
+    dw bas_als_okc, OS88UI_AOKCAN
+    dw bas_als_shc, OS88UI_ASTEP
+BAS_ALSETS equ ($ - bas_altab) / 4
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -7260,6 +7549,10 @@ bas_e_lsetstr:  db 'LSET and RSET want a $ name', 0
 bas_e_lseteq:   db 'LSET and RSET go LSET a$ = b$', 0
 bas_e_onwhat:   db 'ON MENU is the only ON this wave knows', 0
 bas_e_onmarg:   db 'ON MENU takes nothing yet - handlers come with MENU', 0
+bas_e_albtn:    db 'those ALERT buttons are not one of the six sets', 0
+bas_e_almsg:    db 'an ALERT message is ONE line here - no | in it', 0
+bas_e_albusy:   db 'an alert is already up', 0
+bas_e_alvar:    db 'ALERT wants a number variable for the choice', 0
 ; REFUSED WITH A REASON, not as an unknown word (SPEC.md 150.7): ERASE is the
 ; reference's and leaving it out is a decision, so the message says so and
 ; names the word a program reaching for it probably wanted. SHORT BECAUSE THE
