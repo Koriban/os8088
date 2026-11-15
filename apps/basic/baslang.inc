@@ -165,7 +165,13 @@ OP_DIM      equ 59                  ; + an index byte: lay that array out
                                     ; high. It needs no dimension count in
                                     ; the stream because the descriptor
                                     ; already carries one from compile time
-OP_N        equ 60                  ; how many there are, table included
+; --- ERASE (SPEC.md 150.41) ----------------------------------------------
+OP_ERASE    equ 60                  ; + an index byte: release that array's
+                                    ; bytes and unallocate it, so a later
+                                    ; DIM may re-dimension it. One op per
+                                    ; name, so node [94]'s list form costs
+                                    ; the stream nothing but its names
+OP_N        equ 61                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -956,6 +962,88 @@ bas_asub:
     pop cx
     pop bx
     ret
+
+; --- bas_aerase - delete array BX (SPEC.md 150.41) -----------------------
+; in:  BX = the index, resolved at compile time.
+; out: CF=1 and refused by name if its DIM has not executed on this run;
+;      every register preserved otherwise.
+;
+; HERE RATHER THAN BESIDE THE OP, for bas_adimb's reason below: a top-level
+; label among bas_exec's op bodies would end bas_exec's local scope.
+;
+; THE HOLE IS CLOSED AND NOT MERELY FORGOTTEN, which node [94] requires - its
+; example prints FRE(0) either side of an ERASE to show the memory coming
+; back. A bump arena can only pop its top, so everything above the hole moves
+; DOWN and the descriptors that named it are fixed. Safe because nothing
+; holds an arena pointer across an op boundary: an element's address is
+; computed from BAS_ARR_AT at every access, and a string element holds an
+; offset into the STRING arena, which this does not touch.
+;
+; DI IS THE VALUE STACK and bas_scopy takes its destination there, so it is
+; banked across the copy. Within one op that is allowed - 150.36's rule is
+; about crossing a `.next`, which this does not.
+bas_aerase:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call bas_arrat                  ; SI = the entry
+    cmp word [si + BAS_ARR_N0], 0
+    je .none
+    mov ax, [si + BAS_ARR_N0]
+    mul word [si + BAS_ARR_N1]      ; elements (DX:AX, and DX is 0: the
+    mov cx, 3                       ; allocation that made this fitted)
+.sh:
+    shl ax, 1                       ; ...eight bytes each
+    dec cx
+    jnz .sh
+    mov cx, ax                      ; CX = the bytes it holds
+    mov dx, [si + BAS_ARR_AT]       ; DX = where they start
+    mov word [si + BAS_ARR_N0], 0   ; not allocated any more (150.40)
+    ; --- close it -------------------------------------------------------
+    mov di, bas_arena
+    add di, dx                      ; the hole itself...
+    mov si, di
+    add si, cx                      ; ...and what sits just above it
+    push cx
+    mov ax, [bas_atop]
+    sub ax, dx
+    sub ax, cx                      ; how many bytes that is - 0 if this
+    mov cx, ax                      ; array was the top one, which bas_scopy
+    call bas_scopy                  ; answers with no copy at all
+    pop cx
+    sub word [bas_atop], cx
+    ; --- and every array that moved with it -----------------------------
+    xor bx, bx
+.fix:
+    cmp bx, [bas_narr]
+    jae .done
+    call bas_arrat
+    cmp word [si + BAS_ARR_N0], 0
+    je .next                        ; not allocated: its AT means nothing
+    cmp word [si + BAS_ARR_AT], dx
+    jbe .next                       ; at or below the hole: it did not move
+    sub word [si + BAS_ARR_AT], cx
+.next:
+    inc bx
+    jmp short .fix
+.done:
+    clc
+    jmp short .out
+.none:
+    mov si, bas_e_arrnodim
+    call bas_err
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; POP does not touch CF
 
 ; --- bas_adimb - pop ONE dimension's bounds; out AX = low, DX = count ----
 ; HERE, BESIDE bas_asub, AND NOT BESIDE OP_DIM THAT CALLS IT - because a
@@ -2761,6 +2849,21 @@ bas_exec:
     stc
     jmp short .dimout
 
+; --- OP_ERASE (SPEC.md 150.41) ------------------------------------------
+; + an index byte. Node [94]'s `ERASE a(), b()` is one of these per name, so
+; the list form costs the stream nothing but the names themselves.
+.erase:
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_aerase
+    pop si
+    pop bx
+    jc .done                        ; refused by name, and bas_err has said
+    jmp .next
+
 ; --- OP_MENU (SPEC.md 150.38) -------------------------------------------
 ; + an index byte. Walks m$() in the Compendium's layout (node [299]),
 ; COPIES every title and item into bas_mtext, builds the pointer tables and
@@ -3186,6 +3289,7 @@ bas_optab:
     dw bas_exec.onmgosub            ; OP_ONMGOSUB
     dw bas_exec.msel                ; OP_MSEL
     dw bas_exec.dim                 ; OP_DIM
+    dw bas_exec.erase               ; OP_ERASE
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3598,6 +3702,7 @@ bas_e_arrrange: db 'that subscript is outside the array', 0
 bas_e_arrto:    db 'a size runs low TO high', 0
 bas_e_arrdims:  db 'DIM takes one or two sizes here', 0
 bas_e_arrnodim: db 'that array has not been DIMmed yet on this run', 0
+bas_e_arrnotdim: db 'ERASE wants an array this program DIMs somewhere', 0
 bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0
 bas_e_baseval:  db 'OPTION BASE takes 0 or 1', 0
 bas_e_clrarr:   db 'CLR takes variables; ARRAYFILL fills an array', 0
@@ -3626,6 +3731,5 @@ bas_e_mselarg:  db 'MENU() takes 0 here - the rest is the AES message buffer', 0
 ; CONSOLE IS 80 COLUMNS - the first draft ran to 135 with `Error at line N: `
 ; on it, which WRAPS, and a wrapped refusal is two console lines where every
 ; gate asserts one. The whole reason is SPEC.md 150.33's, not a message's.
-bas_e_erase:    db 'ERASE frees nothing here - ARRAYFILL clears one in place', 0
 bas_e_notarr:   db 'that is not an array', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

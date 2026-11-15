@@ -573,7 +573,18 @@ the third time that has happened in this chapter after `SELECT CASE` and
 **`LSET`/`RSET` are in too** — SPEC.md §150.35, node [164], fixed-length
 because *"only its length is significant"*.
 
-**And `ERASE` is DECIDED, not deferred: refused by name** (§150.33). It
+**And `ERASE` IS IN** — SPEC.md §150.41, which is where the refusal below
+landed. It was DECIDED and not deferred, with an expiry date in the decision
+that §150.40 reached: it now deletes an array for real, closing the hole in
+the arena so the bytes come back (node [94]'s example proves release with
+`FRE(0)`, so a flag alone would not be the statement), and the compile-time
+rule against a second `DIM` of one name is relaxed to make node [94]'s "can
+then be redimensioned" true — the row is REUSED, so one name still maps to
+one descriptor and an array still costs no run-time type word. The refusal's
+reasoning is kept in §150.33 rather than deleted, because reading it is what
+identified `DIM` of an expression as the real open item.
+
+The decision as it stood: it
 would do nothing a program could observe here. Its two documented effects
 both rest on run-time allocation that this chapter does not do: the arena
 is handed out while compiling, so freed bytes have no later `DIM` to go to,
@@ -597,9 +608,7 @@ cannot see), and one costs no code at all: an element touched before its
 refuses by name. What this unlocks next is `ERASE` itself, which becomes
 little more than clearing that count.
 
-Still open, in this order: **`ERASE` for real** (now that §150.40 has made
-it mean something — it becomes clearing the allocated count, plus returning
-the bytes if it was the last array out), **a third dimension** (the reference
+Still open, in this order: **a third dimension** (the reference
 allows seven, product under 65535, and this record's size is a power of two
 for the indexer's sake — so the third costs it the shift), **`DIM?()`** for
 the element count, and **`TYPE` records with their dotted names** plus

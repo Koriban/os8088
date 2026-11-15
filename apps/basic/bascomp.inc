@@ -1378,13 +1378,30 @@ bas_c_stmt:
     call bas_word                   ; the name, sigil and all
     jc .dimnoname
     call bas_arrfind
-    jnc .dimdup
+    jnc .dimagain                   ; a name already DIMmed REUSES its row
     mov bx, [bas_narr]
     cmp bx, BAS_ARR_MAX
     jae .dimmax
     SHOUT bas_arrat
     mov [si + BAS_ARR_SRC], di
     mov [si + BAS_ARR_LEN], cx
+    mov word [bas_adimr], 0         ; a NEW row: no count to be held to
+    inc word [bas_narr]             ; claimed NOW, so the row is this DIM's
+    jmp short .dimrow               ; even though its sizes are not read yet
+.dimagain:
+    ; A SECOND DIM OF ONE NAME (SPEC.md 150.41), which ERASE exists for.
+    ; The row is REUSED, so one name still maps to one descriptor index and
+    ; an array still costs no run-time type word - what the old refusal
+    ; really bought. The count it had is banked, because a re-DIM may change
+    ; the BOUNDS and not the NUMBER of them: an element reference is compiled
+    ; against this count while bas_aelem reads it at run time to decide how
+    ; many subscripts to pop, so a change would leave references pushing one
+    ; for a run that pops two.
+    SHOUT bas_arrat
+    mov ax, [si + BAS_ARR_DIM]
+    mov [bas_adimr], ax
+.dimrow:
+    mov [bas_adimx], bx             ; ...whichever row it is
     mov word [si + BAS_ARR_N0], 0   ; not allocated yet (150.40)
     mov word [si + BAS_ARR_DIM], 1
     mov word [si + BAS_ARR_LO1], 0
@@ -1404,27 +1421,40 @@ bas_c_stmt:
     jc .x
     shl ax, 1
     or [bas_adimf], ax              ; ...and bit 1 for the second
-    mov bx, [bas_narr]
+    mov bx, [bas_adimx]
     SHOUT bas_arrat
     mov word [si + BAS_ARR_DIM], 2
 .dimclose:
     call bas_bclose
     jc .x
+    ; --- a re-DIM may not change the NUMBER of sizes (150.41) ------------
+    cmp word [bas_adimr], 0
+    je .dimemit                     ; a new row: nothing to be held to
+    mov bx, [bas_adimx]
+    SHOUT bas_arrat
+    mov ax, [bas_adimr]
+    cmp ax, [si + BAS_ARR_DIM]
+    jne .dimredim
+.dimemit:
     mov al, OP_DIM
     call bas_emit
-    mov ax, [bas_narr]
-    call bas_emit                   ; the index, as a byte
+    mov ax, [bas_adimx]
+    call bas_emit                   ; the row, as a byte
     mov ax, [bas_adimf]
     call bas_emit                   ; ...and which bounds were `lo TO hi`
-    inc word [bas_narr]
     mov word [bas_adimd], 1         ; ...and OPTION BASE is closed now
     ret
+.dimredim:
+    mov si, bas_e_arrdim
+    SHOUTR bas_err
 .dimnoname:
     mov si, bas_e_arrname
     SHOUTR bas_err
-.dimdup:
-    mov si, bas_e_arrdup
-    SHOUTR bas_err
+; (`.dimdup` was here: a second DIM of one name is no longer refused at
+; compile time, it REUSES the name's row - SPEC.md 150.41. The refusal it
+; carried now happens at RUN time, from OP_DIM, when nothing has ERASEd the
+; array between the two; bas_e_arrdup is still that message. A label this
+; file named once was a body nothing could reach.)
 .dimmax:
     mov si, bas_e_arrmax
     SHOUTR bas_err
@@ -1734,8 +1764,37 @@ bas_c_stmt:
     pop ax
     mov si, bas_e_lseteq
     SHOUTR bas_err
+; --- ERASE a()[, b()] (SPEC.md 150.41, node [94]) ----------------------
+; One OP_ERASE per name. The empty brackets are the Compendium's spelling
+; and are required: `ERASE a` would read as a scalar and there is no
+; statement that deletes one.
 .erase:
-    mov si, bas_e_erase
+    call bas_skipsp
+    call bas_word                   ; the name, sigil and all
+    jc .erasename
+    call bas_arrfind                ; BX = its row
+    jc .erasenodim
+    call bas_bopen
+    jc .x
+    call bas_bclose                 ; ...and nothing between them
+    jc .x
+    mov al, OP_ERASE
+    call bas_emit
+    mov ax, bx
+    call bas_emit                   ; the row, as a byte
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    jne .eraseout
+    inc word [bas_src]
+    jmp short .erase                ; node [94]: several at once
+.eraseout:
+    ret
+.erasename:
+    mov si, bas_e_arrname
+    SHOUTR bas_err
+.erasenodim:
+    mov si, bas_e_arrnotdim
     SHOUTR bas_err
 
 ; --- ON MENU (SPEC.md 150.36) -------------------------------------------

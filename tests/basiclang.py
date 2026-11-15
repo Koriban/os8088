@@ -1057,17 +1057,125 @@ PART36 = [
      "Error at line 3: LSET and RSET want a $ name"),
 ]
 
-# ERASE IS REFUSED WITH ITS REASON, and the row asserts the REASON and not
-# merely that something was refused - "not a statement this wave knows"
-# would pass a test that only looked for an error, and it is the wrong
-# answer for a word the reference has and this chapter decided about
-# (SPEC.md 150.33).
+# ERASE DELETES AN ARRAY FOR REAL (SPEC.md 150.41, node [94]). It was
+# refused by name through 150.33 for a reason that expired when 150.40 moved
+# the arena to run time - it would have freed nothing - and this part is what
+# that refusal was standing in for. THE MEMORY HAS TO COME BACK: node [94]'s
+# own example prints FRE(0) either side of an ERASE to show it, and this row
+# has no FRE, so it proves the release the only other way there is - by
+# allocating again in the space that was freed.
 PART37 = [
-    ("CLS",                              None),
-    ("DIM k(3)",                         None),
-    ("ERASE k()",
-     "Error at line 3: ERASE frees nothing here - ARRAYFILL clears one "
-     "in place"),
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM k(3)",                         None),       # 3
+    ("k(0) = 5",                         None),       # 4
+    ("PRINT k(0)",                       "5"),        # 5
+    ("ERASE k()",                        None),       # 6
+    # ...and it is gone: the bound check meets a count of zero (150.40)
+    ("PRINT k(0)",                                    # 7
+     "Error at line 7: that subscript is outside the array"),
+]
+
+# THE MEMORY REALLY COMES BACK, which is the half of node [94] that a
+# "deleted" flag alone would fake. 400 elements is most of the arena's 512,
+# so the second DIM only fits if the first array's bytes were released.
+PART58 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("big = 400",                        None),       # 3
+    ("DIM p(big)",                       None),       # 4
+    ("ERASE p()",                        None),       # 5
+    ("DIM q(big)",                       None),       # 6  ...only now it fits
+    ("q(400) = 7",                       None),       # 7
+    ("PRINT q(400)",                     "7",),       # 8
+]
+
+# RE-DIM: node [94]'s "which can then be redimensioned". The same name twice
+# in the text, which compiled to a refusal before 150.41, with an ERASE
+# between them - and the NEW bounds are in force afterwards, which is the
+# part a flag-only ERASE would get wrong.
+PART59 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM r(2)",                         None),       # 3
+    ("r(2) = 1",                         None),       # 4
+    ("ERASE r()",                        None),       # 5
+    ("DIM r(6)",                         None),       # 6
+    ("r(6) = 9",                         None),       # 7  outside the OLD one
+    ("PRINT r(6)",                       "9"),        # 8
+    ("PRINT UBOUND(r)",                  "6"),        # 9
+]
+
+# ...AND WITHOUT THE ERASE IT IS REFUSED AT RUN TIME. The text rule is now
+# "one descriptor per name" and the dynamic rule is "one live allocation at a
+# time" (150.41), so this compiles and then meets 150.40's flag.
+PART60 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM s(2)",                         None),       # 3
+    ("DIM s(6)",                                      # 4
+     "Error at line 4: that array is already DIMmed"),
+]
+
+# A RE-DIM MAY NOT CHANGE THE NUMBER OF SIZES, and that is correctness: an
+# element reference is compiled against the count while bas_aelem reads it at
+# RUN time to decide how many subscripts to pop, so references compiled
+# before would push one for a run that pops two (150.41).
+# NO SENTINEL IN THIS ONE, NOR IN PART64, and the reason is the difference
+# between the two kinds of refusal: these two are refused at COMPILE time, so
+# the program never runs and its `PRINT 31415` never prints. The run-time
+# refusals above all keep their sentinel, because the program gets as far as
+# printing it. PART24 and PART25 have had this shape since wave 2 without
+# anybody writing down why; asserting a sentinel here is what asked.
+PART61 = [
+    ("CLS",                              None),       # 1
+    ("DIM t(2)",                         None),       # 2
+    ("ERASE t()",                        None),       # 3
+    ("DIM t(2, 2)",                                   # 4
+     "Error at line 4: that array was DIMmed with a different number "
+     "of sizes"),
+]
+
+# ERASE TAKES A LIST - "in contrast to Version 2, several arrays can be
+# deleted at once" (node [94]) - and the hole it closes is in the MIDDLE
+# here, which is the case a bump arena cannot pop: u() is erased while v()
+# sits above it, so v() has to MOVE and keep its contents.
+PART62 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM u(100)",                       None),       # 3
+    ("DIM v(100)",                       None),       # 4
+    ("v(100) = 33",                      None),       # 5
+    ("ERASE u()",                        None),       # 6  the hole is BELOW v
+    ("PRINT v(100)",                     "33"),       # 7  ...and v moved with
+    ("DIM w(300)",                       None),       # 8  its bytes intact
+    ("w(300) = 44",                      None),       # 9
+    ("PRINT w(300)",                     "44"),       # 10
+    ("ERASE v(), w()",                   None),       # 11 both at once
+    ("DIM x(500)",                       None),       # 12 nearly the whole
+    ("x(500) = 55",                      None),       # 13 arena, so only a
+    ("PRINT x(500)",                     "55"),       # 14 real release fits it
+]
+
+# ERASE ON AN ARRAY WHOSE DIM HAS NOT RUN refuses by the same name LBOUND and
+# UBOUND give for that state (150.40), rather than quietly doing nothing.
+PART63 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("z = 0",                            None),       # 3
+    ("IF z > 0 THEN",                    None),       # 4
+    ("DIM y(3)",                         None),       # 5
+    ("ENDIF",                            None),       # 6
+    ("ERASE y()",                                     # 7
+     "Error at line 7: that array has not been DIMmed yet on this run"),
+]
+
+# ...and a name the text never DIMs at all is refused at COMPILE time, which
+# is a different message: there is no row to erase.
+PART64 = [
+    ("CLS",                              None),       # 1
+    ("ERASE nosuch()",                                # 2
+     "Error at line 2: ERASE wants an array this program DIMs somewhere"),
 ]
 
 # --- ON MENU: the suspend/resume seam (SPEC.md 150.36) ------------------
@@ -1420,7 +1528,8 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37,
-          PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57)
+          PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
+          PART58, PART59, PART60, PART61, PART62, PART63, PART64)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 PARTS = EARLY + LATE + W3TAIL + WAVE4

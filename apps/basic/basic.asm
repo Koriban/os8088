@@ -913,7 +913,9 @@ BAS_B_bas_arrs   equ BAS_B_bas_narr + 2
 BAS_B_bas_abase  equ BAS_B_bas_arrs + BAS_ARR_MAX*BAS_ARR_SZ
 BAS_B_bas_adimd  equ BAS_B_bas_abase + 2
 BAS_B_bas_adimf  equ BAS_B_bas_adimd + 2
-BAS_B_bas_asval  equ BAS_B_bas_adimf + 2
+BAS_B_bas_adimx  equ BAS_B_bas_adimf + 2
+BAS_B_bas_adimr  equ BAS_B_bas_adimx + 2
+BAS_B_bas_asval  equ BAS_B_bas_adimr + 2
 BAS_B_bas_acur   equ BAS_B_bas_asval + 4
 BAS_B_bas_asubs  equ BAS_B_bas_acur + 2
 BAS_B_bas_atop   equ BAS_B_bas_asubs + 2
@@ -1128,6 +1130,18 @@ bas_adimf       equ os88_image_end + BAS_B_bas_adimf ; word: which of a
                                          ; per dimension - compile time,
                                          ; and the byte it becomes is
                                          ; OP_DIM's second operand (150.40)
+bas_adimx       equ os88_image_end + BAS_B_bas_adimx ; word: WHICH
+                                         ; descriptor row the DIM being
+                                         ; compiled is writing - a second DIM
+                                         ; of one name reuses that name's row
+                                         ; rather than taking a new one
+                                         ; (SPEC.md 150.41), so it is no
+                                         ; longer always bas_narr
+bas_adimr       equ os88_image_end + BAS_B_bas_adimr ; word: the dimension
+                                         ; count that row had BEFORE this
+                                         ; DIM, or 0 if the row is new. A
+                                         ; re-DIM may change the bounds and
+                                         ; NOT the number of them (150.41)
 bas_asval       equ os88_image_end + BAS_B_bas_asval ; the (offset,length)
                                          ; OP_ASSTORE is storing, held here
                                          ; rather than juggled: RUN time, and

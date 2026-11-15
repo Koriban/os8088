@@ -251871,8 +251871,18 @@ is evaluated ONCE, before the loop, which is what the reference's
 `ARRAYFILL x(),5+1` example means and is also the only reading that makes
 the statement's cost independent of the array's size.
 
-**`ERASE` IS REFUSED BY NAME, AND THAT IS A DECISION RATHER THAN A GAP.**
-It is the third of node [94]'s statements, and on this implementation it
+**`ERASE` WAS REFUSED BY NAME HERE, AND §150.41 IS WHERE IT LANDED.** The
+refusal below was a DECISION and not a gap, and it had an expiry date in it
+which has now been reached: both of `ERASE`'s documented effects rested on
+run-time allocation, §150.40 moved the array arena to run time, and §150.41
+is the statement itself. **The reasoning is kept rather than deleted** —
+reading it is what identified `DIM` of an expression as the real open item,
+in `ERASE`'s place, so it is the record of a refusal doing its job.
+
+What follows describes the state of things BEFORE §150.40:
+
+**The refusal, as it stood:** `ERASE` is the third of node [94]'s
+statements, and on this implementation it
 would do NOTHING A PROGRAM COULD OBSERVE. Its two documented effects are
 both unavailable, and neither for a reason a bigger effort would fix:
 
@@ -251910,6 +251920,11 @@ is genuinely scarce, and a size read from the data. Until `DIM` takes an
 expression, `ERASE` is a no-op with a misleading name - which is likely why
 node [94]'s own memo says *"The command ERASE should be avoided as it can
 lead to many hard to find errors."*
+
+**That paragraph was right and it is now spent**: §150.40 built the
+runtime-sized arrays, §150.41 built `ERASE` on top of them, and the memo's
+warning is answered there rather than copied — it reports GFA's own
+block-size and back-trailer, which this implementation does not have.
 
 ### 150.34 `SWAP`, and the twelve bytes that move
 
@@ -252535,6 +252550,91 @@ rather than laid out. The helper keeps its job for `STEP` and `OPTION BASE`
 and loses it for `DIM`, and the comment has to say so: a true sentence under
 the wrong scope is the trap this chapter has hit twice (§150.31's "the
 reference", §150.33's `ERASE`).
+
+### 150.41 `ERASE`, and the second `DIM` it exists for
+
+```basic
+DIM a(400)
+ERASE a()                      ' ...and the 3,208 bytes come back
+DIM b(400)                     ' ...which is why this now fits
+DIM a(10)                      ' re-dimensioned, node [94]'s own word
+ERASE a(), b()                 ' several at once, which Version 2 could not
+```
+
+**Status: CONTRACT WRITTEN.** `ERASE` was refused by name through §150.33 and
+§150.40, with a reason that has now expired: it would have freed nothing,
+because the arena was handed out at compile time. §150.40 moved the arena to
+run time, so this is the statement becoming possible rather than a new idea.
+
+**THE COMPENDIUM IS THE AUTHORITY AND IT IS SPECIFIC** (node [94], `CLEAR` /
+`CLR` / `ERASE`): *"ERASE deletes complete arrays, which can then be
+redimensioned if required. In contrast to Version 2, several arrays can be
+deleted at once"*, and its worked example prints `FRE(0)` either side of an
+`ERASE` precisely *"showing that the memory occupied by the array is released
+by ERASE"*. So a nominal free is not this statement. (`basicnw`, this
+chapter's other authority, has an `ERASE` that clears in place — a different
+statement wearing the same name, and §150.31 records the afternoon that cost.)
+
+**THE HOLE IS CLOSED, NOT FORGOTTEN.** A bump arena can only pop its top, so
+`ERASE` moves every array above the hole DOWN by its size and fixes the
+`BAS_ARR_AT` of each. **That is safe because nothing holds an arena pointer
+across an op boundary** — an element's address is computed from `BAS_ARR_AT`
+at every access, and a string element holds an offset into the STRING arena,
+which this does not touch. It is the same property §150.36 relies on for
+suspend and resume, used for a different purpose.
+
+**AND THE COMPILE-TIME RULE AGAINST A SECOND `DIM` IS RELAXED, because
+`ERASE` is half a statement without it** — node [94]'s "can then be
+redimensioned" is the point of it. A second `DIM` of one name now REUSES that
+name's descriptor instead of being refused.
+
+What §150.31 said that rule bought is untouched: **one name still maps to
+exactly one descriptor index, resolved at compile time**, so an array still
+costs no run-time type word. What changes is only that two `DIM` statements
+may write that one row.
+
+**THE NUMBER OF DIMENSIONS MAY NOT CHANGE, and that is correctness rather
+than tidiness.** An element reference is compiled against the descriptor's
+count — `a(i)` pushes one subscript, `a(i,j)` two — while `bas_aelem` reads
+that count AT RUN TIME to decide how many to pop. So `DIM a(5)` … `DIM a(2,3)`
+would leave the references compiled before the second `DIM` pushing one
+subscript for a run that pops two, which is a corrupted value stack and not a
+wrong answer. Refused by the name §150.31 already has.
+
+**THE RUN-TIME FLAG DOES THE REST, WITH NO NEW RULE.** `DIM a(5) : DIM a(10)`
+compiles now and is refused AT RUN TIME by §150.40's "already DIMmed", because
+nothing cleared `BAS_ARR_N0`. Put `ERASE a()` between them and it runs. So the
+text rule is "one descriptor per name" and the dynamic rule is "one live
+allocation at a time" — the pair node [94] describes, and neither needed
+inventing.
+
+**Two refusals, each by name:** an array the text never `DIM`med at all
+(compile time, as for any undeclared array), and one whose `DIM` has not
+executed on this run (run time, the same message `LBOUND` and `UBOUND` give
+for the same state).
+
+**WHAT IT RETURNS FOR A STRING ARRAY IS THE ELEMENT SLOTS AND NOT THE TEXT**,
+and that is the string arena's existing model rather than a shortfall here.
+§150.28 hands a string variable's bytes out from the bottom of that arena and
+never frees one individually — assigning over a string does not reclaim its
+old bytes either — so the four bytes an element holds are an offset and a
+length into storage this statement does not own. `ERASE` on a string array
+therefore returns 8 bytes an element to the ARRAY arena and leaves the text
+where it is until the run ends. Stated because the Compendium's `FRE(0)`
+example invites the other reading.
+
+**WHAT THE COMPENDIUM SAYS ABOUT `ERASE` THAT THIS DOES NOT INHERIT.** Node
+[94]'s memo is *"The command ERASE should be avoided as it can lead to many
+hard to find errors"*, and an appendix is blunter: *"Never, ever use ERASE.
+Internally GFA also stores a block-size and back-trailer and these only come
+into play if one uses ERASE."* Those are reports of GFA's own implementation,
+not properties of the statement: there is no block-size or back-trailer here,
+the descriptors are a fixed table of eight, and the hazard the appendix
+describes cannot arise. The manual's other `ERASE` warning is the same kind —
+erasing an array `DIM`med inside a function while a static address reference
+is pending hangs GFA, and this language has no reference to a variable's
+address to leave pending. **The warnings are kept here because they are the
+reference's, and answered rather than copied.**
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 

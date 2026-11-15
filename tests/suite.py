@@ -22022,7 +22022,7 @@ SOAK = [
         "procedure's body is written below the call that runs it, so a line "
         "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 480.0,
+    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 600.0,
         "SPEC.md 150.33 to 150.35: CLR, ARRAYFILL, SWAP, LSET and RSET. EVERY NUMBER IT "
         "ASSERTS IS THE REFERENCE'S OWN - the plan's differential oracle "
         "cannot answer here, `basicnw` being the QuickBASIC line and having "
