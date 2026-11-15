@@ -252252,6 +252252,67 @@ bar that `MENU m$()` must exist to have put up first, and the kernel's
 menu-item structure has no attribute word for a checkmark, so each needs its
 own decision rather than a guess.
 
+### 150.39 `BASIC.OVL`: what moves, and the three traps that are requirements
+
+**Status: CONTRACT WRITTEN, SEAM NOT CUT.** The measurement and the rules
+first, because this is the change with a whole-VM freeze in its history and
+the fast tier cannot see it.
+
+**WHAT MOVES: the COMPILER, not the built-ins first.** Measured off a nasm
+map of the 29,292-byte image, bucketed by label: the `bas_c_*` family and
+the parse helpers (`bas_word`, `bas_emit*`, `bas_bopen`/`bclose`/`bcomma`,
+`bas_prcfind`, `bas_calfix`, `bas_fwdfix`, the label and forward tables)
+come to **7,181 bytes** against `bas_exec`'s 2,834. Moving that alone takes
+the image to about 22,100 - **79% of budget down to about 68%** - and it is
+the right half to move for a reason the plan's table already gives: the
+compiler runs ONCE PER `RUN`, where a built-in can run once per op.
+
+**THE SEAM IS NARROW IN ONE DIRECTION AND WIDE IN THE OTHER**, which is the
+whole difficulty. `bas_run` calls the compiler once; the compiler calls back
+into the resident half constantly - the variable, array, procedure and label
+tables, the string arena, `bas_err`. Every one of those is a `SHOUT`
+vector. So the count of vectors, not the count of bytes, is what makes this
+expensive, and the first cut should move a SUBTREE whose callbacks are
+countable rather than the whole compiler at once.
+
+**DS STAYS, CS MOVES (§68.10)**, which is what makes any of this possible:
+an overlay reads and writes the package's bss directly, so the op stream,
+the tables and the arenas need no marshalling. Only code changes segment.
+
+**THREE TRAPS, AND THEY ARE REQUIREMENTS HERE RATHER THAN ADVICE.** Each
+one cost a session in SHEET's split (§82.16) and each is silent:
+
+1. **The dispatcher must not stage the verb index in a register a verb
+   uses.** `ch_modc` staged it in `SI`, which two of three verbs took as an
+   argument; verb 0's index was 0 and its `SI` was 0, so that verb kept
+   working and charts drew axes with no data. **Index through `BP`** - it is
+   the verb already and no verb wants it.
+2. **`%define BAS_OVERLAY` must be the FIRST LINE of the overlay's source.**
+   NASM's preprocessor is one pass, so an `%ifdef` is tested where it sits.
+   Defined down beside the `%include`s, every `%ifdef` above reads false,
+   call sites assemble as near calls to routines already cut out, and the
+   package jumps into unmapped memory and **freezes the whole VM** - a
+   frozen desktop clock, not an app error. `basic.asm` must `%error` if
+   neither `BAS_OVERLAY` nor `BAS_RESIDENT` is defined at that point.
+3. **No global edit may turn `call X` into the far-call macro**: it rewrites
+   X's own shim into a far call to itself, which is infinite recursion and a
+   hung guest. Every shim's body stays a plain `call`, and the commit that
+   cuts the seam owes an audit saying so.
+
+**AND THE PACKAGE MUST BUILD BOTH WAYS FROM ONE SOURCE** (`-DBAS_RESIDENT`).
+This is not a convenience: an overlay's WIRING bugs and its BEHAVIOUR bugs
+look identical from outside, and flipping one `%define` and rebuilding
+separates them in a single step. SHEET's split spent hours before adopting
+it.
+
+**A GREEN FAST TIER IS NOT COVERAGE OF THIS.** SHEET's split passed `make`
+and the whole fast tier with a dispatcher bug live; 23 of 26 SOAK rows then
+failed with `the left press was never decoded`, because a guest that has
+locked up stops servicing the serial IRQ and a hang is indistinguishable
+from a dropped mouse packet at the harness. So the seam is not cut without
+a soak run, and `basiclang` through `basiclang4` are the rows that matter -
+they are the only ones that compile a program at all.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

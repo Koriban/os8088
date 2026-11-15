@@ -649,6 +649,28 @@ macro with a five-menu cap where a BASIC program builds its bar at run time.
 **Wave 5 — the built-in library, in the overlay.** All 64 of the reference's,
 plus `PRINT USING`. Gap 2 (32-bit mul/div) lands here for `CLNG`/`MKL$`/`CVL`.
 
+**AND THE SEAM COMES FIRST, with its contract in SPEC.md §150.39.** Wave 4
+closed at 79% of budget (51,356 of 65,024), so the 64 built-ins do not fit
+resident and the split is no longer wave 5's tail but its entry. Measured
+off a nasm map: the COMPILER and its parse helpers are **7,181 bytes**
+against `bas_exec`'s 2,834, so moving that half takes the image to about 68%
+— and the compiler is the right half because it runs once per `RUN` where a
+built-in can run once per op.
+
+The difficulty is not the byte count: `bas_run` calls the compiler once, but
+the compiler calls back into the resident tables and arenas constantly, and
+every one of those is a vector. **So the first cut moves a subtree whose
+callbacks are countable, not the whole compiler**, and §150.39's three traps
+— the dispatcher's register, `%define` placement, and the shim-rewriting
+edit — are requirements rather than advice, each having cost a session in
+SHEET's split. The package must build BOTH ways from one source
+(`-DBAS_RESIDENT`), because wiring bugs and behaviour bugs are
+indistinguishable from outside otherwise.
+
+**And it is not cut without a SOAK run**: SHEET's split passed `make` and
+the entire fast tier with a live dispatcher bug, then failed 23 of 26 soak
+rows with a symptom that read as a flaky emulator.
+
 **Wave 6 — graphics, tier A.** `PLOT`, `DRAW`, `LINE`, `BOX`, `PBOX`, `RBOX`,
 `CIRCLE`, `PCIRCLE`, `ELLIPSE`, `POLYLINE`, `POLYFILL`, `FILL`, `TEXT`,
 `GET`/`PUT`, `GRAPHMODE`, `DEFLINE`, `DEFFILL`, `DEFTEXT`, `CLIP`. The audit's
