@@ -252440,10 +252440,17 @@ before reading the diff.
 ### 150.40 `DIM` of an expression: the arena moves to run time
 
 ```basic
-INPUT "how many"; n
-DIM score(n)                   ' a size the compiler cannot know
+n = MENU(0)                    ' a size the compiler cannot know
+DIM score(n * 10)
 DIM grid(1 TO rows, 1 TO cols) ' either bound, either dimension
 ```
+
+(This example said `INPUT "how many"; n` when it was written, and **this
+language has no `INPUT`** — §150.29's eight built-ins are string and numeric
+conversions, and the only things a program can currently learn from the user
+are a menu pick through `MENU(0)` and an `ALERT`'s button. An example that
+will not run is the same class of error as §150.31's "the reference": a
+sentence true of some BASIC, written as though true of this one.)
 
 **Status: BUILT**, row `basiclang3`, +272 bytes of image and 2 of bss — the
 package at 22,009 + 22,171 of `APP_MAX_SIZE`'s 65,024, 67.9%. This is the
