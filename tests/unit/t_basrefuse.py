@@ -45,7 +45,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, done                           # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-FILES = ("apps/basic/baslang.inc", "apps/basic/basic.asm")
+# bascomp.inc JOINED THIS LIST when SPEC.md 150.39 extracted the
+# compile-time half: the judged names moved with it, and this file's
+# own two guards fired - "a pattern this cannot see is a pattern it
+# cannot hold" found 1 refuser where it wants 2, and the judged list
+# named three routines that had left the files being scanned. A gate
+# is only ever pointed at files, so a move is a thing it must be told.
+FILES = ("apps/basic/baslang.inc", "apps/basic/bascomp.inc",
+         "apps/basic/basic.asm")
 
 
 def main():
