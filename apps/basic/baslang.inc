@@ -7039,11 +7039,15 @@ bas_exec:
     add ax, 2
     mov [bas_mset + AM_COUNT], ax
     mov word [bas_mon], 1
+    mov word [bas_mbar], 1          ; ...and the BAR is owed a redraw, which
+                                    ; only bas_onwake can pay: wm_front takes
+                                    ; the gfx lock and this runs under it
     push bx
     mov bx, [bas_wn]
     mov si, bas_mset
     call OSAPI_MENU_SET             ; relayouts if ours is the active window
-    pop bx
+    call OSAPI_WM_WAKE              ; ...so a wake is posted even when the
+    pop bx                          ; program has no ON MENU of its own
     pop di
     pop si
     pop dx

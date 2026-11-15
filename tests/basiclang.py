@@ -130,6 +130,7 @@ import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
 import os88fixture                                          # noqa: E402
 import dispcp                                               # noqa: E402
+import glass                                                # noqa: E402
 
 S = os88sym.linear
 SOCK = os88qemu.SOCK
@@ -1118,7 +1119,24 @@ PART45 = [
     ('m$(4) = " Kill "',                 None),
     ('m$(5) = ""',                       None),
     ("MENU m$()",                        None),
+    # ...AND THEN IT PUMPS, which is the realistic shape and not decoration.
+    # menu_win_set only MARKS the bar (menu_relayout sets menu_bdirty); the
+    # redraw is menu_draw_bar's, and that is driven by WINDOW EVENTS in
+    # wm.inc, not by a timer. A program that installs a bar and exits
+    # leaves it stale with nothing owed to anyone - which is exactly what
+    # this part did at first, and the bar still read `BASIC File Run` with
+    # a set that probed as File/Run/Plot/Zap. A GUI program loops on
+    # ON MENU by construction (150.36), so the wakes are what carry the
+    # redraw, and asserting the bar without them tests a state no real
+    # program sits in.
+    ("i = 0",                            None),
+    ("DO",                               None),
+    ("  i = i + 1",                      None),
+    ("  ON MENU",                        None),
+    ("LOOP UNTIL i >= 3",                None),
     ("PRINT 7",                          "7"),
+    ("#bar Plot",                        None),
+    ("#bar Zap",                         None),
 ]
 
 PART46 = [
@@ -1316,6 +1334,15 @@ class Qemu:
         self.hmp("sendkey " + self.QKEYS[name])
         os88qemu.pace(self, 0.05)
 
+    # NO `sym` METHOD, DELIBERATELY, and it must stay that way. `m.sym` is
+    # a CAPABILITY PROBE, not a getter: tests/dispcp.py says so in its own
+    # words - os88ui reads guest state through `m.sym`, `m.readseg` and
+    # `m.status`, "a MartyPC debug-server surface that a QEMU `Qemu` object
+    # does not have and cannot grow" - and it branches on
+    # `hasattr(m, "sym")`. Adding one for glass.glyphs() made dispcp
+    # delegate this row to os88ui, which then died on `m.status` four
+    # frames from the cause. dispcp records the mirror of that from
+    # `minesrc`. The glyph table is read locally below instead.
     def read(self, linear, n):
         p = os.path.join(self.tmp, "m.bin")
         # THE FILENAME IS QUOTED: HMP parses an unquoted path as an
@@ -1380,6 +1407,80 @@ class Mouse:
         self._hmp("mouse_button 1", "gsleep 0.2")
         self._mouse("to", str(ix), str(iy))
         self._hmp("mouse_button 0", "gsleep 0.3")
+
+
+MBAR_H = 20             # kernel.asm's: the white field is rows 0..18
+
+
+def bar_text(m, tmp):
+    """The MENU BAR's text, read off the GLASS through the kernel's own
+    glyphs - or None if nothing in the strip reads as a run of them.
+
+    **THIS ROW HAD NO WAY TO SEE THE BAR AND IT COST A DEFECT.** Everything
+    else here reads the console BUFFER out of memory, which is the right
+    instrument for an answer a program printed and the wrong one for
+    CHROME. MENU m$()'s first version installed a set whose AM_NAME,
+    AM_ONCMD and File/Run entries were still zeroed bss - a bar with a NULL
+    command handler - and the positive part PASSED, because the interpreter
+    was fine and only the bar was rubble. It surfaced one part later, when
+    File > New had no handler to reach. A values-only gate is blind to the
+    chrome, which this repository already knew (sheetmmenu once passed 8 of
+    8 with the bar in pieces); this is the row learning it.
+
+    THE INK IS DARK HERE, which is the one thing to get right: the bar is a
+    WHITE field with BLACK text, so a glyph's set bits are the DARK pixels
+    and the threshold is inverted against the usual chrome read.
+    """
+    table = {}
+    seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
+    base = int.from_bytes(m.read(S("font_base"), 2), "little")
+    raw = m.readseg(seg, base, glass.FONT_N * 8)
+    for i in range(glass.FONT_N):
+        table.setdefault(bytes(raw[i * 8:i * 8 + 8]),
+                         chr(glass.FONT_FIRST + i))
+    png = os.path.join(tmp, "bar.png")
+    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),
+                    m.path, png], capture_output=True, cwd=ROOT)
+    try:
+        from PIL import Image
+        im = Image.open(png).convert("L")
+    except Exception:
+        return None
+    w, h = im.size
+    px = im.load()
+    # ...and MBAR_H + 8 rows, not MBAR_H: cell_text reaches y+7 for a
+    # glyph's eight, so a box ending at row 18 still reads past row 19
+    rows = [[1 if px[x, y] < 128 else 0 for x in range(w)]
+            for y in range(min(h, MBAR_H + 8))]
+    # PER CELL, NOT glass.cell_text, which wants EVERY slot in its box to
+    # match a glyph and so rejects this strip whole: the bar carries an
+    # 11-pixel logo at x=10..20 that is no glyph at all, and cell_text
+    # answered None for a bar that plainly said `BASIC File Run`. The text
+    # IS 8-pixel aligned here (measured: every ink run starts at 40, 104,
+    # 152, 488, 520, 544, 592 - all multiples of 8), so each cell can be
+    # matched on its own and anything unrecognised becomes a space.
+    # THE ROW IS DERIVED, NOT SEARCHED FOR. Scoring candidate rows by "most
+    # cells that matched a glyph" picks a DEGENERATE one: row 19 is the
+    # bar's rule, a solid dark line across the screen, so the window
+    # starting at row 12 makes every cell an UNDERSCORE and scores higher
+    # than the right row ever can. It answered
+    # `_ __ ___ __ ____...` for a bar reading `BASIC File Run Plot Zap`.
+    # The font cell's top is simply the first row carrying ink PAST THE
+    # LOGO, and the rule is excluded by not looking at row MBAR_H - 1.
+    y0 = None
+    for y in range(0, MBAR_H - 1):
+        if any(rows[y][x] for x in range(32, w)):
+            y0 = y
+            break
+    if y0 is None or y0 + 8 > len(rows):
+        return None
+    out = []
+    for sx in range(0, w - 7, 8):
+        g = bytes(sum(1 << (7 - c) for c in range(8) if rows[y0 + r][sx + c])
+                  for r in range(8))
+        ch = table.get(g)
+        out.append(ch if ch is not None else " ")
+    return " ".join("".join(out).split()) or None
 
 
 def settle(m, card=None):
@@ -1587,7 +1688,7 @@ def main():
             mo.menu(112, 8, 112, 30)
             os88qemu.pace(m, 2.0)
         t0 = time.time()
-        after = []
+        after, wantbar = [], []
         for line, _ in part:
             # `#after <key>` IS NOT TYPED: it is a keystroke for AFTER the
             # run begins, which is the only way to answer a statement that
@@ -1597,9 +1698,16 @@ def main():
             if line.startswith("#after "):
                 after.append(line.split(None, 1)[1])
                 continue
+            # `#bar <text>` IS NOT TYPED either: it is a substring the MENU
+            # BAR must show once this part has run, read off the glass by
+            # bar_text() rather than out of the console buffer
+            if line.startswith("#bar "):
+                wantbar.append(line.split(None, 1)[1])
+                continue
             typ(m, line + "\n")
         print("      part %d: %d lines in %.1fs"
-              % (pn + 1, len(part) - len(after), time.time() - t0))
+              % (pn + 1, len(part) - len(after) - len(wantbar),
+                 time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
         for k in after:
             os88qemu.pace(m, 2.0)               # ...let the dialog come up
@@ -1625,6 +1733,24 @@ def main():
             check(False, "the console buffer is found by its shape",
                   why="no run can be read without it")
             return 1
+        if wantbar:
+            # LET THE BAR BE DRAWN FIRST. menu_win_set only marks it -
+            # menu_relayout sets menu_bdirty and the redraw is owed, not
+            # done - so a shot taken the instant the program ends can
+            # legitimately show the OLD bar. This pace is the difference
+            # between "the set is wrong" and "the paint had not happened",
+            # which are not the same defect at all.
+            os88qemu.pace(m, 3.0)
+            bar = bar_text(m, m.tmp)
+            print("      bar: %r" % (bar,))
+            for t in wantbar:
+                check(bar is not None and t in bar,
+                      "the menu bar shows %r" % t,
+                      why="a program's own bar is CHROME: the console "
+                          "buffer cannot see it, and the first MENU m$() "
+                          "put up a bar with a null command handler while "
+                          "every value assertion passed",
+                      got=bar, want=t)
         answers += got
         for _, e in part:
             if e is None:

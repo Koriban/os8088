@@ -553,6 +553,39 @@ bas_repaint:
 ; a finished program at its OP_END.
 ; -----------------------------------------------------------------------------
 bas_onwake:
+    ; --- THE BAR'S REDRAW, AND IT MUST HAPPEN HERE ----------------------
+    ; OSAPI_MENU_SET only MARKS the bar: menu_win_set calls menu_relayout,
+    ; which sets [menu_bdirty], and the pixels are menu_draw_bar's - whose
+    ; callers are all window operations in wm.inc. Measured: after
+    ; MENU m$() the kernel's own state is entirely correct (menu_set is
+    ; ours, menu_seg is ours, menu_win is our window) and [menu_bdirty] is
+    ; STILL 1, three ON MENU wakes later. The bar kept its old pixels.
+    ;
+    ; OSAPI_WM_FRONT reaches wm_front_b, which draws the bar - but
+    ; `wm_front` TAKES THE GFX LOCK ITSELF (SPEC.md 16446), so OP_MENU
+    ; cannot call it: that runs inside AM_ONCMD, which already holds it.
+    ; THIS handler is the one callback that does NOT (SPEC.md 74.1), so
+    ; the redraw is owed here and paid before the lock is taken below.
+    ;
+    ; A program CANNOT wait for the next window event instead: the event
+    ; it is waiting for is a click on the menu it has just asked for, and
+    ; the user cannot click a menu that was never drawn.
+    cmp word [bas_mbar], 0
+    je .nobar
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov word [bas_mbar], 0
+    mov bx, [bas_wn]
+    call OSAPI_WM_FRONT
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.nobar:
     cmp word [bas_susp], 0
     je .nothing
     push ax
@@ -787,8 +820,9 @@ BAS_B_bas_mwi    equ BAS_B_bas_msel + 2
 BAS_B_bas_mwm    equ BAS_B_bas_mwi + 2
 BAS_B_bas_mwn    equ BAS_B_bas_mwm + 2
 BAS_B_bas_mwtop  equ BAS_B_bas_mwn + 2
+BAS_B_bas_mbar   equ BAS_B_bas_mwtop + 2
 ; --- ALERT's half of the seam (SPEC.md 150.37) ---------------------------
-BAS_B_bas_alpend equ BAS_B_bas_mwtop + 2
+BAS_B_bas_alpend equ BAS_B_bas_mbar + 2
 BAS_B_bas_alans  equ BAS_B_bas_alpend + 2
 BAS_B_bas_almsg  equ BAS_B_bas_alans + 2
 BAS_B_bas_fp     equ BAS_B_bas_almsg + OS88UI_AMAX + 2
@@ -1087,3 +1121,6 @@ bas_mwi         equ os88_image_end + BAS_B_bas_mwi    ; the walk's state: too
 bas_mwm         equ os88_image_end + BAS_B_bas_mwm    ; many values for the
 bas_mwn         equ os88_image_end + BAS_B_bas_mwn    ; registers, and this is
 bas_mwtop       equ os88_image_end + BAS_B_bas_mwtop  ; not a hot path
+bas_mbar        equ os88_image_end + BAS_B_bas_mbar   ; word: the BAR is owed
+                                    ; a redraw, and only bas_onwake can pay
+                                    ; it (SPEC.md 150.38)
