@@ -435,11 +435,24 @@ built-ins, an editor and a console. Therefore:
 | | holds | why there |
 | --- | --- | --- |
 | `BASIC.O88` resident | the window, menus, `os88text.inc` editor, `os88con.inc` console, lexer, the op interpreter, the string heap | the inner loop and the UI |
-| `BASIC.OVL` | the 64 built-ins, `PRINT USING`, the double formatter, the parser and compiler | called once per `RUN`, or rarely per op |
+| `BASIC.O88` part 0 | the parser and compiler | called once per `RUN` |
+
+**CUT, AND IT IS A PART AND NOT A FILE** (SPEC.md §150.39): the outside half
+is part 0 of `BASIC.O88` under the parts standard, not a `BASIC.OVL` beside
+it, and what moved is **the compiler alone**. The built-ins, `PRINT USING`
+and the double formatter stayed resident — a nasm map put the `bas_c_*`
+family and the parse helpers at 7,181 bytes against the whole interpreter's
+2,834, so moving the compiler by itself took the package from 79.0% of
+`APP_MAX_SIZE` to 67.5% and every further byte moved would cost a vector.
+Where wave 5's built-ins go is therefore an **open question** rather than
+settled by this table: they are called per op, which §150.6's frequency rule
+puts resident, and there are 64 of them.
 
 Precedent for the pattern: `CHART.OVL` (§81.62), `MACRO.OVL` (§81.94),
-`SCRIBE.OVL`. The known trap is recorded — an overlay dispatcher that clobbers
-an argument register, and a `%define` placed after the `%ifdef`s — so read
+`SCRIBE.OVL` — all three now parts too. Five traps are recorded, three from
+SHEET's split and two found cutting this one (a region move invalidating the
+module's vectors, and the parts standard's bss rebasing a chain that had a
+bare literal in it) — so read
 `docs/plans/completed/SCRIBE-OVL-PLAN.md` before cutting the seam.
 
 ## 5. The five types on this machine
@@ -582,7 +595,8 @@ their dotted names** plus **`BYTE`/`WORD`**, which want the type system
 §150.4 describes and nothing yet builds. The other 56 built-ins are wave
 5's, in the overlay.
 
-**Wave 4 — the event loop and tier A windows.** The wave that makes it GFA.
+**Wave 4 — the event loop and tier A windows. EXIT CRITERION MET**, with the
+window verbs below deferred behind wave 6. The wave that makes it GFA.
 `OPENW`/`CLOSEW`/`CLEARW`/`TITLEW`/`TOPW`/`FULLW`, `MENU` from a string array,
 `ALERT`, `FILESELECT` on the existing chooser, `MOUSE`/`MOUSEX`/`MOUSEY`/
 `MOUSEK`, and `ON MENU` with `ON MENU GOSUB`/`BUTTON`/`KEY`/`MESSAGE`. A BASIC
@@ -639,37 +653,74 @@ SPEC.md §150.38 carries both reasons. The bar first is also what the wave's
 own exit criterion wants: a GUI program with a menu bar that responds to
 clicks needs no second window.
 
-Still to come, in this order: **`MENU m$()` and `ON MENU GOSUB`** (§150.38,
-designed and not built — and note `MENU m$()` is a FOURTH statement the
-keyword table misses, documented inside node [299] rather than in one of its
-own), then `OPENW` and the window verbs with the drawing verbs — which is the one with no
-existing kernel facility behind it, `OS88_MENUSET` being an assembly-time
-macro with a five-menu cap where a BASIC program builds its bar at run time.
+**Slice 3 is IN, and with it the wave's exit criterion is MET** — `MENU
+m$()`, `ON MENU GOSUB` and `MENU(0)` (§150.38), so a BASIC program builds
+its own menu bar at run time and a pick resumes it in a handler. There was
+no kernel facility behind this: `OS88_MENUSET` is an assembly-time macro
+with a five-menu cap, where a program needs a bar composed while it runs.
+`MENU m$()` is also a FOURTH statement the keyword table misses, documented
+inside node [299] rather than in one of its own.
 
-**Wave 5 — the built-in library, in the overlay.** All 64 of the reference's,
-plus `PRINT USING`. Gap 2 (32-bit mul/div) lands here for `CLNG`/`MKL$`/`CVL`.
+One defect is worth carrying here because the positive test did not catch
+it: the first bar had null `AM_NAME`/`AM_ONCMD` and no File or Run menu, so
+the program's own titles appeared and were pickable and the part PASSED —
+what surfaced was the next part's `File > New` doing nothing. The bar is
+built by copying the static `bas_menus` and overwriting the program's rows,
+and a row asserting a bar must assert the chrome it did not put there.
 
-**AND THE SEAM COMES FIRST, with its contract in SPEC.md §150.39.** Wave 4
-closed at 79% of budget (51,356 of 65,024), so the 64 built-ins do not fit
-resident and the split is no longer wave 5's tail but its entry. Measured
-off a nasm map: the COMPILER and its parse helpers are **7,181 bytes**
-against `bas_exec`'s 2,834, so moving that half takes the image to about 68%
-— and the compiler is the right half because it runs once per `RUN` where a
-built-in can run once per op.
+**Still to come: `OPENW` and the window verbs, with the drawing verbs** —
+behind wave 6 for the two reasons §150.38 records, neither of them a
+backlog item.
+
+**Wave 5 — the built-in library.** All 64 of the reference's,
+plus `PRINT USING`. **Resident or in the part is an open question** and
+§150.39's arithmetic is how to answer it: a built-in runs per OP, which
+§150.6's rule puts resident, and 67.5% of budget is what there is to spend. Gap 2 (32-bit mul/div) lands here for `CLNG`/`MKL$`/`CVL`.
+
+**AND THE SEAM CAME FIRST, and it is CUT — SPEC.md §150.39.** Wave 4 closed
+at 79% of budget (51,358 of 65,024), so the 64 built-ins did not fit
+resident and the split became wave 5's entry rather than its tail. Measured
+off a nasm map: the COMPILER and its parse helpers were **7,181 bytes**
+against `bas_exec`'s 2,834, and the compiler is the right half because it
+runs once per `RUN` where a built-in can run once per op.
+
+Done: image 29,294 → 21,737, with bss **51,358 → 43,906 of 65,024, 79.0% →
+67.5%**, the compiler shipping as part 0 of `BASIC.O88` (9,346 bytes, 6,075
+packed). Seventy routines moved behind ten vectors — nine back into the
+resident half and one the other way — and the four soak rows are green at
+durations matching the resident build to within a percent.
 
 The difficulty is not the byte count: `bas_run` calls the compiler once, but
 the compiler calls back into the resident tables and arenas constantly, and
 every one of those is a vector. **So the first cut moves a subtree whose
-callbacks are countable, not the whole compiler**, and §150.39's three traps
-— the dispatcher's register, `%define` placement, and the shim-rewriting
-edit — are requirements rather than advice, each having cost a session in
-SHEET's split. The package must build BOTH ways from one source
-(`-DBAS_RESIDENT`), because wiring bugs and behaviour bugs are
-indistinguishable from outside otherwise.
+callbacks are countable, not the whole compiler** — in the event the closure
+took the whole compile-time half and still needed only ten vectors, which is
+what made it affordable. §150.39 now carries FIVE traps, all requirements
+rather than advice: three from SHEET's split (the dispatcher's register,
+`%define` placement, the shim-rewriting edit) and two found building this one
+— a region move invalidating the module's vectors, which the kernel cannot
+fix and which freezes the whole VM, and the parts standard's bss rebasing a
+chain that had a bare literal in it. The package builds BOTH ways from one
+source (`-DBAS_RESIDENT`), because wiring bugs and behaviour bugs are
+indistinguishable from outside otherwise — and the resident image stayed
+BYTE-IDENTICAL through every step of the cut, which is what made the overlay
+the only suspect when a row went red.
 
-**And it is not cut without a SOAK run**: SHEET's split passed `make` and
+**And it was not cut without a SOAK run**: SHEET's split passed `make` and
 the entire fast tier with a live dispatcher bug, then failed 23 of 26 soak
-rows with a symptom that read as a flaky emulator.
+rows with a symptom that read as a flaky emulator. `basiclang` through
+`basiclang4` are the rows that matter here — the only ones that compile a
+program — and they are green on the cut.
+
+**A red row there is not automatically the seam, which this cut also
+learned.** All four went red once at a quarter of their usual time, and a
+control package built from the BYTE-IDENTICAL resident binary failed beside
+them, which cannot be the diff; the box was at load average 17 under other
+work. These rows drive an emulated 8086 on wall-clock timing, so a starved
+guest drops keys and the harness reports whichever assertion came next —
+there, "the console buffer is not in memory as cells", which is also exactly
+what a REFUSED program looks like. **Check the duration against the last
+green run before reading the diff.**
 
 **Wave 6 — graphics, tier A.** `PLOT`, `DRAW`, `LINE`, `BOX`, `PBOX`, `RBOX`,
 `CIRCLE`, `PCIRCLE`, `ELLIPSE`, `POLYLINE`, `POLYFILL`, `FILL`, `TEXT`,

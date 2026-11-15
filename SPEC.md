@@ -252188,9 +252188,22 @@ no button maps to rather than a plausible wrong one.
 
 ### 150.38 The menu bar from a string array, and why `OPENW` waits
 
-**Status: DESIGNED AND NOT BUILT.** The contract first, as §150.36's was,
-because the dispatch below reaches into the interpreter and guessing it
-wrong is a rewrite.
+**Status: BUILT** - `MENU m$()`, `ON MENU GOSUB` and `MENU(0)` are
+`OP_MENU`, `OP_ONMGOSUB` and `OP_MSEL`, and row `basiclang4` drives them.
+The contract below was written before any of it, as §150.36's was, because
+the dispatch reaches into the interpreter and guessing it wrong is a
+rewrite. `OPENW` is still deferred for the two reasons that follow, which
+is a finding and not a backlog item.
+
+**ONE DEFECT IS WORTH RECORDING because the positive test did not catch
+it.** The first `MENU m$()` installed a bar whose `AM_NAME` and `AM_ONCMD`
+were null and which carried no File or Run menu: the program's own titles
+appeared and were pickable, so the part asserting them PASSED. What
+surfaced was the NEXT part's `File > New` doing nothing. A bar is built by
+copying the static `bas_menus` and overwriting the program's rows, never by
+filling an empty one - and a row that asserts the bar must assert the
+chrome it did not put there, not only the titles it did
+(`tests/basiclang.py`'s `bar_find`).
 
 **`OPENW` IS DEFERRED BEHIND WAVE 6, and that is a finding rather than a
 delay.** Two reasons, both measured:
