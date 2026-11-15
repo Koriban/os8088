@@ -145,6 +145,11 @@ MACEND = re.compile(r"^%endmacro\b", re.I)
 # target, so an invocation is control flow and not an address being taken.
 MACJMP = re.compile(r"^(?:jmp|j[a-z]{1,3})\s+(?:strict\s+)?(?:short\s+|near\s+)?%1\s*$", re.I)
 MACCALL = re.compile(r"^call\s+%1\s*$", re.I)
+# A macro whose WHOLE body is a bare `jmp %1` is an unconditional tail jump
+# (bascomp.inc's `SHOUTR`, doswabi.inc's `HJMP`).  MACJMP above also matches
+# `je %1`, and the conditional wrappers pair that with a guard line, so the
+# body SHAPE is what separates the two: one instruction, or more than one.
+MACJMPU = re.compile(r"^jmp\s+(?:strict\s+)?(?:short\s+|near\s+)?%1\s*$", re.I)
 # `jmp short $+2` and friends: a jump to the very next instruction, used all
 # over this tree to let an I/O port settle.  It is not a tail call.
 SETTLE = re.compile(r"^\$\s*\+\s*2$")
@@ -411,13 +416,17 @@ class Corpus(object):
                     continue
                 if text and MACEND.match(text):
                     if nargs >= 1:
-                        for t in body:
-                            if MACCALL.match(t):
-                                self.macro[cur] = "call"
-                                break
-                            if MACJMP.match(t):
-                                self.macro[cur] = "jmp"
-                                break
+                        if len(body) == 1 and MACJMPU.match(body[0]):
+                            # nothing but the jump: the path LEAVES here
+                            self.macro[cur] = "jmpu"
+                        else:
+                            for t in body:
+                                if MACCALL.match(t):
+                                    self.macro[cur] = "call"
+                                    break
+                                if MACJMP.match(t):
+                                    self.macro[cur] = "jmp"
+                                    break
                     cur = None
                     continue
                 if text:
@@ -723,6 +732,21 @@ def walk(corp, name):
                 if d != 0 and not tgt.startswith((".", "$", "[")):
                     findings.append((u.path, i, name, raw.strip(),
                                      "tail jmp to %s at depth %+d" % (tgt, d),
+                                     ex))
+                continue
+            push(where[0], where[1], d, (u, i), ex)
+            continue
+
+        if kind == "jmpu":
+            # `SHOUTR bas_err` is a bare `jmp bas_err`: an UNCONDITIONAL
+            # transfer, so the path continues at the target and NOT past the
+            # invocation.  The conditional wrappers below - wvm.inc's `RAE` is
+            # `jb %%o / jmp %1 / %%o:` - are the ones with a fallthrough.
+            where = corp.resolve(u, i, mtgt)
+            if where is None:
+                if d != 0 and not mtgt.startswith((".", "$", "[")):
+                    findings.append((u.path, i, name, raw.strip(),
+                                     "tail jmp to %s at depth %+d" % (mtgt, d),
                                      ex))
                 continue
             push(where[0], where[1], d, (u, i), ex)

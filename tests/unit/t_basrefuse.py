@@ -54,6 +54,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 FILES = ("apps/basic/baslang.inc", "apps/basic/bascomp.inc",
          "apps/basic/basic.asm")
 
+# SPEC.md 150.39's two call macros ARE the call and the jmp, so the rule has
+# to read both spellings. In the resident build `SHOUT x` expands to `call x`
+# and `SHOUTR x` to `jmp x`; in the overlay build both go through the vector
+# table. The RESIDENT spelling is the one the rule is about - that is the
+# build with a real `jmp` into a helper that returns - and the hazard is the
+# same whichever way the site is written. A pattern that knows only the old
+# spelling holds nothing once the sites are converted, which is what the
+# first guard below reported when 133 of them were.
+JMP = r"(?:jmp|SHOUTR)"
+CALL = r"(?:call|SHOUT)"
+
 
 def main():
     text = ""
@@ -69,7 +80,7 @@ def main():
         if m:
             cur = m.group(1)
             continue
-        if cur and re.match(r"^\s+jmp\s+bas_err\b", ln):
+        if cur and re.match(r"^\s+" + JMP + r"\s+bas_err\b", ln):
             refusers.add(cur)
     check(len(refusers) >= 2,
           "the refusers that end in `jmp bas_err` are found at all",
@@ -84,8 +95,8 @@ def main():
         "bas_c_stmt": "the label probe re-enters it as a TAIL call so a line "
                       "of eight labels is not eight frames",
     }
-    called = set(re.findall(r"^\s+call\s+(\w+)", text, re.M))
-    jumped = set(re.findall(r"^\s+jmp\s+(\w+)", text, re.M))
+    called = set(re.findall(r"^\s+" + CALL + r"\s+(\w+)", text, re.M))
+    jumped = set(re.findall(r"^\s+" + JMP + r"\s+(\w+)", text, re.M))
     both = sorted(((refusers & called) & jumped) - set(TAIL_OK))
     check(not both,
           "no UNJUDGED refusal helper is both called and jumped to",
