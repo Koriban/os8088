@@ -1139,6 +1139,49 @@ PART45 = [
     ("#bar Zap",                         None),
 ]
 
+# --- ON MENU GOSUB and MENU(0): WAVE 4'S EXIT (SPEC.md 150.38) ----------
+# A GUI PROGRAM WITH A MENU BAR THAT RESPONDS TO CLICKS, which is the wave's
+# stated exit criterion, in one part: the program builds a bar, registers a
+# handler, and loops on ON MENU; the ROW picks `Plot`'s first item off the
+# glass; the handler stores MENU(0) and the loop ends on it.
+#
+# `1` IS THE WHOLE ASSERTION and it is not an arbitrary number: m$(1) is
+# " Draw ", the first entry of the first menu, and node [300] numbers
+# MENU(0) by the ARRAY index - titles, accessory slots and "" included. So
+# 1 says the pick arrived, the frame carried the handler, OP_RET came back
+# to the ON MENU, and the index was the array's and not the item's.
+PART48 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("DIM m$(6)",                        None),
+    ('m$(0) = "Plot"',                   None),
+    ('m$(1) = " Draw "',                 None),
+    ('m$(2) = ""',                       None),
+    ('m$(3) = "Zap"',                    None),
+    ('m$(4) = " Kill "',                 None),
+    ('m$(5) = ""',                       None),
+    ("MENU m$()",                        None),
+    ("ON MENU GOSUB hit",                None),
+    ("k = 0",                            None),
+    ("DO",                               None),
+    ("  ON MENU",                        None),
+    ("LOOP UNTIL k > 0",                 None),
+    ("PRINT k",                          "1"),
+    ("END",                              None),
+    ("PROCEDURE hit",                    None),
+    ("  k = MENU(0)",                    None),
+    ("RETURN",                           None),
+    ("#pick Plot",                       None),
+]
+
+PART49 = [
+    ("CLS",                              None),
+    ("x = 1",                            None),
+    ("PRINT MENU(1)",
+     "Error at line 3: MENU() takes 0 here - the rest is the AES message "
+     "buffer"),
+]
+
 PART46 = [
     ("CLS",                              None),
     ("n = 1",                            None),
@@ -1212,10 +1255,24 @@ PART44 = [
 # THE TWO REFUSALS, one part each. `ON MENU GOSUB` is refused until MENU
 # exists to fire from, and any other ON is refused by name rather than read
 # as a variable called ON.
+# ON MENU GOSUB NAMES A PROCEDURE, and a missing one is caught by the
+# ORDINARY forward-reference check - bas_calfix resolves it exactly as it
+# resolves a call's, which is what lets a handler be written BELOW the loop
+# that registers it. This part used to assert the statement was refused
+# outright ("handlers come with MENU"); MENU exists now, so the honest
+# assertion is the one that survives: the handler has to be real.
 PART39 = [
     ("CLS",                              None),
     ("x = 1",                            None),
     ("ON MENU GOSUB handler",
+     "Error at line 3: that names a procedure the program does not have"),
+]
+
+# ...and ON MENU still takes GOSUB or nothing: `ON MENU 5` is neither.
+PART39B = [
+    ("CLS",                              None),
+    ("x = 1",                            None),
+    ("ON MENU 5",
      "Error at line 3: ON MENU takes nothing yet - handlers come with MENU"),
 ]
 
@@ -1239,8 +1296,8 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37)
-WAVE4 = (PART38, PART39, PART40, PART41, PART42, PART43, PART44,
-         PART45, PART46, PART47)
+WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
+         PART45, PART46, PART47, PART48, PART49)
 PARTS = EARLY + LATE + W3TAIL + WAVE4
 
 if "--early" in sys.argv:
@@ -1412,8 +1469,8 @@ class Mouse:
 MBAR_H = 20             # kernel.asm's: the white field is rows 0..18
 
 
-def bar_text(m, tmp):
-    """The MENU BAR's text, read off the GLASS through the kernel's own
+def bar_scan(m, tmp):
+    """(cells, xs) for the MENU BAR, read off the GLASS through the kernel's
     glyphs - or None if nothing in the strip reads as a run of them.
 
     **THIS ROW HAD NO WAY TO SEE THE BAR AND IT COST A DEFECT.** Everything
@@ -1474,13 +1531,37 @@ def bar_text(m, tmp):
             break
     if y0 is None or y0 + 8 > len(rows):
         return None
-    out = []
+    out, xs = [], []
     for sx in range(0, w - 7, 8):
         g = bytes(sum(1 << (7 - c) for c in range(8) if rows[y0 + r][sx + c])
                   for r in range(8))
         ch = table.get(g)
         out.append(ch if ch is not None else " ")
-    return " ".join("".join(out).split()) or None
+        xs.append(sx)
+    return "".join(out), xs
+
+
+def bar_text(m, tmp):
+    """...and its text with the runs squashed, for an `in` test."""
+    r = bar_scan(m, tmp)
+    if r is None:
+        return None
+    return " ".join(r[0].split()) or None
+
+
+def bar_find(m, tmp, word):
+    """The SCREEN x of `word`'s first cell on the bar, or None.
+
+    A MENU IS PICKED WHERE IT IS DRAWN, not where a constant says. The bar's
+    cells move the moment a program adds menus to it, and this repository's
+    own lesson is that a remembered pulldown offset drifts - so the title's
+    x is read off the glass each time rather than written down."""
+    r = bar_scan(m, tmp)
+    if r is None:
+        return None
+    cells, xs = r
+    i = "".join(cells).find(word)
+    return xs[i] if i >= 0 else None
 
 
 def settle(m, card=None):
@@ -1688,7 +1769,7 @@ def main():
             mo.menu(112, 8, 112, 30)
             os88qemu.pace(m, 2.0)
         t0 = time.time()
-        after, wantbar = [], []
+        after, wantbar, pick = [], [], []
         for line, _ in part:
             # `#after <key>` IS NOT TYPED: it is a keystroke for AFTER the
             # run begins, which is the only way to answer a statement that
@@ -1704,14 +1785,36 @@ def main():
             if line.startswith("#bar "):
                 wantbar.append(line.split(None, 1)[1])
                 continue
+            # `#pick <title>` IS NOT TYPED: it is a menu pick made once the
+            # program is running, which is the only way to answer an
+            # ON MENU GOSUB handler
+            if line.startswith("#pick "):
+                pick.append(line.split(None, 1)[1])
+                continue
             typ(m, line + "\n")
         print("      part %d: %d lines in %.1fs"
-              % (pn + 1, len(part) - len(after) - len(wantbar),
+              % (pn + 1,
+                 len(part) - len(after) - len(wantbar) - len(pick),
                  time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
         for k in after:
             os88qemu.pace(m, 2.0)               # ...let the dialog come up
             os88qemu.sendkey(m.path, k)
+        for t in pick:
+            # THE BAR IS READ BEFORE IT IS CLICKED. The program has to have
+            # installed its menus and the kernel to have drawn them, and
+            # the title's x is wherever that left it - 30 is the first
+            # item's y, which is what File > New above already uses.
+            os88qemu.pace(m, 3.0)
+            bx_ = bar_find(m, m.tmp, t)
+            print("      pick %r at x=%s" % (t, bx_))
+            if bx_ is None:
+                check(False, "the bar shows %r to pick" % t,
+                      why="a pick cannot be aimed at a menu that is not "
+                          "drawn, and the x is read off the glass")
+                continue
+            mo.menu(bx_ + 4, 8, bx_ + 4, 30)
+            os88qemu.pace(m, 2.0)
         # **WAIT FOR THE LAST ANSWER, NOT FOR A CLOCK.** A fixed pace was
         # six seconds, which every part until SPEC.md 150.28's fitted inside
         # - and a loop that reassigns a string 200 times does not. The row

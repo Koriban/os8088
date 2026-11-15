@@ -154,7 +154,11 @@ OP_ALERT    equ 55                  ; + an index byte: RE-ENTRANT. First pass
                                     ; stores it (SPEC.md 150.37)
 OP_MENU     equ 56                  ; + an index byte: build the bar from that
                                     ; string array and install it (150.38)
-OP_N        equ 57                  ; how many there are, table included
+OP_ONMGOSUB equ 57                  ; + a WORD: the handler a pick resumes in,
+                                    ; patched like a call's (SPEC.md 150.38)
+OP_MSEL     equ 58                  ; push MENU(0) - which element of m$() was
+                                    ; picked (node [300])
+OP_N        equ 59                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -2035,13 +2039,72 @@ bas_c_stmt:
     mov si, bas_kw_menu
     call bas_wordis
     jne .onbad
-    call bas_skipsp                 ; ...and NOTHING after it, yet
+    call bas_skipsp                 ; ...bare, or GOSUB and a handler
     mov si, [bas_src]
     mov al, [si]
     or al, al
     jz .onemit
     cmp al, 10
     je .onemit
+    call bas_word
+    jc .onbadarg
+    mov si, bas_kw_gosub
+    call bas_wordis
+    jne .onbadarg
+    call bas_skipsp
+    call bas_word                   ; DI/CX = the handler's name
+    jc .onbadarg
+    mov byte [bas_calfn], 0         ; a PROCEDURE, as a bare call is
+    mov al, OP_ONMGOSUB
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_prcfind
+    jc .ongfwd
+    push bx
+    call bas_prcat
+    cmp word [si + BAS_PRC_NP], 0   ; ...and it takes NOTHING: a pick hands
+    jne .ongpopbad                  ; over no values
+    mov ax, [si + BAS_PRC_OPS]
+    pop bx
+    jmp bas_emitw
+.ongpopbad:
+    pop bx
+    mov si, bas_e_onghand
+    jmp bas_err
+.ongfwd:
+    ; THE SAME FORWARD RECORD A CALL MAKES, so bas_calfix resolves it and a
+    ; handler written BELOW the ON MENU GOSUB works - which is the ordinary
+    ; shape, the loop coming first and the handler after it
+    mov bx, [bas_opn]
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, bx
+    mov bx, [bas_ncal]
+    cmp bx, BAS_CAL_MAX
+    jae .ongfull
+    call bas_calat
+    mov [si + BAS_CAL_SLOT], ax
+    mov [si + BAS_CAL_SRC], di
+    mov [si + BAS_CAL_LEN], cx
+    mov word [si + BAS_CAL_NARG], 0
+    mov word [si + BAS_CAL_FN], 0
+    mov ax, [bas_line]
+    mov [si + BAS_CAL_LINE], ax
+    xor bx, bx                      ; ...and the argument slots cleared, so
+.ongsl:                             ; a previous program's cannot be read
+    mov word [si + BAS_CAL_SL + bx], 0
+    add bx, 2
+    cmp bx, BAS_PRC_PMAX*2
+    jb .ongsl
+    inc word [bas_ncal]
+    ret
+.ongfull:
+    mov si, bas_e_calmax
+    jmp bas_err
+.onbadarg:
     mov si, bas_e_onmarg
     jmp bas_err
 .onemit:
@@ -2796,6 +2859,9 @@ bas_c_fact:
     mov si, bas_kw_ubound
     call bas_wordis
     je .b_ubound
+    mov si, bas_kw_menu             ; MENU(0) - node [300]'s answer for which
+    call bas_wordis                 ; entry was picked (SPEC.md 150.38)
+    je .b_msel
     ; **AN ARRAY ELEMENT, AND THE NAME DECIDES** (SPEC.md 150.31): a(3) is
     ; an element where a has been DIMmed and a procedure call where it has
     ; not, which is what lets arrays cost no run-time type word.
@@ -2804,6 +2870,20 @@ bas_c_fact:
     call bas_isstrarr               ; ...and a `$` array is not a number
     jnc .elemstr
     jmp .elem
+.b_msel:
+    call bas_bopen
+    jc .x
+    call bas_c_const                ; ...and it must be 0: MENU(-2)..MENU(15)
+    jc .x                           ; is the AES message buffer, which this
+    or ax, ax                       ; machine has none of
+    jnz .b_mselbad
+    call bas_bclose
+    jc .x
+    mov al, OP_MSEL
+    jmp bas_emit
+.b_mselbad:
+    mov si, bas_e_mselarg
+    jmp bas_err
 .elemstr:
     mov si, bas_e_strtype
     jmp bas_err
@@ -4595,6 +4675,32 @@ bas_menpick:
     mov ax, [bas_midx + di]
     mov [bas_msel], ax              ; MENU(0): WHICH ELEMENT of m$() it was,
                                     ; which is what node [300] answers with
+    ; --- and into the handler, which costs NO new machinery -------------
+    ; The program is suspended at an ON MENU with its cursor saved. A frame
+    ; whose RETURN is that cursor, and a cursor set to the handler, is
+    ; exactly what OP_CALL builds for a GOSUB (150.23) - so OP_RET carries
+    ; the handler back to the ON MENU with nothing added to the
+    ; interpreter. The wake is what resumes it, keeping ONE resume path.
+    cmp word [bas_mhand], 0
+    je .mpout
+    cmp word [bas_susp], 0
+    je .mpout                       ; nothing waiting: a pick with no
+    push si                         ; program running is not an error
+    mov bx, [bas_nfrm]
+    cmp bx, BAS_FRM_MAX
+    jae .mppop
+    call bas_frmat                  ; SI = the frame
+    mov ax, [bas_nsav]
+    mov [si + BAS_FRM_SAVE], ax
+    mov ax, [bas_scur]
+    mov [si + BAS_FRM_RET], ax      ; ...the ON MENU's own continuation
+    inc word [bas_nfrm]
+    mov ax, [bas_mhand]
+    mov [bas_scur], ax
+    mov bx, [bas_wn]
+    call OSAPI_WM_WAKE
+.mppop:
+    pop si
 .mpout:
     pop di
     pop dx
@@ -6910,6 +7016,25 @@ bas_exec:
     times BAS_ARR_LO0 - 4 db 0
     times 4 - BAS_ARR_LO0 db 0
 
+; --- OP_ONMGOSUB / OP_MSEL (SPEC.md 150.38) -----------------------------
+.onmgosub:
+    push ax
+    mov ax, [si]                    ; the handler, bas_ops-RELATIVE as a
+    mov [bas_mhand], ax             ; call's operand is (150.23)
+    pop ax
+    add si, 2
+    jmp .next
+.msel:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push ax
+    mov ax, [bas_msel]
+    call fp_i2a
+    call fp_pack_a
+    pop ax
+    add di, BAS_SLOT
+    jmp .next
+
 ; --- OP_MENU (SPEC.md 150.38) -------------------------------------------
 ; + an index byte. Walks m$() in the Compendium's layout (node [299]),
 ; COPIES every title and item into bas_mtext, builds the pointer tables and
@@ -7332,6 +7457,8 @@ bas_optab:
     dw bas_exec.onmenu              ; OP_ONMENU
     dw bas_exec.alert               ; OP_ALERT
     dw bas_exec.menu                ; OP_MENU
+    dw bas_exec.onmgosub            ; OP_ONMGOSUB
+    dw bas_exec.msel                ; OP_MSEL
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -7877,6 +8004,8 @@ bas_e_menarr:   db 'MENU wants a DIMmed string array, as MENU m$()', 0
 bas_e_menmany:  db 'MENU fits three menus beside File and Run', 0
 bas_e_menitem:  db 'that MENU has more items than one menu holds', 0
 bas_e_mentext:  db 'those MENU titles do not fit the bar text arena', 0
+bas_e_onghand:  db 'ON MENU GOSUB wants a PROCEDURE that takes nothing', 0
+bas_e_mselarg:  db 'MENU() takes 0 here - the rest is the AES message buffer', 0
 ; REFUSED WITH A REASON, not as an unknown word (SPEC.md 150.7): ERASE is the
 ; reference's and leaving it out is a decision, so the message says so and
 ; names the word a program reaching for it probably wanted. SHORT BECAUSE THE
