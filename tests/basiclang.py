@@ -1515,6 +1515,30 @@ PART57 = [
     ("PRINT r(400)",                     "3"),        # 6
 ]
 
+# --- TWO CELLS THAT SHARE A ROW -----------------------------------------
+# THE PART WAVE 2's GRID TEST COULD NOT BE. That part stores grid(2,2),
+# grid(1,3) and grid(3,1) and reads all three back, which passes whatever the
+# second subscript does: no two of those cells share a FIRST subscript, so
+# they land at different indices even if `j` is dropped entirely - and a
+# store and a load that share one wrong index agree with each other.
+#
+# These three cells differ ONLY in j. If the row-major arithmetic loses the
+# second subscript they are one cell, the last store wins, and all three
+# reads answer 33.
+PART65 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM h(1 TO 2, 1 TO 3)",            None),       # 3
+    ("h(1, 1) = 11",                     None),       # 4
+    ("h(1, 2) = 22",                     None),       # 5
+    ("h(1, 3) = 33",                     None),       # 6
+    ("PRINT h(1, 1)",                    "11"),       # 7
+    ("PRINT h(1, 2)",                    "22"),       # 8
+    ("PRINT h(1, 3)",                    "33"),       # 9
+    # ...and the other row is untouched by any of it
+    ("PRINT h(2, 1)",                    "0"),        # 10
+]
+
 # THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
 # is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1529,7 +1553,8 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37,
           PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
-          PART58, PART59, PART60, PART61, PART62, PART63, PART64)
+          PART58, PART59, PART60, PART61, PART62, PART63, PART64,
+          PART65)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 PARTS = EARLY + LATE + W3TAIL + WAVE4

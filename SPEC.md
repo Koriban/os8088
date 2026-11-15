@@ -251765,6 +251765,25 @@ language, and then write loops that say what they mean."* `LBOUND` and
 because an array already laid out cannot change where its index starts and a
 program with two different bases is a program nobody can read.
 
+**THE SECOND SUBSCRIPT WAS DROPPED FOR FOUR WAVES, and what hid it is worth
+more than the fix.** `bas_aelem` held the second subscript in `DX` while it
+fetched and checked the first, then did `mul word [N1]` and `add ax, dx` — and
+`DX` survives NEITHER step: `bas_asub` does not preserve it (`fp_a2i` is under
+it), and `mul` writes the product's high word there, which is 0 for any array
+that fits a 4,096-byte arena. So `grid(i, j)` indexed `i*N1` for every `j`, and
+every cell of one row was ONE CELL. The fix is the register: `CX`, which
+`bas_asub` banks and `mul` does not touch.
+
+**The test could not see it because a store and a load that share one wrong
+index agree with each other.** Wave 2's grid part stores `grid(2,2)`,
+`grid(1,3)` and `grid(3,1)` and reads all three back — and no two of those
+cells share a FIRST subscript, so they land at different indices even with
+`j` discarded, and the readback confirms whatever the writer did. The part
+that catches it writes three cells differing ONLY in `j` and reads them
+back: unfixed, all three answer the last value stored. **Verified in that
+order** — the part was run against the shipped build and failed, 11 and 22
+both coming back as 33, before a line of the fix was written.
+
 **A subscript out of range is REFUSED BY NAME**, with the bound and the
 index in the message. The array knows how big it is; this is the one place
 where a wrong answer would be indistinguishable from a right one, and an

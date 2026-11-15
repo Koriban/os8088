@@ -908,11 +908,20 @@ bas_aelem:
     jc .aebad
     pop si
     push si
-    mov dx, ax
-    sub dx, [si + BAS_ARR_LO1]
+    sub ax, [si + BAS_ARR_LO1]
     js .aerange
-    cmp dx, [si + BAS_ARR_N1]
+    cmp ax, [si + BAS_ARR_N1]
     jae .aerange
+    ; THE SECOND SUBSCRIPT GOES IN CX AND NOT DX, which is the whole of a
+    ; defect that shipped: it was held in DX, and DX survives NEITHER of the
+    ; two things that happen to it next. `bas_asub` does not preserve it
+    ; (fp_a2i is under it), and `mul word [N1]` writes the product's HIGH
+    ; word there - so `add ax, dx` added that high word, which is 0 for any
+    ; array that fits the arena. The second subscript was therefore DROPPED
+    ; and every cell of one row was one cell. CX survives both: bas_asub
+    ; banks it, and `mul` does not touch it. It is free here because the
+    ; dimension count it carried has already been branched on.
+    mov cx, ax
     call bas_asub                   ; ...then the first
     jc .aebad
     pop si
@@ -922,7 +931,7 @@ bas_aelem:
     cmp ax, [si + BAS_ARR_N0]
     jae .aerange
     mul word [si + BAS_ARR_N1]      ; row-major: i*n1 + j
-    add ax, dx
+    add ax, cx
 .aeat:
     shl ax, 1                       ; eight bytes an element
     shl ax, 1
