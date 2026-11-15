@@ -1539,25 +1539,121 @@ PART65 = [
     ("PRINT h(2, 1)",                    "0"),        # 10
 ]
 
-# THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
-# is too slow to iterate against and too slow to sit in one soak slot while
+# --- A THIRD DIMENSION (SPEC.md 150.42, node [71]) ----------------------
+# EACH COORDINATE IS VARIED ON ITS OWN, which is the lesson PART65 cost: a
+# set of cells that all differ in more than one subscript cannot say which
+# subscript matters, and a store and a load sharing one wrong index agree
+# with each other. So three of these cells differ from the origin in exactly
+# one coordinate, one differs in all three, and one nothing wrote is checked
+# for 0.
+PART66 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM c(1, 2, 3)",                   None),       # 3  2 x 3 x 4 = 24
+    ("c(0, 0, 0) = 1",                   None),       # 4
+    ("c(0, 0, 1) = 2",                   None),       # 5  k alone
+    ("c(0, 1, 0) = 3",                   None),       # 6  j alone
+    ("c(1, 0, 0) = 4",                   None),       # 7  i alone
+    ("c(1, 2, 3) = 9",                   None),       # 8  the far corner
+    ("PRINT c(0, 0, 0)",                 "1"),        # 9
+    ("PRINT c(0, 0, 1)",                 "2"),        # 10
+    ("PRINT c(0, 1, 0)",                 "3"),        # 11
+    ("PRINT c(1, 0, 0)",                 "4"),        # 12
+    ("PRINT c(1, 2, 3)",                 "9"),        # 13
+    ("PRINT c(0, 2, 1)",                 "0"),        # 14 nothing wrote it
+]
+
+# THE ELEMENT COUNT TRAVELS, which is what the four private counts becoming
+# bas_arrcount was for: ARRAYFILL walks the whole array, so if the count
+# missed the third dimension it would fill a PREFIX and the last element
+# would still be 0. `lo TO hi` on the third dimension too, and an
+# expression for its bound.
+PART67 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("n = 1",                            None),       # 3
+    ("DIM f(1, 1, n)",                   None),       # 4  2 x 2 x 2 = 8
+    ("ARRAYFILL f(), 7",                 None),       # 5
+    ("PRINT f(0, 0, 0)",                 "7"),        # 6  the first...
+    ("PRINT f(1, 1, 1)",                 "7"),        # 7  ...and the LAST
+    ("DIM g(1 TO 2, 1 TO 2, 1 TO 2)",    None),       # 8
+    ("g(2, 2, 2) = 5",                   None),       # 9
+    ("PRINT g(2, 2, 2)",                 "5"),        # 10
+    ("PRINT LBOUND(g)",                  "1"),        # 11
+]
+
+# THE THIRD DIMENSION IS BOUND-CHECKED LIKE THE OTHERS, and a subscript
+# count that does not match the DIM is refused - both run-time, both by name.
+PART68 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM p(1, 1, 1)",                   None),       # 3
+    ("PRINT p(0, 0, 2)",                              # 4  k is out of range
+     "Error at line 4: that subscript is outside the array"),
+]
+
+# FOUR SIZES IS REFUSED AT COMPILE TIME - node [71] allows seven and this
+# record holds three, so the message says what it holds.
+PART69 = [
+    ("CLS",                              None),       # 1
+    ("DIM q(1, 1, 1, 1)",                             # 2
+     "Error at line 2: DIM takes one, two or three sizes here"),
+]
+
+# ...and so is the wrong NUMBER of subscripts, which is the same message a
+# two-dimensional array gives for one subscript.
+PART70 = [
+    ("CLS",                              None),       # 1
+    ("DIM r(1, 1, 1)",                   None),       # 2
+    ("PRINT r(0, 0)",                                 # 3
+     "Error at line 3: that array was DIMmed with a different number "
+     "of sizes"),
+]
+
+# SWAP CARRIES THE WHOLE SHAPE, which the record widening could have broken
+# quietly: its loop runs from the bounds to the record's END, so the third
+# dimension's bound and count travel with the rest. a() is 2x2x2 and b() is
+# 3x3x3, so after the swap b() has a()'s elements AND a()'s extents - and
+# ARRAYFILL on b() proves the COUNT came too.
+PART71 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM a(1, 1, 1)",                   None),       # 3  8 elements
+    ("DIM b(2, 2, 2)",                   None),       # 4  27 elements
+    ("a(1, 1, 1) = 5",                   None),       # 5
+    ("SWAP a(), b()",                    None),       # 6
+    ("PRINT b(1, 1, 1)",                 "5"),        # 7  b sees a's cells
+    ("PRINT UBOUND(b)",                  "1"),        # 8  ...and a's bounds
+    ("PRINT UBOUND(a)",                  "2"),        # 9  ...both ways
+    ("ARRAYFILL b(), 6",                 None),       # 10
+    ("PRINT b(1, 1, 1)",                 "6"),        # 11 its LAST element
+    ("PRINT b(0, 0, 0)",                 "6"),        # 12 ...and its first
+]
+
+# FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
+# too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
 # through SELECT, `--late` is GOTO, labels and procedures, `--w3tail` is
-# wave 3's tail - 150.33 to 150.35 - and `--wave4` is the event loop,
-# 150.36; no flag runs the lot, which is what a developer typing the file's
-# name means.
+# wave 3's tail (150.33 to 150.35), `--wave4` is the event loop (150.36) and
+# `--arrays` is the run-time arena, ERASE, re-DIM and the third dimension
+# (150.40 to 150.42); no flag runs the lot, which is what a developer typing
+# the file's name means.
+#
+# `--arrays` IS A SPLIT OF `--w3tail` AND NOT A NEW IDEA: that group went from
+# 9 parts to 30 while 150.40 to 150.42 were built, 236 seconds to 744, which
+# is the same reasoning that made these groups in the first place.
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
-          PART36, PART37,
-          PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
+          PART36, PART37)
+ARRAYS = (PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
           PART58, PART59, PART60, PART61, PART62, PART63, PART64,
-          PART65)
+          PART65, PART66, PART67, PART68, PART69, PART70, PART71)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
-PARTS = EARLY + LATE + W3TAIL + WAVE4
+PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS
 
 if "--early" in sys.argv:
     PARTS = EARLY
@@ -1567,6 +1663,8 @@ elif "--w3tail" in sys.argv:
     PARTS = W3TAIL
 elif "--wave4" in sys.argv:
     PARTS = WAVE4
+elif "--arrays" in sys.argv:
+    PARTS = ARRAYS
 
 FAILED = []
 

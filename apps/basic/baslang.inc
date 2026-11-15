@@ -202,17 +202,31 @@ BAS_STR_MAX equ 4096
 ; --- arrays (SPEC.md 150.31) ----------------------------------------------
 ; A name, its two dimensions' lower bound and count, how many dimensions it
 ; has, and where its elements start in bas_arena. TWO is the limit here; a
-; third is 150.31's "not here, and in this order when it is".
+; third arrived in SPEC.md 150.42 and cost the record its padding, which is
+; what 150.31 said it would.
 BAS_ARR_MAX   equ 8
+BAS_ARR_DIMMAX equ 3               ; node [71] allows SEVEN; three is what
+                                   ; this record holds, and both loops that
+                                   ; read dimensions are loops so the next
+                                   ; one is this constant and a pair of
+                                   ; fields (SPEC.md 150.42)
 BAS_ARR_SRC   equ 0
 BAS_ARR_LEN   equ 2
 BAS_ARR_LO0   equ 4
 BAS_ARR_N0    equ 6
 BAS_ARR_LO1   equ 8
 BAS_ARR_N1    equ 10
-BAS_ARR_DIM   equ 12               ; word: 1 or 2
-BAS_ARR_AT    equ 14               ; word: its first element, arena-relative
-BAS_ARR_SZ    equ 16               ; a POWER OF TWO, so the indexer shifts
+BAS_ARR_LO2   equ 12               ; the THIRD dimension (SPEC.md 150.42,
+BAS_ARR_N2    equ 14               ; node [71]), 1 when it is not used so
+                                   ; that every count is a plain product
+BAS_ARR_DIM   equ 16               ; word: 1, 2 or 3
+BAS_ARR_AT    equ 18               ; word: its first element, arena-relative
+BAS_ARR_SZ    equ 32               ; A POWER OF TWO, SO THE INDEXER SHIFTS -
+                                   ; and that is why the third dimension cost
+                                   ; 16 bytes a row and not 4: twenty rounds
+                                   ; up to thirty-two. The shift in bas_arrat
+                                   ; IS this number and the `times` pair
+                                   ; there is what keeps the two in step
 
 BAS_ARR_BYTES equ 4096             ; 512 elements across the whole program
 
@@ -481,12 +495,18 @@ bas_arrat:
     shl ax, 1
     shl ax, 1
     shl ax, 1
+    shl ax, 1                       ; FIVE now: the record is 32 bytes
     add ax, bas_arrs
     mov si, ax
     pop ax
     ret
-    times BAS_ARR_SZ - 16 db 0
-    times 16 - BAS_ARR_SZ db 0
+    ; THE SHIFT ABOVE IS THE RECORD'S SIZE, and these two lines are what
+    ; stop that being something to remember: widen the record without
+    ; adding a shift and every row but the first overlaps the one below it,
+    ; which reads as elements of the wrong array rather than as an indexer
+    ; fault. Read the LINE NUMBER, not the sign.
+    times BAS_ARR_SZ - 32 db 0
+    times 32 - BAS_ARR_SZ db 0
 
 bas_melem:
     push ax
@@ -496,16 +516,9 @@ bas_melem:
     push bx
     call bas_arrat                  ; SI = the array's entry
     pop bx
-    mov ax, [bas_mwi]
-    mov cx, [si + BAS_ARR_N0]
-    cmp word [si + BAS_ARR_DIM], 2
-    jne .me1
-    mov dx, cx
-    mov ax, [si + BAS_ARR_N1]
-    mul dx
-    mov cx, ax                      ; a two-dimensional m$() is walked flat
-    mov ax, [bas_mwi]
-.me1:
+    call bas_arrcount               ; however many m$() holds, flat (node
+    mov cx, ax                      ; [299] walks it as one run whatever
+    mov ax, [bas_mwi]               ; its shape)
     cmp ax, cx
     jae .memiss
     mov dx, [si + BAS_ARR_AT]
@@ -891,6 +904,8 @@ bas_aelem:
     pop bx
     push si                         ; the entry, through the pops below
     mov cx, [si + BAS_ARR_DIM]
+    cmp cx, 3
+    je .ae3
     cmp cx, 2
     je .ae2
     ; --- one dimension ------------------------------------------------
@@ -932,6 +947,43 @@ bas_aelem:
     jae .aerange
     mul word [si + BAS_ARR_N1]      ; row-major: i*n1 + j
     add ax, cx
+    jmp short .aeat
+    ; --- three dimensions (SPEC.md 150.42, node [71]) -----------------
+    ; Row-major again: (i*n1 + j)*n2 + k. The subscripts were pushed in
+    ; source order, so the LAST pops first - and each one is held in a
+    ; register `mul` does not write and bas_asub banks, which is the whole
+    ; lesson of the two-dimensional defect above: BX for k, CX for j.
+.ae3:
+    call bas_asub                   ; the THIRD subscript is on top
+    jc .aebad
+    pop si
+    push si
+    sub ax, [si + BAS_ARR_LO2]
+    js .aerange
+    cmp ax, [si + BAS_ARR_N2]
+    jae .aerange
+    mov bx, ax                      ; BX = k; the array index it held has
+    call bas_asub                   ; done its work in bas_arrat already
+    jc .aebad
+    pop si
+    push si
+    sub ax, [si + BAS_ARR_LO1]
+    js .aerange
+    cmp ax, [si + BAS_ARR_N1]
+    jae .aerange
+    mov cx, ax                      ; CX = j
+    call bas_asub                   ; ...and the first, at the bottom
+    jc .aebad
+    pop si
+    push si
+    sub ax, [si + BAS_ARR_LO0]
+    js .aerange
+    cmp ax, [si + BAS_ARR_N0]
+    jae .aerange
+    mul word [si + BAS_ARR_N1]      ; i*n1
+    add ax, cx                      ; ...+ j
+    mul word [si + BAS_ARR_N2]      ; (i*n1 + j)*n2
+    add ax, bx                      ; ...+ k
 .aeat:
     shl ax, 1                       ; eight bytes an element
     shl ax, 1
@@ -1001,9 +1053,8 @@ bas_aerase:
     call bas_arrat                  ; SI = the entry
     cmp word [si + BAS_ARR_N0], 0
     je .none
-    mov ax, [si + BAS_ARR_N0]
-    mul word [si + BAS_ARR_N1]      ; elements (DX:AX, and DX is 0: the
-    mov cx, 3                       ; allocation that made this fitted)
+    call bas_arrcount               ; elements - AX only, because the
+    mov cx, 3                       ; allocation that made this one fitted
 .sh:
     shl ax, 1                       ; ...eight bytes each
     dec cx
@@ -1280,6 +1331,17 @@ bas_isstrarr:
     jmp .iaout
 
 ; --- bas_arrcount - AX = how many elements array BX has ------------------
+; THE ONE PLACE THAT KNOWS, and that is the point of it rather than reuse.
+; Four sites each did this arithmetic privately - here, bas_aerase,
+; ARRAYFILL and bas_melem's flat walk of m$() - so the THIRD dimension
+; (SPEC.md 150.42) would have had to be remembered in four places, and the
+; one that was missed would return a prefix of the array and say nothing.
+; Now the three others call this.
+;
+; NO DIMENSION TEST: an unused dimension's count is 1, written by OP_DIM and
+; by the compiler, so the product is the answer whether the array has one
+; dimension or three. Every caller used to test BAS_ARR_DIM before
+; multiplying and none of them needed to.
 bas_arrcount:
     push bx
     push dx
@@ -1287,6 +1349,7 @@ bas_arrcount:
     call bas_arrat
     mov ax, [si + BAS_ARR_N0]
     mul word [si + BAS_ARR_N1]
+    mul word [si + BAS_ARR_N2]
     pop si
     pop dx
     pop bx
@@ -2651,11 +2714,7 @@ bas_exec:
     xor bh, bh
     push si
     call bas_arrat                  ; SI = the entry
-    mov ax, [si + BAS_ARR_N0]       ; the element count is 150.31's own
-    cmp word [si + BAS_ARR_DIM], 2  ; arithmetic, as bas_aelem's is
-    jne .afin
-    mul word [si + BAS_ARR_N1]
-.afin:
+    call bas_arrcount               ; AX = how many, whatever its shape
     mov cx, ax
     mov ax, [si + BAS_ARR_AT]
     add ax, bas_arena
@@ -2799,18 +2858,28 @@ bas_exec:
     mov cx, [si + BAS_ARR_DIM]
     cmp word [si + BAS_ARR_N0], 0
     jne .dimtwice                   ; ...this DIM has already run
-    cmp cx, 2
-    jne .dim1
-    ; --- the SECOND dimension is on top, so it pops first ---------------
-    mov cl, 1
+    ; THE DIMENSIONS POP IN REVERSE, the last pushed being on top, and an
+    ; unused one is written as 1 TO 1 so that every count is a plain
+    ; product and no reader needs to test BAS_ARR_DIM (SPEC.md 150.42).
+    mov word [si + BAS_ARR_LO1], 0
+    mov word [si + BAS_ARR_N1], 1
+    mov word [si + BAS_ARR_LO2], 0
+    mov word [si + BAS_ARR_N2], 1
+    cmp cx, 3
+    jne .dimnot3
+    mov cl, 2
     call bas_adimb                  ; AX = low, DX = count
+    jc .dimout
+    mov [si + BAS_ARR_LO2], ax
+    mov [si + BAS_ARR_N2], dx
+.dimnot3:
+    cmp cx, 2
+    jb .dimboth
+    mov cl, 1
+    call bas_adimb
     jc .dimout
     mov [si + BAS_ARR_LO1], ax
     mov [si + BAS_ARR_N1], dx
-    jmp short .dimboth
-.dim1:
-    mov word [si + BAS_ARR_LO1], 0
-    mov word [si + BAS_ARR_N1], 1   ; ...so the indexer needs no special case
 .dimboth:
     xor cl, cl
     call bas_adimb
@@ -2820,8 +2889,16 @@ bas_exec:
     ; N0 IS WRITTEN LAST, after the arena has agreed, because it is the
     ; allocated flag: a refusal must leave the array unallocated, not
     ; half-allocated with a count and no room.
+    ; THE PRODUCT IS COMPUTED HERE AND NOT BY bas_arrcount, which every
+    ; other reader uses: this is the allocator, so it is the one place that
+    ; has to DETECT the overflow rather than deliver the answer. Node [71]'s
+    ; rule B - "the product of the field elements must be smaller than
+    ; 65535" - is these two `or dx, dx` tests.
     mov ax, dx
     mul word [si + BAS_ARR_N1]      ; DX:AX, and DX must be 0
+    or dx, dx
+    jnz .dimfull
+    mul word [si + BAS_ARR_N2]      ; ...and again for the third
     or dx, dx
     jnz .dimfull
     mov cx, 3                       ; eight bytes an element
@@ -3709,7 +3786,7 @@ bas_e_arrname:  db 'DIM wants a name and a size in brackets', 0
 bas_e_arrdim:   db 'that array was DIMmed with a different number of sizes', 0
 bas_e_arrrange: db 'that subscript is outside the array', 0
 bas_e_arrto:    db 'a size runs low TO high', 0
-bas_e_arrdims:  db 'DIM takes one or two sizes here', 0
+bas_e_arrdims:  db 'DIM takes one, two or three sizes here', 0
 bas_e_arrnodim: db 'that array has not been DIMmed yet on this run', 0
 bas_e_arrnotdim: db 'ERASE wants an array this program DIMs somewhere', 0
 bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0

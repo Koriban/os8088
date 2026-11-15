@@ -252655,6 +252655,65 @@ is pending hangs GFA, and this language has no reference to a variable's
 address to leave pending. **The warnings are kept here because they are the
 reference's, and answered rather than copied.**
 
+### 150.42 A third dimension, and the shift it cost
+
+```basic
+DIM cube(2, 3, 4)              ' 3 x 4 x 5 = 60 elements, base 0
+DIM board(1 TO 8, 1 TO 8, 1 TO 2)
+PRINT cube(1, 2, 3)            ' row-major: (i*n1 + j)*n2 + k
+```
+
+**Status: CONTRACT WRITTEN.** §150.31 listed a third dimension first among
+"not here, and in this order when it is", and named its price: *"this
+record's size is a power of two for the indexer's sake, so the third costs it
+the shift."* That turned out to be exactly the bill.
+
+**NODE [71] ALLOWS SEVEN**, with three rules: *"A) The dimensions must all be
+smaller than 65535. B) The product of the field elements must be smaller than
+65535. C) The limit on the number of dimensions is 7."* Three is what this
+record holds. Rule A is free — a bound is a 16-bit word. Rule B is the
+allocator's, and rule C is `BAS_ARR_DIMMAX`.
+
+**THE RECORD WENT FROM 16 BYTES TO 32, and 96 of the 128 new bytes are
+padding.** `bas_arrat` indexes the descriptor table with a SHIFT, so the
+record's size must be a power of two: two more bound/count pairs make twenty
+bytes, and twenty rounds up to thirty-two. The alternative — keeping 16 and
+putting the bounds in a side table — buys 96 bytes of bss for a second
+lookup in the hottest arithmetic in the language, which is the wrong trade at
+8 arrays.
+
+**THE SHIFT IS THE SIZE, and the `times` pair at `bas_arrat` is what keeps
+them in step.** Widen the record without adding a shift and every row but the
+first overlaps the one below it — which reads as elements of the *wrong
+array*, not as an indexer fault, and is a defect whose symptom names the
+wrong code.
+
+**AN UNUSED DIMENSION HAS A COUNT OF 1, which is what made this safe to
+add.** Four sites each computed an element count privately — the array
+walker, `ERASE`, `ARRAYFILL` and `MENU`'s flat walk of `m$()` — and three of
+them tested `BAS_ARR_DIM` before multiplying. A third dimension would have
+had to be remembered in four places, and the one that was missed would
+quietly return a PREFIX of the array. So they now all call `bas_arrcount`,
+which multiplies all three counts and tests nothing: with an unused count of
+1 the product is the answer whatever the array's shape. None of those three
+callers needed the dimension test it was doing.
+
+**THE ALLOCATOR KEEPS ITS OWN MULTIPLY, and that is not an exception to the
+above.** `OP_DIM` must DETECT node [71]'s rule B rather than deliver an
+answer, so it multiplies with an `or dx, dx` after each step; `bas_arrcount`
+returns `AX` and throws the high word away, which is right for every reader
+and wrong for the one writer.
+
+**BOTH LOOPS ARE LOOPS NOW**, where each was a hand-written pair: the `DIM`
+compiler walks the comma list using the descriptor's own dimension count as
+its counter, and the subscript parser counts as it goes. So a fourth
+dimension is `BAS_ARR_DIMMAX`, one field pair, and one more case in
+`bas_aelem` — which is the shape §150.31 asked for and did not have.
+
+**What is NOT here:** dimensions four to seven, for the same reason as
+before — each costs a field pair and, at five, another doubling of the
+record.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

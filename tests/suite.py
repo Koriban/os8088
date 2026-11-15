@@ -22022,7 +22022,7 @@ SOAK = [
         "procedure's body is written below the call that runs it, so a line "
         "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 660.0,
+    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 240.0,
         "SPEC.md 150.33 to 150.35: CLR, ARRAYFILL, SWAP, LSET and RSET. EVERY NUMBER IT "
         "ASSERTS IS THE REFERENCE'S OWN - the plan's differential oracle "
         "cannot answer here, `basicnw` being the QuickBASIC line and having "
@@ -22074,6 +22074,34 @@ SOAK = [
         "count of zero, which the bound check already there refuses by name, "
         "while LBOUND and UBOUND need a check of their own because they read "
         "that count as an ANSWER and would report UBOUND as LBOUND-1.",
+        needs=("qemu",), wants=("build/basic.img",)),
+    Row("basiclang5", "soak", py("tests/basiclang.py", "--arrays"), 540.0,
+        "SPEC.md 150.40 to 150.42: the array arena at RUN time, ERASE, the "
+        "second DIM it exists for, and a third dimension. A SPLIT OF "
+        "basiclang3 and not a new row of tests - that group went from 9 "
+        "parts to 30 while these were built, 236 seconds to 744, which is "
+        "the reasoning that made the groups in the first place. "
+        "THREE OF THESE PARTS CANNOT BE READ OFF ANY ONE OF THEM. The "
+        "arena's per-RUN reset is parts 56 and 57 together: 56 fills 400 of "
+        "the 512 elements and is refused the next 400, and 57 is a separate "
+        "program through File > New asking for 400 again, so without the "
+        "reset it would be refused for room the previous run still holds. "
+        "ERASE's release is the same shape - 58 erases and re-allocates the "
+        "same 400 - and part 62 is the case a bump arena cannot pop: the "
+        "hole is in the MIDDLE, u() erased while v() sits above it, so v() "
+        "has to move and keep its contents, after which two are erased at "
+        "once and 500 of 512 elements are claimed. "
+        "AND PART 65 IS WHY THE THIRD DIMENSION COULD BE TRUSTED. It writes "
+        "three cells of a 2-D array differing ONLY in the second subscript "
+        "and reads them back, which wave 2's grid part could not do: that "
+        "part's three cells each had a different FIRST subscript, so they "
+        "landed at different indices even though the second was being "
+        "DISCARDED, and a store and a load sharing one wrong index agree "
+        "with each other. Run against the shipped build it failed, 11 and "
+        "22 both answering 33. Part 66 varies each of three coordinates on "
+        "its own for the same reason, 67 proves the element count reaches "
+        "the LAST element of a 3-D array through ARRAYFILL, and 71 proves "
+        "SWAP carries the third dimension's extents as well as its cells.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "

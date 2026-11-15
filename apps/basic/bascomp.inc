@@ -1403,27 +1403,36 @@ bas_c_stmt:
 .dimrow:
     mov [bas_adimx], bx             ; ...whichever row it is
     mov word [si + BAS_ARR_N0], 0   ; not allocated yet (150.40)
-    mov word [si + BAS_ARR_DIM], 1
-    mov word [si + BAS_ARR_LO1], 0
-    mov word [si + BAS_ARR_N1], 1   ; ...so the indexer needs no special case
-    mov word [bas_adimf], 0         ; both dimensions plain until proved
+    mov word [si + BAS_ARR_DIM], 1  ; ...and the count IS the loop's counter
+    mov word [bas_adimf], 0         ; every dimension plain until proved
     call bas_bopen
     jc .x
-    call bas_dimone
+    call bas_dimone                 ; the first, which every DIM has
     jc .x
     or [bas_adimf], ax              ; bit 0: dimension 0 was `lo TO hi`
+.dimmore:
     call bas_skipsp
     mov si, [bas_src]
     cmp byte [si], ','
     jne .dimclose
     inc word [bas_src]
-    call bas_dimone
-    jc .x
-    shl ax, 1
-    or [bas_adimf], ax              ; ...and bit 1 for the second
     mov bx, [bas_adimx]
     SHOUT bas_arrat
-    mov word [si + BAS_ARR_DIM], 2
+    mov ax, [si + BAS_ARR_DIM]
+    cmp ax, BAS_ARR_DIMMAX
+    jae .dimdims                    ; node [71] allows seven; see the equ
+    inc word [si + BAS_ARR_DIM]
+    call bas_dimone
+    jc .x
+    push ax                         ; the form answer, over the re-fetch
+    mov bx, [bas_adimx]
+    SHOUT bas_arrat
+    mov cx, [si + BAS_ARR_DIM]
+    dec cx                          ; CL = which dimension that just was
+    pop ax
+    shl ax, cl
+    or [bas_adimf], ax              ; ...its form bit, in its own place
+    jmp short .dimmore
 .dimclose:
     call bas_bclose
     jc .x
@@ -1446,6 +1455,9 @@ bas_c_stmt:
     ret
 .dimredim:
     mov si, bas_e_arrdim
+    SHOUTR bas_err
+.dimdims:
+    mov si, bas_e_arrdims
     SHOUTR bas_err
 .dimnoname:
     mov si, bas_e_arrname
@@ -4279,7 +4291,8 @@ bas_c_subs:
     mov word [bas_asubs], 0
     call bas_bopen
     jc .suout
-    call bas_c_rel                  ; the first subscript
+.sunext:
+    call bas_c_rel                  ; one subscript...
     cmp byte [bas_bad], 0
     jne .subad
     call bas_wantnum
@@ -4290,13 +4303,10 @@ bas_c_subs:
     cmp byte [si], ','
     jne .sudone
     inc word [bas_src]
-    call bas_c_rel
-    cmp byte [bas_bad], 0
-    jne .subad
-    call bas_wantnum
-    jc .suout
-    inc word [bas_asubs]
-.sudone:
+    cmp word [bas_asubs], BAS_ARR_DIMMAX
+    jae .sumis                      ; more than any array here can have, and
+    jmp short .sunext               ; .sumis is the message for a count that
+.sudone:                            ; does not match a DIM, which this is
     call bas_bclose
     jc .suout
     mov bx, [bas_acur]              ; ...and the count must match the DIM
