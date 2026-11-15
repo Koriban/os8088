@@ -1630,6 +1630,50 @@ PART71 = [
     ("PRINT b(0, 0, 0)",                 "6"),        # 12 ...and its first
 ]
 
+# --- DIM?() (SPEC.md 150.43, node [71]) ---------------------------------
+# EVERY NUMBER HERE IS THE MANUAL'S OWN. Node [71]'s worked example prints
+# 11 for `DIM x(10)` and 12 for `DIM y%(2,3)`, and its memo gives the base
+# interaction outright: base 0 -> 3*4 = 12, base 1 -> 2*3 = 6. The 6 is the
+# one that matters - a reader who sees no OPTION BASE term in the arithmetic
+# and adds one gets 12 there.
+PART72 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("DIM x(10)",                        None),        # 3
+    ("PRINT DIM?(x())",                  "11"),       # 4  node [71]'s own
+    ("DIM y(2, 3)",                      None),       # 5
+    ("PRINT DIM?(y())",                  "12"),       # 6  ...and its other
+    ("DIM z(1, 1, 1)",                   None),       # 7
+    ("PRINT DIM?(z())",                  "8"),        # 8  three dimensions
+    # ...and it is an expression, not a statement
+    ("t = DIM?(x()) * 2",                None),       # 9
+    ("PRINT t",                          "22"),       # 10
+]
+
+# THE BASE-1 CASE, WHICH IS THE MANUAL'S MEMO VERBATIM: the same DIM y(2,3)
+# that answers 12 at base 0 answers SIX at base 1, because a count is the
+# inclusive extent its bound produced and the base never enters.
+PART73 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("OPTION BASE 1",                    None),       # 3
+    ("DIM y(2, 3)",                      None),       # 4
+    ("PRINT DIM?(y())",                  "6"),        # 5
+]
+
+# ...and on an array whose DIM has not run it refuses by the same name
+# LBOUND and UBOUND give (150.40), rather than answering 0.
+PART74 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("z = 0",                            None),       # 3
+    ("IF z > 0 THEN",                    None),       # 4
+    ("DIM q(3)",                         None),       # 5
+    ("ENDIF",                            None),       # 6
+    ("PRINT DIM?(q())",                               # 7
+     "Error at line 7: that array has not been DIMmed yet on this run"),
+]
+
 # FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1650,7 +1694,8 @@ W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37)
 ARRAYS = (PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
           PART58, PART59, PART60, PART61, PART62, PART63, PART64,
-          PART65, PART66, PART67, PART68, PART69, PART70, PART71)
+          PART65, PART66, PART67, PART68, PART69, PART70, PART71,
+          PART72, PART73, PART74)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS

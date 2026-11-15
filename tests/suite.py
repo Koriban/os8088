@@ -22075,9 +22075,9 @@ SOAK = [
         "while LBOUND and UBOUND need a check of their own because they read "
         "that count as an ANSWER and would report UBOUND as LBOUND-1.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang5", "soak", py("tests/basiclang.py", "--arrays"), 540.0,
-        "SPEC.md 150.40 to 150.42: the array arena at RUN time, ERASE, the "
-        "second DIM it exists for, and a third dimension. A SPLIT OF "
+    Row("basiclang5", "soak", py("tests/basiclang.py", "--arrays"), 600.0,
+        "SPEC.md 150.40 to 150.43: the array arena at RUN time, ERASE, the "
+        "second DIM it exists for, a third dimension and DIM?(). A SPLIT OF "
         "basiclang3 and not a new row of tests - that group went from 9 "
         "parts to 30 while these were built, 236 seconds to 744, which is "
         "the reasoning that made the groups in the first place. "
@@ -22101,7 +22101,14 @@ SOAK = [
         "22 both answering 33. Part 66 varies each of three coordinates on "
         "its own for the same reason, 67 proves the element count reaches "
         "the LAST element of a 3-D array through ARRAYFILL, and 71 proves "
-        "SWAP carries the third dimension's extents as well as its cells.",
+        "SWAP carries the third dimension's extents as well as its cells. "
+        "DIM?() closes it, and every number it asserts is node [71]'s own: "
+        "11 for DIM x(10) and 12 for DIM y(2,3) from the worked example, and "
+        "SIX for that same DIM y(2,3) under OPTION BASE 1 from the memo. The "
+        "6 is the one that earns its place - a count here is already the "
+        "inclusive extent its bound produced, so the product is right with "
+        "no base term, and a reader who adds one to 'fix' it gets 12 where "
+        "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "

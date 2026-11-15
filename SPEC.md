@@ -251755,11 +251755,27 @@ PRINT LBOUND(rows), UBOUND(rows)
 **Status: numeric arrays shipped; string arrays are the second half** and
 carry §150.32's consequence with them.
 
-**From the reference, as §150.29 was.** `DIM rows(8)` gives nine slots
-because the index runs from 0 — and the reference's own advice about that is
-worth keeping where an implementer will read it: *"Find out once, per
-language, and then write loops that say what they mean."* `LBOUND` and
-`UBOUND` exist so a program never has to remember.
+**`DIM rows(8)` GIVES NINE SLOTS** because the index runs from 0, and
+`basicnw`'s `data.md` has the advice worth keeping where an implementer will
+read it: *"Find out once, per language, and then write loops that say what
+they mean."*
+
+**THAT QUOTE IS `basicnw`'S AND NOT THE COMPENDIUM'S, and so are `LBOUND`
+and `UBOUND`** — which this paragraph said was "from the reference" until
+somebody searched. `LBOUND` and `UBOUND` appear in NONE of the Compendium's
+pages: they are the QuickBASIC line's, like `REDIM`, `SELECT CASE` and
+`STATIC` before them, and this is the fourth time that borrowing has been
+caught in this chapter. **They are kept**, because the Compendium does not
+define them differently — it simply has no bound query, a GFA program being
+expected to know its own `DIM`s — so keeping them adopts no foreign
+semantics, which is what §150.9's rule actually forbids. What the Compendium
+*does* have for asking about an array's shape is `DIM?()` (node [71]), and
+that is in §150.43.
+
+And the rule this paragraph broke is the one stated three paragraphs below
+it: **never write "the reference" here. Write the Compendium, or write
+`basicnw`.** A true sentence under the wrong label is this chapter's most
+repeated defect, and the section that documents it was committing it.
 
 **`OPTION BASE` must come before any `DIM`** and is refused after one,
 because an array already laid out cannot change where its index starts and a
@@ -252713,6 +252729,55 @@ dimension is `BAS_ARR_DIMMAX`, one field pair, and one more case in
 **What is NOT here:** dimensions four to seven, for the same reason as
 before — each costs a field pair and, at five, another doubling of the
 record.
+
+### 150.43 `DIM?()`: the Compendium's own way to ask an array's size
+
+```basic
+DIM x(10)
+PRINT DIM?(x())                ' 11 - node [71]'s own worked example
+DIM y(2, 3)
+PRINT DIM?(y())                ' 12 at base 0, and SIX at base 1
+```
+
+**Status: CONTRACT WRITTEN.** Node [71]: *"The function DIM?() determines the
+total number of elements in an array."* It is the only array-shape query the
+Compendium has — §150.31 records that `LBOUND` and `UBOUND` are `basicnw`'s
+and appear nowhere in it — so this closes a real gap rather than adding a
+convenience.
+
+**ITS ANSWER IS `bas_arrcount`, EXACTLY**, with no adjustment for `OPTION
+BASE` and none for the number of dimensions, and node [71] is specific enough
+to check that against. Its example prints 11 for `DIM x(10)` and 12 for
+`DIM y%(2,3)`, and its memo spells out the base interaction:
+
+> How DIM?() works based on OPTION BASE:
+> OPTION BASE 0 / DIM y%(2,3): -> 0-2,0-3 -> 3*4=12
+> OPTION BASE 1 / DIM y%(2,3): -> 1-2,1-3 -> 2*3=6
+
+A count here is already the inclusive extent each bound produced, so base 0
+gives counts of 3 and 4 and base 1 gives 2 and 3 — the product is the answer
+either way, and the base never enters this statement. **That is worth stating
+because it would be natural to "fix" it**: a reader who sees no base term in
+the arithmetic and adds one gets 12 where the Compendium says 6.
+
+**THE SPELLING IS THE COMPENDIUM'S, INCLUDING THE INNER BRACKETS.**
+`DIM?(x())` — the array is named as `x()`, the way `ARRAYFILL x(), 5` and
+`ERASE x()` name theirs, and NOT as `LBOUND(x)` does. Those two are the
+import's spelling as well as its idea, and are left alone rather than being
+made to agree: one of them matches a reference and the other matches the
+dialect it came from, which is more honest than a house style that matches
+neither.
+
+**`?` IS PART OF THE NAME**, which is a lexer fact and not a parser one: the
+word reader stops at `?` because no identifier may hold one, so the function
+is recognised as `DIM` followed by `?`. That also keeps `DIM` the statement
+and `DIM?` the function distinguishable at the point of use with no
+lookahead — a statement line begins with `DIM` and a space or a name, never
+with `DIM?`.
+
+**An array whose `DIM` has not executed is refused by name** (§150.40's
+state), the same answer `LBOUND` and `UBOUND` give, because the count it
+would report is 0 and that is a number a real array cannot have.
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 

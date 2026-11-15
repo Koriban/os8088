@@ -1433,8 +1433,9 @@ shifted up by four* rather than as a wrong value. Reading the body against
 
 `DIM rows(8)` is nine slots because the index runs from 0; `DIM rows(1 TO 5)`
 says what it means; `OPTION BASE 1` moves the default and is refused after
-any `DIM`; two dimensions, row-major; `LBOUND`/`UBOUND`. From the
-reference's `data.md`, including the advice worth repeating where an
+any `DIM`; two dimensions, row-major; `LBOUND`/`UBOUND`. From
+**`basicnw`'s** `data.md` — not the Compendium's, which has neither that
+advice nor those two functions — including the line worth repeating where an
 implementer reads it: *"Find out once, per language, and then write loops
 that say what they mean."*
 

@@ -608,12 +608,29 @@ cannot see), and one costs no code at all: an element touched before its
 refuses by name. What this unlocks next is `ERASE` itself, which becomes
 little more than clearing that count.
 
-Still open, in this order: **a third dimension** (the reference
-allows seven, product under 65535, and this record's size is a power of two
-for the indexer's sake — so the third costs it the shift), **`DIM?()`** for
-the element count, and **`TYPE` records with their dotted names** plus
+**A third dimension and `DIM?()` are IN** — SPEC.md §150.42 and §150.43,
+both from node [71], row `basiclang5`. The third dimension cost what §150.31
+said it would: the descriptor is indexed by a SHIFT, so two more bound/count
+pairs took the record from 16 bytes to 32 and 96 of those 128 new bytes are
+padding. It also paid for itself in a way that was not planned — four sites
+each computed an element count privately, so a third dimension had to be
+remembered in four places or one of them would silently return a PREFIX of
+the array; they all call `bas_arrcount` now, and an unused dimension's count
+of 1 means none of them needs to know how many dimensions there are.
+
+`DIM?()` is the **Compendium's only array-shape query**, which is worth
+saying plainly: `LBOUND` and `UBOUND` appear in NONE of its pages. They are
+the QuickBASIC line's, like `REDIM`, `SELECT CASE` and `STATIC` before them
+— the fourth time that borrowing has been caught here — and §150.31 had
+them, and `basicnw`'s `data.md` quote beside them, labelled "from the
+reference". They are kept, because the Compendium does not define them
+differently; it has no bound query at all.
+
+Still open, in this order: **`TYPE` records with their dotted names** plus
 **`BYTE`/`WORD`**, which want the type system §150.4 describes and nothing
-yet builds. The other 56 built-ins are wave 5's.
+yet builds, and **dimensions four to seven** (node [71] allows seven; each
+costs a field pair and, at five, another doubling of the record). The other
+56 built-ins are wave 5's.
 
 **Wave 4 — the event loop and tier A windows. EXIT CRITERION MET**, with the
 window verbs below deferred behind wave 6. The wave that makes it GFA.

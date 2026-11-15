@@ -171,7 +171,11 @@ OP_ERASE    equ 60                  ; + an index byte: release that array's
                                     ; DIM may re-dimension it. One op per
                                     ; name, so node [94]'s list form costs
                                     ; the stream nothing but its names
-OP_N        equ 61                  ; how many there are, table included
+OP_ADIMQ    equ 61                  ; + an index byte: push DIM?(a()), the
+                                    ; element count (SPEC.md 150.43, node
+                                    ; [71]) - which is bas_arrcount's answer
+                                    ; with no adjustment of any kind
+OP_N        equ 62                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -2497,6 +2501,40 @@ bas_exec:
     pop bx
     jmp .done
 
+; --- OP_ADIMQ - DIM?(a()) (SPEC.md 150.43, node [71]) -------------------
+; + an index byte. The element count, which is bas_arrcount's answer with
+; NOTHING done to it: node [71]'s memo gives 12 for `DIM y%(2,3)` at base 0
+; and 6 at base 1, and a count here is already the inclusive extent its
+; bound produced, so the product is right either way and OPTION BASE never
+; enters. Adding a base term "to fix it" gives 12 where the manual says 6.
+.adimq:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push ax
+    push bx
+    mov bl, [si]
+    inc si
+    xor bh, bh
+    push si
+    call bas_arrat
+    cmp word [si + BAS_ARR_N0], 0
+    je .adimqnone                   ; its DIM has not run (150.40)
+    call bas_arrcount               ; AX = how many
+    call fp_i2a
+    call fp_pack_a
+    pop si
+    pop bx
+    pop ax
+    add di, BAS_SLOT
+    jmp .next
+.adimqnone:
+    mov si, bas_e_arrnodim
+    call bas_err
+    pop si
+    pop bx
+    pop ax
+    jmp .done
+
 .sprint:
     cmp di, bas_stk + BAS_SLOT
     jb .under
@@ -3376,6 +3414,7 @@ bas_optab:
     dw bas_exec.msel                ; OP_MSEL
     dw bas_exec.dim                 ; OP_DIM
     dw bas_exec.erase               ; OP_ERASE
+    dw bas_exec.adimq               ; OP_ADIMQ
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3679,6 +3718,7 @@ bas_kw_mid:     db 'MID$', 0
 bas_kw_dim:     db 'DIM', 0
 bas_kw_option:  db 'OPTION', 0
 bas_kw_base:    db 'BASE', 0
+bas_kw_dimq:    db 'DIM', 0       ; ...and a '?' after it (150.43)
 bas_kw_lbound:  db 'LBOUND', 0
 bas_kw_ubound:  db 'UBOUND', 0
 bas_kw_clr:     db 'CLR', 0

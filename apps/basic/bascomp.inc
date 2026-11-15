@@ -2634,6 +2634,9 @@ bas_c_fact:
     mov si, bas_kw_val
     call bas_wordis
     je .b_val
+    mov si, bas_kw_dimq             ; DIM?(a()) - node [71]'s own, and the
+    call bas_wordis                 ; only array-shape query the Compendium
+    je .b_dimq                      ; has (SPEC.md 150.43)
     mov si, bas_kw_lbound
     call bas_wordis
     je .b_lbound
@@ -2700,6 +2703,44 @@ bas_c_fact:
     ret
 
 ; --- LBOUND(a) and UBOUND(a), and the dimension is optional -------------
+; --- DIM?(a()) (SPEC.md 150.43) ----------------------------------------
+; `?` IS PART OF THE NAME and the word reader stops at it, no identifier
+; being allowed to hold one - so this arrives as `DIM` and the `?` is tested
+; here. Without the `?` it is not this function: a bare `DIM` in an
+; expression is nothing, and `DIM` the STATEMENT never reaches here.
+;
+; The inner brackets are the Compendium's spelling, as ARRAYFILL's and
+; ERASE's are, and deliberately not LBOUND's - 150.43 says why.
+.b_dimq:
+    mov si, [bas_src]
+    cmp byte [si], '?'
+    jne .notarray                   ; a name beginning DIM, not this
+    inc word [bas_src]
+    call bas_bopen
+    jc .x
+    call bas_skipsp
+    call bas_word
+    jc .b_dqnotarr
+    call bas_arrfind
+    jc .b_dqnotarr
+    push bx
+    call bas_bopen                  ; ...the array's OWN empty brackets
+    jc .b_dqpop
+    call bas_bclose
+    jc .b_dqpop
+    call bas_bclose                 ; ...and DIM?'s
+    pop bx
+    jc .x
+    mov al, OP_ADIMQ
+    call bas_emit
+    mov ax, bx
+    jmp bas_emit                    ; which array
+.b_dqpop:
+    pop bx
+    ret
+.b_dqnotarr:
+    mov si, bas_e_arrnotdim
+    SHOUTR bas_err
 .b_lbound:
     xor dx, dx
     jmp short .b_bound
