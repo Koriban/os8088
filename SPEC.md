@@ -250520,7 +250520,7 @@ sixty-four built-in functions, an editor and a console, so it splits:
 | | |
 | --- | --- |
 | `BASIC.O88`, resident | the window and its menus, the editor, the console, the lexer, the op interpreter, the string heap |
-| `BASIC.OVL` | the built-in library, `PRINT USING`, the double formatter, the parser and the compiler |
+| its part 0, `.modc` | the parser and the compiler |
 
 The split follows the frequency: what the inner loop touches stays, what a
 `RUN` touches once goes out. `CHART.OVL` and `MACRO.OVL` under §81 are the
@@ -250528,12 +250528,19 @@ precedent, and their two traps — a dispatcher that clobbers an argument
 register, and a `%define` placed after the `%ifdef`s that read it — are
 properties of the pattern rather than of those modules.
 
-**Nothing is split yet, and the table above is the plan.** There is no
-`BASIC.OVL`: the package measures 11,528 of image and 7,755 of bss, 19,283 of
-`APP_MAX_SIZE`'s 65,024, so the wall is not in sight and a seam built before
-it is needed is a dispatcher and two traps bought for nothing. What this
-section fixes is WHERE the cut goes when it is wanted, so that the resident
-half is not accidentally filled with what belongs outside it.
+**THE CUT IS MADE, AND IT IS A PART AND NOT A FILE** — §150.39 is the
+contract and the measurements. Two things in the table above were written as
+the plan and are corrected in it: the outside half is **part 0 of
+`BASIC.O88`** under the parts standard (§20.12), not a `BASIC.OVL` sitting
+beside the package, and what went out is **the compiler alone**. The built-in
+library, `PRINT USING` and the double formatter stayed resident, because
+§150.39's measurement off a nasm map found the `bas_c_*` family and the parse
+helpers were 7,181 bytes against the whole interpreter's 2,834 — so moving
+the compiler by itself was enough, and every byte that moves costs a vector.
+
+This section is kept because its RULE outlived its table: the split follows
+the frequency, and the resident half must not be filled with what belongs
+outside it.
 
 ### 150.7 Where a refusal is principled, and where it was only fiction
 
@@ -250840,8 +250847,11 @@ are `%define`s resolved at assembly time. The set is therefore a decision made
 once, for every program: buttons, `OS88UI_CHK` check boxes, `OS88UI_RAD` radio
 dots, static text, a single-line edit over `apps/os88line.inc` (§83), group
 boxes, and `OS88UI_DROP` for one pick from a short list. Scroll bars
-(`OS88UI_SCROLL`) are not in a dialog's set. The `DLG` engine lives in
-`BASIC.OVL` by §150.6's rule, a dialog being rare next to the inner loop.
+(`OS88UI_SCROLL`) are not in a dialog's set. The `DLG` engine belongs in the
+package's PART by §150.6's rule, a dialog being rare next to the inner loop -
+and §150.39 is where the cut actually went, which is the compiler alone, so
+`DLG` joining it is a claim on where the engine goes when it is built rather
+than a description of where it is.
 
 `ALERT` and `FILESELECT` are **not** `DLG` verbs: each is one existing facility
 — `OS88UI_ALERT`'s standard alert and the chooser — and keeps its own GFA
@@ -252252,11 +252262,49 @@ bar that `MENU m$()` must exist to have put up first, and the kernel's
 menu-item structure has no attribute word for a checkmark, so each needs its
 own decision rather than a guess.
 
-### 150.39 `BASIC.OVL`: what moves, and the three traps that are requirements
+### 150.39 The compiler as a PART: what moves, and the five traps that are requirements
 
-**Status: CONTRACT WRITTEN, SEAM NOT CUT.** The measurement and the rules
-first, because this is the change with a whole-VM freeze in its history and
-the fast tier cannot see it.
+**Status: CUT, AND IT IS A PART OF `BASIC.O88` RATHER THAN A FILE BESIDE IT.**
+`tools/os88ovl.py` cuts `.modc` off the end of the one assembled binary at the
+image length the header already records, and `tools/os88pkg.py --part` makes
+that cut part 0 of the package (§20.12). There is no `BASIC.OVL` and there
+never was: a user browsing the folder would find a file that is not a program,
+a copy of `BASIC.O88` alone would be an editor that cannot compile, and
+`tests/unit/t_noovl.py` fails any shipped image carrying an `.OVL` beside a
+package — which is why the cut is called `basic.comp.bin`.
+
+**MEASURED, BOTH BUILDS, AT THE CUT:**
+
+| | image | bss | of `APP_MAX_SIZE` 65,024 |
+| --- | --- | --- | --- |
+| resident (`-DBAS_RESIDENT`) | 29,294 | 22,064 | 51,358 — **79.0%** |
+| shipped (`-DBAS_OVERLAY`) | 21,737 | 22,169 | 43,906 — **67.5%** |
+
+7,452 bytes of headroom, against the 7,181 the nasm map predicted and the
+"about 68%" this section carried as an estimate before the cut. The module is
+9,346 bytes, 6,075 packed, and the whole `.O88` is 22,491. The shipped build's
+bss is the resident one plus the parts standard's own 105 bytes, which sit
+ABOVE this package's chain rather than under it — so the two builds lay their
+own fields at identical offsets, and the A/B covers the bss and not just the
+image.
+
+**EAGER, NOT LAZY, WHICH IS THE OPPOSITE OF SHEET'S TWO MODULES.** SHEET
+defers its chart module because most sessions never draw a chart. `RUN` is
+what this package is FOR, so a lazy row would defer a claim almost every
+session goes on to make, and it would cost two things an eager row does not:
+`op_fetch` reads a file by NAME, so the current directory would have to be
+banked back to where `BASIC.O88` was launched from and restored around every
+first `RUN` (§82.16.12's `ch_ovback` is that code), and a refused fetch would
+need a failure path inside the one command the app exists to serve. Eager,
+`op_load` has claimed and expanded it before the entry proc returns, a
+refusal is fatal down the CF path the loader already understands, and
+`op_cseg` answers for the rest of the instance.
+
+**AND THE PART IS NEVER MADE MOVABLE**, so the segment `op_cseg` answers with
+is a fact for the life of the instance and no `OP_ONMOVE` hook is needed. That
+is a CONDITION and not an omission: a claim is born pinned and only
+`op_movable` changes that, so a later wave that calls it owes this package a
+hook that re-asks `op_cseg` and re-stamps `bas_v_run`, as `sh_partmv` does.
 
 **WHAT MOVES: the COMPILER, not the built-ins first.** Measured off a nasm
 map of the 29,292-byte image, bucketed by label: the `bas_c_*` family and
@@ -252279,14 +252327,22 @@ countable rather than the whole compiler at once.
 an overlay reads and writes the package's bss directly, so the op stream,
 the tables and the arenas need no marshalling. Only code changes segment.
 
-**THREE TRAPS, AND THEY ARE REQUIREMENTS HERE RATHER THAN ADVICE.** Each
-one cost a session in SHEET's split (§82.16) and each is silent:
+**FIVE TRAPS, AND THEY ARE REQUIREMENTS HERE RATHER THAN ADVICE.** Each of
+the first three cost a session in SHEET's split (§82.16); the last two were
+found cutting THIS seam, and were written down after being built. Every one
+of them is silent:
 
 1. **The dispatcher must not stage the verb index in a register a verb
    uses.** `ch_modc` staged it in `SI`, which two of three verbs took as an
    argument; verb 0's index was 0 and its `SI` was 0, so that verb kept
    working and charts drew axes with no data. **Index through `BP`** - it is
    the verb already and no verb wants it.
+
+   **As cut, this trap is UNREACHABLE here rather than guarded against**, and
+   the reason is worth keeping: the module has ONE entry, `bas_modrun` at its
+   offset 0, so there is no verb index and no register to stage it in. A
+   second verb added to `.modc` brings the trap back with it, and its index
+   goes in `BP`.
 2. **`%define BAS_OVERLAY` must be the FIRST LINE of the overlay's source.**
    NASM's preprocessor is one pass, so an `%ifdef` is tested where it sits.
    Defined down beside the `%include`s, every `%ifdef` above reads false,
@@ -252298,12 +252354,51 @@ one cost a session in SHEET's split (§82.16) and each is silent:
    X's own shim into a far call to itself, which is infinite recursion and a
    hung guest. Every shim's body stays a plain `call`, and the commit that
    cuts the seam owes an audit saying so.
+4. **A REGION MOVE INVALIDATES THE VECTORS, and the kernel cannot see it.**
+   The module's nine callbacks hold OUR segment, stamped into words of our
+   own. `apps/os88api.inc`'s header names this exact case as the one thing
+   `mem_region_reloc` cannot put right — "it stamped its own segment
+   somewhere the kernel does not know about" — so a package that declares
+   `OS88_REGION_MOVABLE` with the bare form, as this one did while it was
+   one segment, leaves the module far-calling where the package used to be:
+   no error, a jump into unmapped memory, the whole VM frozen. The overlay
+   build names a fix-up (`bas_reloc`, which re-runs `bas_vfill`); the
+   resident build keeps the bare form, where there is no such word. **The
+   test is the question, not the shape:** does this package stamp its own
+   segment anywhere? Here the answer went from no to yes in the increment
+   that cut the seam, and nothing about cutting it says so.
+5. **THE PARTS STANDARD'S OWN BSS GOES ABOVE THIS PACKAGE'S CHAIN, NOT
+   UNDER IT.** `os88parts.inc` reserves `OP_BSS` bytes and its worked example
+   puts them FIRST — `my_thing equ os88_image_end + OP_BSS`. Done that way
+   here, every offset in this package would have to be `OP_BSS`-relative, and
+   its chain is not derived all the way down: the head is `equ 0` and the
+   SECOND field is the literal `equ 2`. So rebasing the head alone moved
+   `bas_abon` to 105 and left every other field where it was, putting the
+   About-card flag inside `bas_tx`, the editor's own block. **It was built
+   that way and it is silent:** nasm is happy, every name resolves, and the
+   declared bss does not grow by a byte — the giveaway, had anyone looked, is
+   that adding 105 bytes of someone else's storage changed the total by
+   nothing. `%define OP_BSS_AT` before the include puts the standard's block
+   on top instead, which also makes both builds lay their own fields at
+   identical offsets, so the A/B above covers the bss too.
 
 **AND THE PACKAGE MUST BUILD BOTH WAYS FROM ONE SOURCE** (`-DBAS_RESIDENT`).
 This is not a convenience: an overlay's WIRING bugs and its BEHAVIOUR bugs
 look identical from outside, and flipping one `%define` and rebuilding
 separates them in a single step. SHEET's split spent hours before adopting
-it.
+it. The Makefile builds `basic.res.bin` on the way to the package and
+nothing reads it — it is a prerequisite of `basic.o88` so that `make`
+assembles it at all, because a binary that is "built so it cannot rot" and
+that nothing depends on is simply never built (the note on `fptest` at the
+head of the Makefile's package list is that mistake, already made once).
+
+**THE RESIDENT BUILD IS A BYTE-FOR-BYTE CHECK WHILE IT STAYS ONE**, and it
+was used as one: every change that wired the part up — the header flag, the
+parts table, the bss rebased onto `OP_BSS`, the `op_load`, the vectors, the
+far call — is behind `%ifdef BAS_OVERLAY` or behind an `OP_BSS` that is 0
+without the standard, so the resident image came out IDENTICAL to the
+committed one at each step. That is what makes the overlay build the only
+suspect when a soak row then fails.
 
 **A GREEN FAST TIER IS NOT COVERAGE OF THIS.** SHEET's split passed `make`
 and the whole fast tier with a dispatcher bug live; 23 of 26 SOAK rows then
@@ -252312,6 +252407,22 @@ locked up stops servicing the serial IRQ and a hang is indistinguishable
 from a dropped mouse packet at the harness. So the seam is not cut without
 a soak run, and `basiclang` through `basiclang4` are the rows that matter -
 they are the only ones that compile a program at all.
+
+**THEY ARE GREEN ON THE CUT, AND THE DURATIONS ARE THE EVIDENCE** - 236.1s,
+297.0s, 429.9s and 894.0s, against 233.6s, 294.9s, 427.4s and 893.5s for the
+same four rows on the resident build. A row that dies early is the failure
+these rows actually report, so a time that matches to within a percent says
+the whole scenario ran and not merely that the assertions agreed.
+
+**AND A RED ROW HERE IS NOT AUTOMATICALLY THE SEAM.** All four went red once
+during this work at a quarter of their usual time, and a control package
+built from the BYTE-IDENTICAL resident binary failed with them - which
+cannot be the diff. The box was at load average 17 under other work. These
+rows drive an emulated 8086 on wall-clock timing, so a starved guest drops
+keys, and the harness reports whichever assertion came next: here "the
+console buffer is not in memory as cells", which is also exactly what a
+REFUSED program looks like. Check the duration against the last green run
+before reading the diff.
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 

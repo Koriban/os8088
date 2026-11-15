@@ -3,6 +3,28 @@
 ; DO NOT add a runtime routine here: the closure in 150.39 is what keeps
 ; the vector count at ten, and a routine bas_exec calls breaks it.
 
+; --- THE MODULE'S ONE ENTRY, AT OFFSET 0 (SPEC.md 150.39) -------------------
+; First in the file, so first in `.modc`, so offset 0 of the part - which is
+; the offset bas_v_run carries as a constant.
+;
+; THERE IS NO DISPATCHER AND NO VERB INDEX, and that is what makes 150.39's
+; FIRST TRAP unreachable here rather than guarded against. That trap is a
+; dispatcher staging the verb number in a register a verb reads as an
+; argument: SHEET's ch_modc staged it in SI, verb 0's index was 0 and its SI
+; was 0, so that verb went on working and charts drew axes with no data. One
+; entry needs no index, so there is no register to stage it in. A SECOND verb
+; added here brings the trap with it, and its index goes in BP.
+;
+; `call` THEN `retf`, not a `retf` bolted onto bas_run: bas_run is reached by
+; a near call in the resident build and must stay a near proc in both, and a
+; body whose ending depends on the build is the kind of difference the
+; one-source rule exists to prevent.
+%ifdef BAS_OVERLAY
+bas_modrun:
+    call bas_run
+    retf
+%endif
+
 ; -----------------------------------------------------------------------------
 ; bas_run - compile the editor's text and run it
 ; in:  nothing; DS = our segment

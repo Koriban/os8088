@@ -326,11 +326,10 @@ BAS_OPS_MAX equ 4096
 BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 
 ; --- the COMPILE-TIME half (SPEC.md 150.39) -----------------------------
-; Seventy routines, extracted so the SAME TEXT can assemble into either
-; the resident image or BASIC.OVL. Nothing moved logically yet: this file
-; is included here, so the binary is the same program laid out in a
-; different order. The cut itself is the next step, and the closure that
-; chose these seventy left only TEN vectors (150.39).
+; Seventy routines, extracted so the SAME TEXT can assemble into either the
+; resident image or PART 0 of the package - which is what it is, and not a
+; BASIC.OVL file beside it (150.39). The closure that chose these seventy
+; left only TEN vectors: nine back into us, and bas_v_run the other way.
 ; EITHER IN `.modc` OR IN `.text`, and the Makefile chooses with -D. The
 ; switch comes from the COMMAND LINE on purpose: SPEC.md 150.39's second trap
 ; is a `%define` placed after the `%ifdef`s that test it - NASM's
@@ -3173,6 +3172,77 @@ bas_v_fp_atof:      dw bas_x_fp_atof, 0
 bas_v_fp_i2a:       dw bas_x_fp_i2a, 0
 bas_v_fp_a2i:       dw bas_x_fp_a2i, 0
 bas_v_end:
+
+; bas_v_run - THE ONE VECTOR THE OTHER WAY, and it is deliberately OUTSIDE
+; bas_v_first..bas_v_end: that range is swept by bas_vfill, which stamps OUR
+; segment into every row, and this row's segment is the MODULE's. Sweeping it
+; would point the far call at our own offset 0, which is the package header.
+;
+; Its offset is NAMED rather than written as the 0 it is: `.modc` is assembled
+; `vstart=0` and bas_modrun is the first thing in it, so the symbol is 0 today,
+; and if anything is ever placed in front of it the vector follows instead of
+; pointing at whatever took its place.
+bas_v_run:          dw bas_modrun, 0
+
+; -----------------------------------------------------------------------------
+; bas_vfill - stamp OUR segment into every vector the module calls back on,
+; and the module's into the one we call it on.
+;
+; in:  nothing (op_load must already have answered)
+; out: nothing; every register preserved
+;
+; ONE LOOP OVER A DECLARED RANGE so that a vector added later cannot be the
+; one somebody forgot to fill: the offsets are assembled in, the segment is
+; the only run-time fact, and a new BASX line joins the sweep by existing.
+;
+; CALLED TWICE - from the entry proc, and from bas_reloc when the region
+; moves - which is the whole reason it is a proc and not the inline loop it
+; started as.
+; -----------------------------------------------------------------------------
+bas_vfill:
+    push ax
+    push bx
+    mov ax, cs                      ; ...which is also our DS (SPEC.md 68.10)
+    mov bx, bas_v_first
+.one:
+    mov [bx + 2], ax
+    add bx, 4
+    cmp bx, bas_v_end
+    jb .one
+    mov al, BAS_PART_COMP
+    call op_cseg                    ; AX = the module's CODE selector (MC7: a
+    mov [bas_v_run + 2], ax         ; far call through the data one is a #GP)
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bas_reloc - OUR REGION MOVED (OS88_REGION_MOVABLE, SPEC.md 66.6.1).
+;
+; in:  BX = the base the region was at, DX = where it is now
+; out: nothing; every register preserved, and it must `ret`. FLAGS NEED NOT
+;      BE, which is checked and not assumed: the kernel's own call site says
+;      "FLAGS are nobody's here" (kernel/memory.inc, beside the `call far
+;      [ss:mem_fptr]`), and SHEET's sh_partmv clobbers them too. bas_vfill
+;      does, by its `cmp` and by op_cseg.
+;
+; The kernel puts every word that NAMES us right - our window's W_SEG, our
+; claims' owners, our menu entries - and os88api.inc's header lists the one
+; thing it cannot: a segment of ours we stamped somewhere it does not know
+; about. The module's nine vectors are exactly that, and they hold the segment
+; we were at. bas_vfill reads `cs`, which is already the new one by the time
+; this is called, so re-running it is the whole fix-up.
+;
+; BX AND DX ARE UNUSED and that is correct: nothing here needs to know where
+; we were, only where we are. They are named in the signature because the
+; kernel passes them and a later fix-up may want them.
+;
+; IT MAY NOT CLAIM, DRAW OR YIELD - it is called from inside the allocator -
+; and bas_vfill does none of those: op_cseg reads the part table and answers.
+; -----------------------------------------------------------------------------
+bas_reloc:
+    call bas_vfill
+    ret
 %endif
 
 bas_err:

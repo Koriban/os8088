@@ -248,6 +248,36 @@ def main():
           why="two names for one address is the shape the stack defect took",
           got=clash, want=[])
 
+    # ...AND THE CHAIN IS A CHAIN ALL THE WAY DOWN, which the test above
+    # cannot see. It compares field STARTS for equality, so a field landing
+    # INSIDE another one's extent is invisible to it - and that is the shape
+    # the SPEC.md 150.39 defect took: the head was rebased onto OP_BSS to
+    # make room for the parts standard's 105 bytes, the SECOND field was the
+    # bare literal `equ 2` rather than derived, so bas_abon moved to 105 and
+    # every field after it stayed put. The About-card flag was then a byte
+    # inside bas_tx, the editor's own block. Nothing complained: nasm was
+    # happy, every name resolved, both checks above passed, and the declared
+    # bss did not grow by a byte.
+    #
+    # ONE BARE NUMBER IS WHAT MAKES A REBASE SILENT, so the rule is that the
+    # head may be a literal and nothing else may: every other field derives
+    # from a field. Then a rebase moves the whole chain or fails to assemble.
+    src = _read("apps/basic/basic.asm")
+    decls = re.findall(r"^(BAS_B_\w+)\s+equ\s+([^;\n]+)", src, re.M)
+    head = decls[0][0] if decls else None
+    bare = [n for n, rhs in decls[1:] if "BAS_B_" not in rhs]
+    check(not bare,
+          "BASIC: every bss field but the head DERIVES from another field",
+          why="a chain with a bare number in it is not a chain - rebasing "
+              "the head moves the head alone, and the fields after the "
+              "literal silently alias whatever is now at their old offsets",
+          got=bare, want=[])
+    check(head == "BAS_B_bas_abon",
+          "BASIC: the bss chain's head is the one this gate names",
+          why="the check above exempts the FIRST declaration, so which one "
+              "that is has to be the one it means",
+          got=head, want="BAS_B_bas_abon")
+
     lang = _read("apps/basic/baslang.inc")
     check(re.search(r"cmp\s+di,\s*bas_stk\s*\+\s*BAS_STK_MAX\*BAS_SLOT", lang),
           "BASIC: bas_exec's push bound names the symbols, not a number",

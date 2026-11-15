@@ -7034,16 +7034,48 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 # decided against: the interpreter has to fit beside sixty-four built-ins, an
 # editor and a console in one 63.5KB segment, and that arithmetic is worth
 # nothing until the empty frame has been measured.
-$(BUILD)/basic.bin: apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
-                    apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
-                    apps/basic/baslang.inc apps/basic/bascomp.inc apps/os88fp.inc \
-                    apps/os88dec.inc \
-                    | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DBAS_RESIDENT -o $@ apps/basic/basic.asm
-	@echo "basic:  $(call FILESIZE,$@) bytes"
+# BASIC.O88 IS A PARTED PACKAGE (SPEC.md 150.39, 20.12), and the shipped build
+# is the OVERLAY one: os88ovl.py cuts `.modc` - the compile-time half, seventy
+# routines - off the end at the image length the header already records, and
+# that cut becomes the package's own part 0 rather than a BASIC.OVL beside it.
+# A user browsing the folder would otherwise find a file that is not a
+# program, and a copy of BASIC.O88 alone would be an editor that cannot
+# compile; tests/unit/t_noovl.py fails any shipped image carrying an .OVL next
+# to a package, which is why the cut is named basic.comp.bin and not *.OVL.
+#
+# ONE recipe makes the cut and the package, because they are one operation.
+BASIC_SRC = apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
+            apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
+            apps/basic/baslang.inc apps/basic/bascomp.inc apps/os88fp.inc \
+            apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc
 
-$(BUILD)/basic.o88: $(BUILD)/basic.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/basic.bin -o $@
+$(BUILD)/basic.bin: $(BASIC_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DBAS_OVERLAY -o $@ apps/basic/basic.asm
+	@echo "basic:  $(call FILESIZE,$@) bytes (resident image + the module)"
+
+# ...AND THE RESIDENT BUILD, from the same source with one -D flipped. SPEC.md
+# 150.39 requires it and says why: an overlay's WIRING bugs and its BEHAVIOUR
+# bugs look identical from outside, and rebuilding this separates them in one
+# step. Nothing ships it and nothing reads it.
+#
+# IT IS A PREREQUISITE OF THE PACKAGE SO THAT `make` ASSEMBLES IT. The package
+# does not contain a byte of it; the line is here because the note at the head
+# of this file's package list records this exact mistake made with fptest -
+# "built here so it cannot rot" and nothing depended on it, so `make` never
+# compiled it and a change that broke it broke nothing anybody saw.
+$(BUILD)/basic.res.bin: $(BASIC_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DBAS_RESIDENT -o $@ apps/basic/basic.asm
+	@echo "basic:  $(call FILESIZE,$@) bytes (resident, SPEC.md 150.39's A/B)"
+
+$(BUILD)/basic.o88: $(BUILD)/basic.bin $(BUILD)/basic.res.bin \
+                    tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP)
+	python3 tools/os88ovl.py $(BUILD)/basic.bin -o $(BUILD)/basic.comp.bin \
+		--trim $(BUILD)/basic.trim.bin
+	$(OS88PKG) $(BUILD)/basic.trim.bin -o $@ --part $(BUILD)/basic.comp.bin
+
+# ...and the cut is askable by name: it falls out of the recipe above, so
+# without this line `make $(BUILD)/basic.comp.bin` has no rule at all.
+$(BUILD)/basic.comp.bin: $(BUILD)/basic.o88 ;
 
 .PHONY: basic basicdisk
 basic: $(BUILD)/basic.o88

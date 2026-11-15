@@ -65,7 +65,15 @@
 %endif
 %include "os88api.inc"
 
+; THE HEADER SAYS WHICH BUILD THIS IS: OS88_F_PARTS means "the file is longer
+; than the image on purpose" (os88parts.inc), which is true of the overlay
+; build and false of the resident one. It is one of the three things the
+; kernel learns about a parted package and the only one in the header.
+%ifdef BAS_OVERLAY
+    OS88_HEADER 'BASIC', bas_entry, OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+%else
     OS88_HEADER 'BASIC', bas_entry, 0, OS88_HIGH | OS88_HIGHMEM
+%endif
 
 ; --- geometry (SPEC.md 11: content is x+1..x+w-2, y+TITLE_H..y+h-2) ----------
 ; DERIVED, never quoted: SPEC.md 150.12.1's rule for a dialog is the rule for
@@ -107,12 +115,48 @@ BAS_KEY_RUN equ 0x3F00
 ; loader down this one path untouched.
 ; -----------------------------------------------------------------------------
 bas_entry:
-    push si
+    push si                         ; the caller's, returned at .out
+%ifdef BAS_OVERLAY
+    ; --- the module, before anything else (os88parts.inc rule 1) ------------
+    ; SI ARRIVES HOLDING THE KERNEL'S POINTER to a 13-byte name buffer the
+    ; loader reuses on the next launch, and nothing later can recover it - so
+    ; this is the first CALL the entry proc makes, ahead of wm_create. The
+    ; `push si` above it is not a call and does not disturb SI: it is only
+    ; hoisted there so that a refusal can leave down `.out`, which is `pop si`
+    ; and is the path wm_create's own refusal already takes.
+    ;
+    ; ES IS BANKED ACROSS IT because ES arrives as KERNEL_SEG, every OSAPI
+    ; slot preserves it, and op_load is package code whose clobber list says
+    ; ES. Without the bank the next slot that reads through it reads a PART,
+    ; and os88parts.inc rule 1 says what that looks like: the failure is
+    ; silent and surfaces four routines away as a file refusing to be read.
+    ;
+    ; A REFUSAL IS FATAL HERE and takes that CF path: the compiler is not an
+    ; optional feature, a toast has already said why, and an instance without
+    ; one could only refuse every RUN. Nothing is claimed, drawn or
+    ; registered yet, so there is nothing to undo.
+    push es
+    call op_load
+    pop es
+    jc .out
+    call bas_vfill                  ; the vectors, both directions (150.39)
+%endif
     mov si, bas_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     jc .out
+%ifdef BAS_OVERLAY
+    ; A FIX-UP OF OUR OWN, and os88api.inc's header names this exact case -
+    ; "it stamped its own segment somewhere the kernel does not know about".
+    ; The module's nine vectors back into us hold OUR segment, which the
+    ; kernel cannot see, so a region move leaves the module far-calling where
+    ; we used to be: no error, a jump into unmapped memory, the whole VM
+    ; frozen. bas_reloc re-stamps them. The resident build keeps the bare
+    ; form, where there is no such word.
+    OS88_REGION_MOVABLE bas_reloc
+%else
     OS88_REGION_MOVABLE             ; SPEC.md 66.6.1 - and this package has no
                                     ; worker, which is the case that moves most
+%endif
     mov si, bas_menus
     call OSAPI_MENU_SET
     mov si, bas_about
@@ -124,23 +168,6 @@ bas_entry:
     ; AM_ONCMD handler at ON MENU is resumed from here, and here may take the
     ; lock for a stated burst. Installed from the entry proc after
     ; OSAPI_WM_CREATE, which is this slot's own instruction.
-%ifdef BAS_OVERLAY
-    ; --- the module's vectors (SPEC.md 150.39) --------------------------
-    ; The OFFSET half is assembled in; only the SEGMENT is a run-time fact,
-    ; and it is this package's own CS. Filled in one loop so a vector added
-    ; later cannot be the one somebody forgot.
-    push ax
-    push bx
-    mov ax, cs
-    mov bx, bas_v_first
-.vfill:
-    mov [bx + 2], ax
-    add bx, 4
-    cmp bx, bas_v_end
-    jb .vfill
-    pop bx
-    pop ax
-%endif
     mov [bas_wn], bx                ; ...and the window is kept, because
     mov ax, bas_onwake              ; OSAPI_WM_WAKE wants it in BX and
     call OSAPI_WM_ONWAKE            ; bas_exec has no spare register to carry
@@ -412,7 +439,11 @@ bas_oncmd:
     jnz .stop                       ; item 1 = Stop
     push si                         ; item 0 = Run: compile and run the text
     mov byte [bas_bad], 0           ; in the editor, for real
+%ifdef BAS_OVERLAY
+    call far [bas_v_run]            ; the module COMPILES and returns
+%else
     call bas_run                    ; ...which COMPILES and returns
+%endif
     cmp byte [bas_bad], 0           ; ...and the resident half RUNS it
     jne .ranot                      ; (SPEC.md 150.39): a refusal has
     call bas_exec                   ; already said so and there is nothing
@@ -759,6 +790,61 @@ bas_ab4:        db 'SPEC.md 150', 0
 ; its outputs goes through con_say.
 %include "basic/baslang.inc"
 
+; --- the parts standard, in the OVERLAY build only (SPEC.md 20.12, 150.39) ---
+; ONE part: the compile-time half, cut out of this very binary by
+; tools/os88ovl.py at the image length the header already records. It is
+; `OP_SEG` because we far-call it, and `OP_COMP` because it is 9KB of code
+; that compresses.
+;
+; EAGER, AND NOT LAZY, WHICH IS THE OPPOSITE OF SHEET'S TWO MODULES. SHEET
+; defers the chart module because most sessions never draw a chart. `RUN` is
+; what this package is FOR, so a lazy row would defer a claim almost every
+; session goes on to make, and it would cost two things that an eager row does
+; not: op_fetch reads a file by name, so the current directory would have to
+; be banked back to where BASIC.O88 was launched from and restored around
+; every first RUN (82.16.12's ch_ovback is that code), and a fetch that
+; refused would need a failure path inside the one command the app exists to
+; serve. Eager, op_load has already claimed and expanded it by the time the
+; entry proc returns, and op_cseg answers for the rest of the run.
+;
+; NO `OP_ONMOVE` HOOK, because the part is never made movable: a claim is born
+; pinned and only op_movable changes that, so the segment op_cseg answers with
+; is a fact for the life of the instance. THAT IS THE CONDITION, not an
+; omission - a later wave that calls op_movable owes this file a hook that
+; re-asks op_cseg and re-stamps bas_v_run, exactly as sh_partmv does.
+;
+; THE STANDARD'S 105 BYTES GO ON TOP OF OUR CHAIN, NOT UNDER IT, which is the
+; opposite of os88parts.inc's worked example ("OURS FIRST, then yours") and is
+; what OP_BSS_AT exists for. Under it, every one of our offsets would have to
+; be OP_BSS-relative - and they are NOT A CHAIN all the way down: the head is
+; `equ 0` and the SECOND field is the literal `equ 2`, so rebasing the head
+; alone moved bas_abon to 105 and left the rest where it was, aliasing a byte
+; inside bas_tx. (That was built, and it is why this is written here: the
+; defect is silent, nasm is happy, and every name still resolves.)
+;
+; ON TOP, our layout is IDENTICAL IN BOTH BUILDS - which is the property the
+; A/B rests on, now covering the bss and not just the image.
+;
+; A FIELD ADDED LATER GOES ON OUR CHAIN, at `os88_image_end + BAS_B_*`, and
+; NOT at `os88_image_end + OP_BSS` the way os88parts.inc's example writes it:
+; that address is inside our chain here.
+%ifdef BAS_OVERLAY
+%define OP_WANT_CSEG                ; op_cseg: the module is FAR-CALLED, and a
+                                    ; far call through the data selector is a
+                                    ; #GP under kern_mega (MC7)
+%define OP_BSS_AT (os88_image_end + BAS_BSS_OWN + CON_BSS)
+%include "os88parts.inc"
+BAS_PART_COMP equ 0                 ; .modc: the compiler (SPEC.md 150.39)
+    OS88_PARTS_BEGIN 1
+      OS88_PART OP_SEG, OP_COMP     ; 0 the compile-time half
+    OS88_PARTS_END
+%else
+OP_BSS equ 0                        ; the resident build has no parts standard
+                                    ; in it, so the chain below starts at 0.
+                                    ; Named rather than %ifdef'd at the one use
+                                    ; site so the chain reads the same in both
+%endif
+
 ; --- the bss this package declares for itself, as OFFSETS ------------------
 ; The chain is laid out TWICE and that is the point. Here it is pure
 ; constants, so BAS_BSS_OWN - the number OS88_BSS reserves and the base
@@ -791,7 +877,14 @@ bas_ab4:        db 'SPEC.md 150', 0
 ; (Both of those were claimed the other way round in this comment for an
 ; afternoon, on a build that was really failing for one undefined symbol.)
 BAS_B_bas_abon   equ 0
-BAS_B_bas_tx     equ 2
+BAS_B_bas_tx     equ BAS_B_bas_abon + 2   ; DERIVED, not the literal 2 it
+                                    ; still is: a chain with one bare number
+                                    ; in it is not a chain, and rebasing the
+                                    ; HEAD then moves the head alone and
+                                    ; leaves everything after this where it
+                                    ; was. t_fpscratch holds the whole chain
+                                    ; to deriving, which is how that is kept
+                                    ; true rather than remembered
 BAS_B_bas_prog   equ BAS_B_bas_tx + OS88TEXT_SZ
 BAS_B_bas_src    equ BAS_B_bas_prog + BAS_PROG_MAX
 BAS_B_bas_line   equ BAS_B_bas_src + 2
@@ -925,7 +1018,9 @@ BAS_B_bas_fpbuf  equ BAS_B_bas_fpend
 
 BAS_BSS_OWN equ BAS_B_bas_fpbuf + 32    ; ...the whole of it, DERIVED
 
-    OS88_BSS BAS_BSS_OWN + CON_BSS
+    OS88_BSS BAS_BSS_OWN + CON_BSS + OP_BSS   ; OP_BSS is 0 without the
+                                    ; parts standard, and its 105 bytes sit
+                                    ; ABOVE ours (see OP_BSS_AT above)
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -----------------------------------
