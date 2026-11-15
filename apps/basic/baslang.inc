@@ -152,7 +152,9 @@ OP_ALERT    equ 55                  ; + an index byte: RE-ENTRANT. First pass
                                     ; raises the alert and suspends AT ITSELF;
                                     ; the resume finds the answer waiting and
                                     ; stores it (SPEC.md 150.37)
-OP_N        equ 56                  ; how many there are, table included
+OP_MENU     equ 56                  ; + an index byte: build the bar from that
+                                    ; string array and install it (150.38)
+OP_N        equ 57                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -598,6 +600,9 @@ bas_c_stmt:
     mov si, bas_kw_alert            ; node [309], and the first statement to
     call bas_wordis                 ; carry a value back (SPEC.md 150.37)
     je .alert
+    mov si, bas_kw_menu             ; MENU m$() - node [299], and a statement
+    call bas_wordis                 ; the keyword table misses (150.38)
+    je .menu
     ; --- not a keyword, so `name = expr` (SPEC.md 150.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -2094,6 +2099,35 @@ bas_c_stmt:
     ret
 .alnovar:
     mov si, bas_e_alvar
+    jmp bas_err
+
+; --- MENU m$() (SPEC.md 150.38) ------------------------------------------
+; The array's NAME decides, as everywhere in this chapter: it must be a
+; DIMmed `$` array, and the index rides as the op's byte.
+.menu:
+    call bas_skipsp
+    call bas_word
+    jc .mennoarr
+    call bas_isstrname              ; CF=0 when it ends in '$'
+    jc .mennoarr
+    call bas_arrfind                ; BX = which array
+    jc .mennoarr
+    push bx
+    call bas_bopen                  ; `m$()` - and the parens stay empty
+    jc .menpop
+    call bas_bclose
+    jc .menpop
+    mov al, OP_MENU
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .menpop
+    pop ax
+    jmp bas_emit
+.menpop:
+    pop ax
+    ret
+.mennoarr:
+    mov si, bas_e_menarr
     jmp bas_err
 .x:
     ret
@@ -4442,6 +4476,133 @@ bas_arrfind:
     stc
     jmp .out
 
+; --- bas_melem - SI = element [bas_mwi] of array BX ---------------------
+; out: CF=1 when the index is past the array's last element. The walk needs
+;      this per element and there is nothing else that answers it: a menu
+;      array whose final empty string is missing must END rather than read
+;      whatever lies above the array in the arena.
+bas_melem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push bx
+    call bas_arrat                  ; SI = the array's entry
+    pop bx
+    mov ax, [bas_mwi]
+    mov cx, [si + BAS_ARR_N0]
+    cmp word [si + BAS_ARR_DIM], 2
+    jne .me1
+    mov dx, cx
+    mov ax, [si + BAS_ARR_N1]
+    mul dx
+    mov cx, ax                      ; a two-dimensional m$() is walked flat
+    mov ax, [bas_mwi]
+.me1:
+    cmp ax, cx
+    jae .memiss
+    mov dx, [si + BAS_ARR_AT]
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; eight bytes an element (150.31)
+    add ax, dx
+    add ax, bas_arena
+    mov si, ax
+    clc
+    jmp short .meout
+.memiss:
+    stc
+.meout:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- bas_mcopy - SI's string into bas_mtext, NUL-terminated -------------
+; in:  SI = a value slot (offset at [si], length at [si+2])
+; out: AX = where the copy begins, CF=1 if the arena is full. The copy is
+;      the whole point: see BAS_MEN_TEXT's comment in basic.asm.
+bas_mcopy:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [si]
+    mov cx, [si + 2]
+    mov ax, [bas_mwtop]
+    mov dx, ax
+    add dx, cx
+    inc dx                          ; ...and its NUL
+    cmp dx, BAS_MEN_TEXT
+    ja .mcfull
+    mov di, bas_mtext
+    add di, ax                      ; DI = where it goes, and DI ADVANCES:
+    push ax                         ; only BX, SI, DI and BP can index, so
+    mov dx, cx                      ; `[di + ax]` is not an address at all
+.mclp:
+    or cx, cx
+    jz .mcend
+    mov al, [bx]
+    mov [di], al
+    inc bx
+    inc di
+    dec cx
+    jmp short .mclp
+.mcend:
+    mov byte [di], 0
+    inc dx                          ; ...and its NUL
+    add [bas_mwtop], dx
+    pop ax
+    add ax, bas_mtext               ; a POINTER, which is what the set holds
+    clc
+    jmp short .mcout
+.mcfull:
+    stc
+.mcout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_menpick - a pick on one of the PROGRAM's menus -----------------
+; in:  AH = the bar menu (2 and up are the program's), AL = the item
+; out: nothing. Slice 3a has nowhere to send it: ON MENU GOSUB is next, and
+;      until it exists a pick is recorded in MENU(0) and does nothing else -
+;      which is better than falling into File's handler, where `ah >= 2`
+;      used to land.
+bas_menpick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    cmp word [bas_mon], 0
+    je .mpout                       ; no program bar: a stale pick, ignored
+    mov bl, al                      ; the ITEM, before AL is reused
+    mov al, ah
+    sub al, 2                       ; ...and the program's menu, 0-based
+    xor ah, ah
+    mov cl, BAS_MEN_ITEMS*2
+    mul cl                          ; AX = the menu's row in bas_midx
+    mov di, ax
+    xor bh, bh
+    shl bx, 1
+    add di, bx
+    mov ax, [bas_midx + di]
+    mov [bas_msel], ax              ; MENU(0): WHICH ELEMENT of m$() it was,
+                                    ; which is what node [300] answers with
+.mpout:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; --- bas_alset - ALERT's button$ to one of the five sets ----------------
 ; in:  DI = the value slot holding it (offset at [di], length at [di+2])
 ; out: AX = the OS88UI_A* set, CF=1 and no match. Preserves everything else.
@@ -6749,6 +6910,160 @@ bas_exec:
     times BAS_ARR_LO0 - 4 db 0
     times 4 - BAS_ARR_LO0 db 0
 
+; --- OP_MENU (SPEC.md 150.38) -------------------------------------------
+; + an index byte. Walks m$() in the Compendium's layout (node [299]),
+; COPIES every title and item into bas_mtext, builds the pointer tables and
+; installs the set with File and Run still in front of it.
+;
+; THE WALK'S STATE IS IN BSS, not in registers: there are five values live
+; at once (the element index, the menu, the item, the arena top and the
+; array) and this runs once per MENU statement, not once per op.
+.menu:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bl, [si]
+    xor bh, bh                      ; BX = which array, and it stays there
+    ; --- the set's own head, and the two menus that STAY -----------------
+    ; THE FIRST VERSION LEFT ALL OF THIS ZERO AND THE ROW PASSED. bas_mset
+    ; is bss, so the bar went up with a NULL app name, a NULL command
+    ; handler and two null entries where File and Run belong: the program
+    ; printed its answers and THE BAR WAS RUBBLE. The values-only
+    ; assertions could not see it, exactly as tests/basiclang.py's own
+    ; comment warns, and it surfaced only because the NEXT part's
+    ; File > New had no handler left to reach.
+    ;
+    ; COPIED FROM THE STATIC SET rather than written out here, so File and
+    ; Run cannot drift away from bas_menus if either is ever edited.
+    push bx
+    mov ax, [bas_menus + AM_NAME]
+    mov [bas_mset + AM_NAME], ax
+    mov ax, [bas_menus + AM_ONCMD]
+    mov [bas_mset + AM_ONCMD], ax
+    mov si, bas_menus + AM_LIST
+    mov di, bas_mset + AM_LIST
+    xor bx, bx
+.mnhead:
+    mov al, [si + bx]               ; BY HAND: ES is the kernel's segment
+    mov [di + bx], al
+    inc bx
+    cmp bx, 2*AMENU_ENTSZ
+    jb .mnhead
+    pop bx
+    mov word [bas_mwi], 0
+    mov word [bas_mwm], 0
+    mov word [bas_mwtop], 0
+.mnmenu:
+    ; --- a menu: its title, then its items, then an empty string --------
+    call bas_melem                  ; SI = element [bas_mwi], or CF=1 past
+    jc .mndone                      ; the end of the array
+    cmp word [si + 2], 0
+    je .mndone                      ; the empty string that ends the BAR
+    cmp word [bas_mwm], BAS_MEN_MAX
+    jae .mnmany
+    call bas_mcopy                  ; AX = where the title now lives
+    jc .mntext
+    ; the entry, at AM_LIST + (2 + this menu) * AMENU_ENTSZ
+    mov di, [bas_mwm]
+    mov cx, di
+    add cx, 2                       ; File and Run come first
+    mov ax, cx
+    mov cl, AMENU_ENTSZ
+    mul cl
+    mov dx, ax                      ; DX = the entry's offset in the list
+    call bas_melem                  ; (the title again, for its text ptr)
+    call bas_mcopy
+    mov di, bas_mset + AM_LIST
+    add di, dx
+    mov [di + AMENU_TITLE], ax
+    ; ...its item array, at bas_mitems + menu*BAS_MEN_ITEMS*2
+    mov ax, [bas_mwm]
+    mov cl, BAS_MEN_ITEMS*2
+    mul cl
+    add ax, bas_mitems
+    mov [di + AMENU_ITEMS], ax
+    inc word [bas_mwi]              ; past the title
+    mov word [bas_mwn], 0
+.mnitem:
+    call bas_melem
+    jc .mnend                       ; the array ran out: this menu ends
+    cmp word [si + 2], 0
+    je .mnempty                     ; the empty string that ends this MENU
+    ; THE ACCESSORY SLOTS, m$(3)..m$(8), are one character long and their
+    ; contents are ignored (node [300]) - and this OS has none, so they are
+    ; skipped in the FIRST menu, where the Compendium puts them
+    cmp word [bas_mwm], 0
+    jne .mnreal
+    cmp word [si + 2], 1
+    je .mnskip
+.mnreal:
+    cmp word [bas_mwn], BAS_MEN_ITEMS
+    jae .mnitems
+    call bas_mcopy                  ; AX = the item's stable text
+    jc .mntext
+    mov di, [bas_mwm]
+    mov ax, di
+    mov cl, BAS_MEN_ITEMS*2
+    mul cl
+    mov dx, ax                      ; DX = this menu's table offset
+    call bas_melem
+    call bas_mcopy
+    mov di, dx
+    add di, [bas_mwn]
+    add di, [bas_mwn]
+    mov [bas_mitems + di], ax
+    mov ax, [bas_mwi]               ; ...and WHICH element it was, for MENU(0)
+    mov [bas_midx + di], ax
+    inc word [bas_mwn]
+.mnskip:
+    inc word [bas_mwi]
+    jmp .mnitem
+.mnempty:
+    inc word [bas_mwi]              ; past the empty string
+.mnend:
+    mov ax, [bas_mwm]
+    mov cl, AMENU_ENTSZ
+    mul cl
+    mov di, bas_mset + AM_LIST + 2*AMENU_ENTSZ
+    add di, ax
+    mov ax, [bas_mwn]
+    mov [di + AMENU_NITEM], ax
+    inc word [bas_mwm]
+    jmp .mnmenu
+.mndone:
+    ; --- install it, File and Run in front -------------------------------
+    mov ax, [bas_mwm]
+    add ax, 2
+    mov [bas_mset + AM_COUNT], ax
+    mov word [bas_mon], 1
+    push bx
+    mov bx, [bas_wn]
+    mov si, bas_mset
+    call OSAPI_MENU_SET             ; relayouts if ours is the active window
+    pop bx
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    inc si                          ; past the index byte
+    jmp .next
+.mnmany:
+    mov si, bas_e_menmany
+    jmp .mnbad
+.mnitems:
+    mov si, bas_e_menitem
+    jmp .mnbad
+.mntext:
+    mov si, bas_e_mentext
+.mnbad:
+    add sp, 12                      ; the six pushes above, dropped: bas_err
+    jmp bas_err                     ; does not come back here
+
 ; --- OP_ALERT (SPEC.md 150.37) ------------------------------------------
 ; RE-ENTRANT, which is how a statement that blocks lives on a system whose
 ; alert is asynchronous. The first pass pops the four operands, raises the
@@ -7012,6 +7327,7 @@ bas_optab:
     dw bas_exec.rsetop              ; OP_RSET
     dw bas_exec.onmenu              ; OP_ONMENU
     dw bas_exec.alert               ; OP_ALERT
+    dw bas_exec.menu                ; OP_MENU
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -7553,6 +7869,10 @@ bas_e_albtn:    db 'those ALERT buttons are not one of the six sets', 0
 bas_e_almsg:    db 'an ALERT message is ONE line here - no | in it', 0
 bas_e_albusy:   db 'an alert is already up', 0
 bas_e_alvar:    db 'ALERT wants a number variable for the choice', 0
+bas_e_menarr:   db 'MENU wants a DIMmed string array, as MENU m$()', 0
+bas_e_menmany:  db 'MENU fits three menus beside File and Run', 0
+bas_e_menitem:  db 'that MENU has more items than one menu holds', 0
+bas_e_mentext:  db 'those MENU titles do not fit the bar text arena', 0
 ; REFUSED WITH A REASON, not as an unknown word (SPEC.md 150.7): ERASE is the
 ; reference's and leaving it out is a decision, so the message says so and
 ; names the word a program reaching for it probably wanted. SHORT BECAUSE THE

@@ -326,6 +326,8 @@ bas_paint:
 ; (PERFORMANCE.md's rule 2).
 ; -----------------------------------------------------------------------------
 bas_oncmd:
+    cmp ah, 2                       ; menus 2 and up are the PROGRAM's, which
+    jae bas_menpick                 ; MENU m$() appended (SPEC.md 150.38)
     or ah, ah
     jnz .run                        ; menu 1 = Run
     ; --- File ----------------------------------------------------------------
@@ -764,8 +766,29 @@ BAS_B_bas_wn     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_bas_susp   equ BAS_B_bas_wn + 2
 BAS_B_bas_scur   equ BAS_B_bas_susp + 2
 BAS_B_bas_sdi    equ BAS_B_bas_scur + 2
+; --- MENU m$()'s bar (SPEC.md 150.38) ------------------------------------
+; THE TEXT IS COPIED, NOT POINTED AT. A menu set is a table of pointers to
+; NUL strings and a BASIC string lives in 150.28's arena, which COMPACTS -
+; so a bar pointing into it is drawn by the kernel from freed bytes the
+; first time the program concatenates anything. This arena does not move.
+BAS_MEN_MAX   equ MENU_APPMAX - 2   ; the program's menus: the bar also holds
+                                    ; File and Run, which stay so the editor
+                                    ; does not become unreachable
+BAS_MEN_ITEMS equ 10                ; items in one of them
+BAS_MEN_TEXT  equ 256               ; and the bytes for every title and item
+BAS_B_bas_mset   equ BAS_B_bas_sdi + 2
+BAS_B_bas_mitems equ BAS_B_bas_mset + 6 + MENU_APPMAX*AMENU_ENTSZ
+BAS_B_bas_midx   equ BAS_B_bas_mitems + BAS_MEN_MAX*BAS_MEN_ITEMS*2
+BAS_B_bas_mtext  equ BAS_B_bas_midx + BAS_MEN_MAX*BAS_MEN_ITEMS*2
+BAS_B_bas_mon    equ BAS_B_bas_mtext + BAS_MEN_TEXT
+BAS_B_bas_mhand  equ BAS_B_bas_mon + 2
+BAS_B_bas_msel   equ BAS_B_bas_mhand + 2
+BAS_B_bas_mwi    equ BAS_B_bas_msel + 2
+BAS_B_bas_mwm    equ BAS_B_bas_mwi + 2
+BAS_B_bas_mwn    equ BAS_B_bas_mwm + 2
+BAS_B_bas_mwtop  equ BAS_B_bas_mwn + 2
 ; --- ALERT's half of the seam (SPEC.md 150.37) ---------------------------
-BAS_B_bas_alpend equ BAS_B_bas_sdi + 2
+BAS_B_bas_alpend equ BAS_B_bas_mwtop + 2
 BAS_B_bas_alans  equ BAS_B_bas_alpend + 2
 BAS_B_bas_almsg  equ BAS_B_bas_alans + 2
 BAS_B_bas_fp     equ BAS_B_bas_almsg + OS88UI_AMAX + 2
@@ -1050,3 +1073,17 @@ bas_alans       equ os88_image_end + BAS_B_bas_alans  ; word: 1..3, or 0 for
                                     ; a DISMISSED alert (SPEC.md 150.37)
 bas_almsg       equ os88_image_end + BAS_B_bas_almsg  ; the message, NUL-
                                     ; terminated and CLIPPED to OS88UI_AMAX
+bas_mset        equ os88_image_end + BAS_B_bas_mset   ; the run-time menu set
+bas_mitems      equ os88_image_end + BAS_B_bas_mitems ; item ptr arrays
+bas_midx        equ os88_image_end + BAS_B_bas_midx   ; ...and each item's
+                                    ; INDEX in m$(), which is what MENU(0)
+                                    ; answers (node [300] numbers titles,
+                                    ; accessory slots and "" alike)
+bas_mtext       equ os88_image_end + BAS_B_bas_mtext  ; the stable text
+bas_mon         equ os88_image_end + BAS_B_bas_mon    ; a program bar is up
+bas_mhand       equ os88_image_end + BAS_B_bas_mhand  ; ON MENU GOSUB's proc
+bas_msel        equ os88_image_end + BAS_B_bas_msel   ; MENU(0)
+bas_mwi         equ os88_image_end + BAS_B_bas_mwi    ; the walk's state: too
+bas_mwm         equ os88_image_end + BAS_B_bas_mwm    ; many values for the
+bas_mwn         equ os88_image_end + BAS_B_bas_mwn    ; registers, and this is
+bas_mwtop       equ os88_image_end + BAS_B_bas_mwtop  ; not a hot path

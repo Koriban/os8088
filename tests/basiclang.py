@@ -1093,6 +1093,64 @@ PART38 = [
     ("PRINT i",                          "3"),
 ]
 
+# --- MENU m$() (SPEC.md 150.38) -----------------------------------------
+# WHAT THIS DOES NOT ASSERT, said first because it matters more than what it
+# does: THE BAR'S VISIBLE TEXT. A menu bar is CHROME, and this row reads the
+# console BUFFER out of memory - so `Plot` and `Zap` appearing on the glass
+# is exactly the thing it cannot see. That is this repository's own standing
+# hazard (a values-only gate is blind to the chrome; sheetmmenu once passed
+# 8 of 8 with the bar in rubble), and reading it wants glass.py's glyph
+# match over the bar strip, which wants VRAM access this harness does not
+# have yet. It is owed, and it is named here rather than left to be assumed.
+#
+# WHAT IT DOES ASSERT: that the whole builder RUNS - the array walk, the
+# text copies into the stable arena, the pointer tables, OSAPI_MENU_SET -
+# and that the program carries on afterwards, which a builder that walked
+# off its array or filled its arena would not allow.
+PART45 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("DIM m$(6)",                        None),
+    ('m$(0) = "Plot"',                   None),
+    ('m$(1) = " Draw "',                 None),
+    ('m$(2) = ""',                       None),
+    ('m$(3) = "Zap"',                    None),
+    ('m$(4) = " Kill "',                 None),
+    ('m$(5) = ""',                       None),
+    ("MENU m$()",                        None),
+    ("PRINT 7",                          "7"),
+]
+
+PART46 = [
+    ("CLS",                              None),
+    ("n = 1",                            None),
+    ("MENU n()",
+     "Error at line 3: MENU wants a DIMmed string array, as MENU m$()"),
+]
+
+# FOUR PROGRAM MENUS, where the bar has room for three beside File and Run.
+# Refused BY NAME at the fourth rather than dropped: MENU_APPMAX's own
+# overflow is SILENT in the kernel, and a bar quietly missing its last menu
+# is the wrong answer 150.7 exists to stop.
+PART47 = [
+    ("CLS",                              None),
+    ("DIM m$(11)",                       None),
+    ('m$(0) = "A"',                      None),
+    ('m$(1) = " a "',                    None),
+    ('m$(2) = ""',                       None),
+    ('m$(3) = "B"',                      None),
+    ('m$(4) = " b "',                    None),
+    ('m$(5) = ""',                       None),
+    ('m$(6) = "C"',                      None),
+    ('m$(7) = " c "',                    None),
+    ('m$(8) = ""',                       None),
+    ('m$(9) = "D"',                      None),
+    ('m$(10) = " d "',                   None),
+    ('m$(11) = ""',                      None),
+    ("MENU m$()",
+     "Error at line 15: MENU fits three menus beside File and Run"),
+]
+
 # --- ALERT (SPEC.md 150.37) ---------------------------------------------
 # THE FIRST STATEMENT THAT CARRIES A VALUE BACK, and the seam's data path is
 # the whole subject. `b` is 7 before the ALERT and 0 after it, so printing 0
@@ -1163,7 +1221,8 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
           PART36, PART37)
-WAVE4 = (PART38, PART39, PART40, PART41, PART42, PART43, PART44)
+WAVE4 = (PART38, PART39, PART40, PART41, PART42, PART43, PART44,
+         PART45, PART46, PART47)
 PARTS = EARLY + LATE + W3TAIL + WAVE4
 
 if "--early" in sys.argv:
