@@ -7039,7 +7039,7 @@ $(BUILD)/basic.bin: apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
                     apps/basic/baslang.inc apps/basic/bascomp.inc apps/os88fp.inc \
                     apps/os88dec.inc \
                     | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/basic/basic.asm
+	$(NASM) -f bin -w+error -I apps/ -DBAS_RESIDENT -o $@ apps/basic/basic.asm
 	@echo "basic:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/basic.o88: $(BUILD)/basic.bin tools/os88pkg.py $(PKGZSTAMP)

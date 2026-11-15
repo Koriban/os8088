@@ -25,6 +25,17 @@
 ; pointed at the reader.)
 ; =============================================================================
 
+; --- the module switch, asserted BEFORE anything tests it (SPEC.md 150.39) --
+; One of these must be defined, and the Makefile passes it. Without the
+; assertion a typo in the knob assembles the compile-time half into NEITHER
+; half, and the package jumps into unmapped memory and freezes the whole VM -
+; which is exactly how SHEET's split failed, with a stopped desktop clock
+; rather than an app error.
+%ifndef BAS_OVERLAY
+ %ifndef BAS_RESIDENT
+  %error "basic.asm: define BAS_OVERLAY (bascomp.inc becomes a module) or BAS_RESIDENT (it stays in the image) - SPEC.md 150.39"
+ %endif
+%endif
 %include "os88api.inc"
 
     OS88_HEADER 'BASIC', bas_entry, 0, OS88_HIGH | OS88_HIGHMEM

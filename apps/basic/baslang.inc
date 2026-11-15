@@ -331,7 +331,23 @@ BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 ; is included here, so the binary is the same program laid out in a
 ; different order. The cut itself is the next step, and the closure that
 ; chose these seventy left only TEN vectors (150.39).
+; EITHER IN `.modc` OR IN `.text`, and the Makefile chooses with -D. The
+; switch comes from the COMMAND LINE on purpose: SPEC.md 150.39's second trap
+; is a `%define` placed after the `%ifdef`s that test it - NASM's
+; preprocessor is one pass - and a -D is defined before line 1 of anything,
+; so that trap cannot fire here at all.
+;
+; `vstart=0` because the module is fetched into a claim of its own and its
+; labels are offsets from ITS base; NASM coalesces every `.text` fragment and
+; puts `.modc` after all of them, so the resident image's recorded length IS
+; the cut point and tools/os88ovl.py needs telling nothing (SPEC.md 68.10).
+%ifdef BAS_OVERLAY
+section .modc vstart=0 align=1
 %include "basic/bascomp.inc"
+section .text
+%else
+%include "basic/bascomp.inc"
+%endif
 bas_frmat:
     push ax
     mov ax, bx
