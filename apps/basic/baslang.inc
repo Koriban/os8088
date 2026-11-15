@@ -3131,6 +3131,50 @@ bas_sayint:
 ; --- bas_err - SI = a NUL reason. Say it with the line number and stop -------
 ; SPEC.md 150.7's discipline: a refusal is reported BY NAME, with its reason,
 ; at the line that has it - never as a wrong answer and never silently.
+%ifdef BAS_OVERLAY
+; --- the shims the module calls back through (SPEC.md 150.39) -------------
+; A FAR CALL NEEDS A FAR RETURN. Every routine below ends in a NEAR `ret`,
+; so a vector cannot name it directly: it names a shim whose body is a
+; plain `call` and whose own return is `retf`. That is the whole shim, and
+; 150.39's third trap is an edit that turns such a body into a far call to
+; itself - which is why the conversion was scoped to bascomp.inc, where an
+; audit first showed none of these nine names is DEFINED.
+;
+; FLAGS SURVIVE: neither `call` nor `retf` touches them, so bas_isstrarr's
+; CF and bas_arrat's reach the module unchanged.
+;
+; NO RETURN-REBUILDING THUNK, which SHEET's module needs and this one does
+; not - and the reason is the CALLEE LIST, not optimism. All nine are pure
+; computation or a console draw; none allocates, yields or fetches, so the
+; module cannot move while one of them runs. THAT IS A RULE FOR THIS TABLE:
+; a vector whose callee could move the heap needs the thunk first.
+%macro BASX 1
+bas_x_%1:
+    call %1
+    retf
+%endmacro
+    BASX bas_err
+    BASX bas_upper
+    BASX bas_isstrarr
+    BASX bas_arrat
+    BASX bas_varat
+    BASX fp_pack_a
+    BASX fp_atof
+    BASX fp_i2a
+    BASX fp_a2i
+bas_v_first:
+bas_v_bas_err:      dw bas_x_bas_err, 0
+bas_v_bas_upper:    dw bas_x_bas_upper, 0
+bas_v_bas_isstrarr: dw bas_x_bas_isstrarr, 0
+bas_v_bas_arrat:    dw bas_x_bas_arrat, 0
+bas_v_bas_varat:    dw bas_x_bas_varat, 0
+bas_v_fp_pack_a:    dw bas_x_fp_pack_a, 0
+bas_v_fp_atof:      dw bas_x_fp_atof, 0
+bas_v_fp_i2a:       dw bas_x_fp_i2a, 0
+bas_v_fp_a2i:       dw bas_x_fp_a2i, 0
+bas_v_end:
+%endif
+
 bas_err:
     push si
     mov si, bas_s_errat

@@ -36,6 +36,33 @@
   %error "basic.asm: define BAS_OVERLAY (bascomp.inc becomes a module) or BAS_RESIDENT (it stays in the image) - SPEC.md 150.39"
  %endif
 %endif
+; --- the module's two call macros (SPEC.md 150.39) -------------------------
+; SHOUT  - a call from the compile-time half into the resident half.
+; SHOUTR - the same as a TAIL call, which is all `jmp bas_err` ever was.
+;
+; RESIDENT THEY ARE THE INSTRUCTIONS THEY REPLACE - `call X` and `jmp X` -
+; so the shipped build is byte-for-byte what it was before the seam existed,
+; and that is the check this increment is verified by.
+;
+; In the module they cannot be: SPEC.md 68.10 keeps DS on the package and
+; moves CS, so every route back is a FAR call through a vector. One macro
+; each so the two builds cannot drift.
+%ifdef BAS_OVERLAY
+  %macro SHOUT 1
+    call far [bas_v_%1]
+  %endmacro
+  %macro SHOUTR 1
+    call far [bas_v_%1]
+    ret
+  %endmacro
+%else
+  %macro SHOUT 1
+    call %1
+  %endmacro
+  %macro SHOUTR 1
+    jmp %1
+  %endmacro
+%endif
 %include "os88api.inc"
 
     OS88_HEADER 'BASIC', bas_entry, 0, OS88_HIGH | OS88_HIGHMEM
@@ -97,6 +124,23 @@ bas_entry:
     ; AM_ONCMD handler at ON MENU is resumed from here, and here may take the
     ; lock for a stated burst. Installed from the entry proc after
     ; OSAPI_WM_CREATE, which is this slot's own instruction.
+%ifdef BAS_OVERLAY
+    ; --- the module's vectors (SPEC.md 150.39) --------------------------
+    ; The OFFSET half is assembled in; only the SEGMENT is a run-time fact,
+    ; and it is this package's own CS. Filled in one loop so a vector added
+    ; later cannot be the one somebody forgot.
+    push ax
+    push bx
+    mov ax, cs
+    mov bx, bas_v_first
+.vfill:
+    mov [bx + 2], ax
+    add bx, 4
+    cmp bx, bas_v_end
+    jb .vfill
+    pop bx
+    pop ax
+%endif
     mov [bas_wn], bx                ; ...and the window is kept, because
     mov ax, bas_onwake              ; OSAPI_WM_WAKE wants it in BX and
     call OSAPI_WM_ONWAKE            ; bas_exec has no spare register to carry
@@ -368,7 +412,11 @@ bas_oncmd:
     jnz .stop                       ; item 1 = Stop
     push si                         ; item 0 = Run: compile and run the text
     mov byte [bas_bad], 0           ; in the editor, for real
-    call bas_run
+    call bas_run                    ; ...which COMPILES and returns
+    cmp byte [bas_bad], 0           ; ...and the resident half RUNS it
+    jne .ranot                      ; (SPEC.md 150.39): a refusal has
+    call bas_exec                   ; already said so and there is nothing
+.ranot:                             ; to execute
     pop si
     jmp .redraw
 .stop:

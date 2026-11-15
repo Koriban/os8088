@@ -101,13 +101,24 @@ bas_run:
     jne .done
     mov al, OP_END
     call bas_emit
-    cmp byte [bas_bad], 0
-    jne .done
-    call bas_exec
+    ; ...AND THAT IS WHERE THE COMPILER STOPS. bas_exec used to be called
+    ; from here; it is the RESIDENT half's now (SPEC.md 150.39). Two
+    ; reasons, and the second is the one that matters: it takes bas_exec
+    ; off the module's vector list - leaving nine callees that cannot move
+    ; the heap, which is what makes the plain far call safe without a
+    ; return-rebuilding thunk - and it means the module is not even LOADED
+    ; while the program runs, which is what an on-demand module is for.
+    ;
+    ; THE `jmp` IS NOT DECORATION AND CUTTING THE CALL ALMOST LOST IT. The
+    ; lines removed were `jne .done / call bas_exec / jmp short .done`, and
+    ; the jump is what steps OVER .unclosed. Without it every program fell
+    ; into "nothing may still be open" after a clean compile - all four soak
+    ; rows red, and the FAST TIER GREEN at 88 of 88, because no fast row
+    ; compiles a program. SPEC.md 150.39 says that in as many words.
     jmp short .done
 .unclosed:
     mov si, bas_e_open
-    jmp bas_err
+    SHOUTR bas_err
 .done:
     ret
 
@@ -336,7 +347,7 @@ bas_c_stmt:
     jne .elemnoeq
     inc word [bas_src]
     ; **THE ARRAY'S KIND DECIDES**, as a scalar's spelling does (150.28)
-    call bas_isstrarr
+    SHOUT bas_isstrarr
     jc .elemnum
     call bas_c_str                  ; ...text, copied into the element
     cmp byte [bas_bad], 0
@@ -362,7 +373,7 @@ bas_c_stmt:
 .elemnoeq:
     pop bx
     mov si, bas_e_stmt
-    jmp bas_err
+    SHOUTR bas_err
 .elempop:
     pop bx
     ret
@@ -406,7 +417,7 @@ bas_c_stmt:
     ret
 .nostmt:
     mov si, bas_e_stmt
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- IF <cond> THEN <stmt> [ELSE <stmt>] (SPEC.md 150) ----------------------
 ; ONE LINE. The block form - IF/THEN on a line of its own, ENDIF below it -
@@ -582,10 +593,10 @@ bas_c_stmt:
     jmp bas_blksetex
 .elifnothen:
     mov si, bas_e_then
-    jmp bas_err
+    SHOUTR bas_err
 .elifelse:
     mov si, bas_e_elifelse
-    jmp bas_err
+    SHOUTR bas_err
 ; --- DO ... LOOP [UNTIL c] and REPEAT ... UNTIL c (SPEC.md 150) ------------
 ; BOTH TEST AT THE BOTTOM, which is what distinguishes them from WHILE: the
 ; body always runs at least once. They are the same loop with two spellings
@@ -627,7 +638,7 @@ bas_c_stmt:
     ret
 .exitnoif:
     mov si, bas_e_exitif
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- PROCEDURE / RETURN / LOCAL, and the three spellings of a call ---------
 ; (SPEC.md 150.23)
@@ -643,7 +654,7 @@ bas_c_stmt:
     jmp bas_callemit
 .gosnoname:
     mov si, bas_e_gosname
-    jmp bas_err
+    SHOUTR bas_err
 .atcall:
     inc word [bas_src]              ; over the '@'
     call bas_word
@@ -699,10 +710,10 @@ bas_c_stmt:
     ret
 .procin:
     mov si, bas_e_prcin
-    jmp bas_err
+    SHOUTR bas_err
 .procnoname:
     mov si, bas_e_prcname
-    jmp bas_err
+    SHOUTR bas_err
 
 .sreturn:
     cmp word [bas_inprc], 0
@@ -752,13 +763,13 @@ bas_c_stmt:
     jmp bas_emit
 .retnoval:
     mov si, bas_e_fnval
-    jmp bas_err
+    SHOUTR bas_err
 .retvalue:
     mov si, bas_e_prcval
-    jmp bas_err
+    SHOUTR bas_err
 .retout:
     mov si, bas_e_retout
-    jmp bas_err
+    SHOUTR bas_err
 
 .sendfunc:
     call bas_blkpop
@@ -812,10 +823,10 @@ bas_c_stmt:
     ret
 .locout:
     mov si, bas_e_locout
-    jmp bas_err
+    SHOUTR bas_err
 .locnoname:
     mov si, bas_e_locname
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- GOTO <label> (SPEC.md 150.22) ----------------------------------------
 .goto:
@@ -847,7 +858,7 @@ bas_c_stmt:
     jmp bas_fwdadd                  ; BX = the slot, DI/CX = the name
 .gotonolbl:
     mov si, bas_e_gotolbl
-    jmp bas_err
+    SHOUTR bas_err
 
 .do:
     mov bx, [bas_opn]
@@ -1063,7 +1074,7 @@ bas_c_stmt:
     ret
 .caseaft:
     mov si, bas_e_caseaft
-    jmp bas_err
+    SHOUTR bas_err
 
 .sdefault:
     call bas_blkpop
@@ -1084,7 +1095,7 @@ bas_c_stmt:
     jmp bas_blksetex
 .defagain:
     mov si, bas_e_defagain
-    jmp bas_err
+    SHOUTR bas_err
 
 .sendsel:
     call bas_blkpop
@@ -1249,19 +1260,19 @@ bas_c_stmt:
     jmp bas_exitshere
 .nextvar:
     mov si, bas_e_nextvar
-    jmp bas_err
+    SHOUTR bas_err
 .fornov:
     mov si, bas_e_forvar
-    jmp bas_err
+    SHOUTR bas_err
 .forneq:
     mov si, bas_e_foreq
-    jmp bas_err
+    SHOUTR bas_err
 .fornoto:
     mov si, bas_e_forto
-    jmp bas_err
+    SHOUTR bas_err
 .nothen:
     mov si, bas_e_then
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- WHILE <cond> ... WEND (SPEC.md 150) ------------------------------------
 ; The shape every loop here takes: the condition is re-tested at the TOP, so
@@ -1309,7 +1320,7 @@ bas_c_stmt:
     jmp bas_exitshere               ; ...as does every EXIT IF it holds
 .wrongblk:
     mov si, bas_e_wrongblk
-    jmp bas_err
+    SHOUTR bas_err
 .nokw:
     mov si, [bas_src]
     mov al, [si]
@@ -1321,7 +1332,7 @@ bas_c_stmt:
     cmp al, '~'                     ; ...nor is '~' (SPEC.md 150.27)
     je .tilde
     mov si, bas_e_stmt
-    jmp bas_err
+    SHOUTR bas_err
 .rem:
     call bas_toeol                  ; the rest of the line is a comment
     ret
@@ -1340,7 +1351,7 @@ bas_c_stmt:
     mov bx, [bas_narr]
     cmp bx, BAS_ARR_MAX
     jae .dimmax
-    call bas_arrat
+    SHOUT bas_arrat
     mov [si + BAS_ARR_SRC], di
     mov [si + BAS_ARR_LEN], cx
     call bas_bopen
@@ -1348,7 +1359,7 @@ bas_c_stmt:
     call bas_dimone                 ; AX = low, DX = count
     jc .x
     mov bx, [bas_narr]
-    call bas_arrat
+    SHOUT bas_arrat
     mov [si + BAS_ARR_LO0], ax
     mov [si + BAS_ARR_N0], dx
     mov word [si + BAS_ARR_DIM], 1
@@ -1362,7 +1373,7 @@ bas_c_stmt:
     call bas_dimone
     jc .x
     mov bx, [bas_narr]
-    call bas_arrat
+    SHOUT bas_arrat
     mov [si + BAS_ARR_LO1], ax
     mov [si + BAS_ARR_N1], dx
     mov word [si + BAS_ARR_DIM], 2
@@ -1371,7 +1382,7 @@ bas_c_stmt:
     jc .x
     ; --- how many elements, and does the arena hold them? ---------------
     mov bx, [bas_narr]
-    call bas_arrat
+    SHOUT bas_arrat
     mov ax, [si + BAS_ARR_N0]
     push si
     mul word [si + BAS_ARR_N1]      ; DX:AX, and DX must be 0
@@ -1396,16 +1407,16 @@ bas_c_stmt:
     ret
 .dimnoname:
     mov si, bas_e_arrname
-    jmp bas_err
+    SHOUTR bas_err
 .dimdup:
     mov si, bas_e_arrdup
-    jmp bas_err
+    SHOUTR bas_err
 .dimmax:
     mov si, bas_e_arrmax
-    jmp bas_err
+    SHOUTR bas_err
 .dimfull:
     mov si, bas_e_arrfull
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- OPTION BASE 0|1 ---------------------------------------------------
 .option:
@@ -1427,13 +1438,13 @@ bas_c_stmt:
     ret
 .optbad:
     mov si, bas_e_stmt
-    jmp bas_err
+    SHOUTR bas_err
 .optlate:
     mov si, bas_e_basedim
-    jmp bas_err
+    SHOUTR bas_err
 .optval:
     mov si, bas_e_baseval
-    jmp bas_err
+    SHOUTR bas_err
 
 .tilde:
     inc word [bas_src]
@@ -1476,7 +1487,7 @@ bas_c_stmt:
     jmp bas_emit                    ; the count rides with the op
 .otoomany:
     mov si, bas_e_oargs
-    jmp bas_err
+    SHOUTR bas_err
 .print:
     call bas_skipsp
     mov si, [bas_src]
@@ -1564,10 +1575,10 @@ bas_c_stmt:
     ret
 .clrarr:
     mov si, bas_e_clrarr            ; the reference says it in as many words:
-    jmp bas_err                     ; "Arrays cannot be used with CLR, see
+    SHOUTR bas_err                     ; "Arrays cannot be used with CLR, see
 .clrnoname:                         ; ARRAYFILL"
     mov si, bas_e_swapname
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- ARRAYFILL x(), aexp (SPEC.md 150.33) -------------------------------
 ; The value is compiled ONCE, before the op, so the statement's cost does
@@ -1603,13 +1614,13 @@ bas_c_stmt:
     ret
 .afillstr:
     mov si, bas_e_afillstr          ; node [73]'s own limit, and 150.28's:
-    jmp bas_err                     ; 512 copies of one string, each a root
+    SHOUTR bas_err                     ; 512 copies of one string, each a root
 .afillno:
     mov si, bas_e_afillno
-    jmp bas_err
+    SHOUTR bas_err
 .afillnoname:
     mov si, bas_e_swapname
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- SWAP a,b and SWAP x(),y() (SPEC.md 150.34) -------------------------
 ; Both operands are read by one helper, which answers WHAT each one is; the
@@ -1650,10 +1661,10 @@ bas_c_stmt:
     ret
 .swapkind:
     mov si, bas_e_swapkind
-    jmp bas_err
+    SHOUTR bas_err
 .swapmix:
     mov si, bas_e_swapmix
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- LSET / RSET a$ = b$ (SPEC.md 150.35) -------------------------------
 ; ONE BODY, and which opcode it ends in is decided before the parse starts,
@@ -1696,15 +1707,15 @@ bas_c_stmt:
 .lsetnotstr:
     pop ax
     mov si, bas_e_lsetstr
-    jmp bas_err
+    SHOUTR bas_err
 .lsetnoeq:
     pop ax
     pop ax
     mov si, bas_e_lseteq
-    jmp bas_err
+    SHOUTR bas_err
 .erase:
     mov si, bas_e_erase
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- ON MENU (SPEC.md 150.36) -------------------------------------------
 ; Bare, this wave. `ON MENU GOSUB handler` registers one and is refused by
@@ -1749,7 +1760,7 @@ bas_c_stmt:
 .ongpopbad:
     pop bx
     mov si, bas_e_onghand
-    jmp bas_err
+    SHOUTR bas_err
 .ongfwd:
     ; THE SAME FORWARD RECORD A CALL MAKES, so bas_calfix resolves it and a
     ; handler written BELOW the ON MENU GOSUB works - which is the ordinary
@@ -1781,16 +1792,16 @@ bas_c_stmt:
     ret
 .ongfull:
     mov si, bas_e_calmax
-    jmp bas_err
+    SHOUTR bas_err
 .onbadarg:
     mov si, bas_e_onmarg
-    jmp bas_err
+    SHOUTR bas_err
 .onemit:
     mov al, OP_ONMENU
     jmp bas_emit
 .onbad:
     mov si, bas_e_onwhat
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- ALERT icon, message$, default, button$, choice (SPEC.md 150.37) ----
 ; Five operands, and the first four are pushed IN ORDER so the op pops them
@@ -1840,7 +1851,7 @@ bas_c_stmt:
     ret
 .alnovar:
     mov si, bas_e_alvar
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- MENU m$() (SPEC.md 150.38) ------------------------------------------
 ; The array's NAME decides, as everywhere in this chapter: it must be a
@@ -1869,7 +1880,7 @@ bas_c_stmt:
     ret
 .mennoarr:
     mov si, bas_e_menarr
-    jmp bas_err
+    SHOUTR bas_err
 .x:
     ret
 
@@ -1932,7 +1943,7 @@ bas_c_sfact:
     ; them, so the copy onto the stack is already right (SPEC.md 150.31)
     call bas_arrfind
     jc .nostrarr
-    call bas_isstrarr
+    SHOUT bas_isstrarr
     jc .notstr                      ; a numeric array is not text
     jmp .selem
 .nostrarr:
@@ -2101,13 +2112,13 @@ bas_c_sfact:
     ret
 .noquote:
     mov si, bas_e_strquote
-    jmp bas_err
+    SHOUTR bas_err
 .noclose:
     mov si, bas_e_paren
-    jmp bas_err
+    SHOUTR bas_err
 .notstr:
     mov si, bas_e_strtype
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- bas_wantnum - refuse if bas_c_rel just left TEXT on the stack ------
 ; out: CF=1 and refused by name. Every site that needs a number says so -
@@ -2117,7 +2128,7 @@ bas_wantnum:
     cmp byte [bas_restype], 0
     je .wok
     mov si, bas_e_strtype
-    call bas_err
+    SHOUT bas_err
     stc
     ret
 .wok:
@@ -2138,7 +2149,7 @@ bas_bopen:
     ret
 .bono:
     mov si, bas_e_paren
-    call bas_err
+    SHOUT bas_err
     stc
     ret
 
@@ -2152,7 +2163,7 @@ bas_bcomma:
     ret
 .bcno:
     mov si, bas_e_comma
-    call bas_err
+    SHOUT bas_err
     stc
     ret
 
@@ -2166,7 +2177,7 @@ bas_bclose:
     ret
 .bzno:
     mov si, bas_e_paren
-    call bas_err
+    SHOUT bas_err
     stc
     ret
 
@@ -2182,15 +2193,15 @@ bas_emitnum:
     pop ax
     push ax
     push di
-    call fp_i2a
+    SHOUT fp_i2a
     mov di, bas_ops
     add di, [bas_opn]
-    call fp_pack_a
+    SHOUT fp_pack_a
     add word [bas_opn], 8
     cmp word [bas_opn], BAS_OPS_MAX - 10
     jb .enout
     mov si, bas_e_long
-    call bas_err
+    SHOUT bas_err
 .enout:
     pop di
     pop ax
@@ -2366,7 +2377,7 @@ bas_c_relop:
     cmp al, '='
     je .eq
     mov si, bas_e_expr
-    call bas_err
+    SHOUT bas_err
     jmp .rout
 .lt:
     cmp ah, '='
@@ -2545,7 +2556,7 @@ bas_c_fact:
     ; not, which is what lets arrays cost no run-time type word.
     call bas_arrfind
     jc .notarray
-    call bas_isstrarr               ; ...and a `$` array is not a number
+    SHOUT bas_isstrarr               ; ...and a `$` array is not a number
     jnc .elemstr
     jmp .elem
 .b_msel:
@@ -2561,10 +2572,10 @@ bas_c_fact:
     jmp bas_emit
 .b_mselbad:
     mov si, bas_e_mselarg
-    jmp bas_err
+    SHOUTR bas_err
 .elemstr:
     mov si, bas_e_strtype
-    jmp bas_err
+    SHOUTR bas_err
 .notarray:
     ; --- not a function, so a VARIABLE (SPEC.md 150.4, wave 2) -------------
     ; bas_word left the name in DI/CX and bas_wordis preserved them. A name
@@ -2631,7 +2642,7 @@ bas_c_fact:
 .b_bnotarr:
     pop ax
     mov si, bas_e_notarr
-    jmp bas_err
+    SHOUTR bas_err
 
 .b_len:
     mov al, OP_SLEN
@@ -2670,10 +2681,10 @@ bas_c_fact:
     jmp bas_callemit
 .mixed:
     mov si, bas_e_strtype
-    jmp bas_err
+    SHOUTR bas_err
 .noopen:
     mov si, bas_e_paren
-    jmp bas_err
+    SHOUTR bas_err
 .notword:
     cmp al, '"'                     ; **NAME THE ACTUAL MISTAKE**: a piece of
     je .mixed                       ; text where arithmetic wants a number is
@@ -2688,7 +2699,7 @@ bas_c_fact:
     ; advanced past what it consumed, which is exactly the scanner's job too,
     ; so the two agree by construction rather than by two sets of rules.
     mov si, [bas_src]
-    call fp_atof
+    SHOUT fp_atof
     jc .bad
     mov [bas_src], si
     mov al, OP_PUSHN
@@ -2697,12 +2708,12 @@ bas_c_fact:
     jne .x
     mov di, bas_ops
     add di, [bas_opn]
-    call fp_pack_a                  ; the eight bytes, into the op stream
+    SHOUT fp_pack_a                  ; the eight bytes, into the op stream
     add word [bas_opn], 8
     cmp word [bas_opn], BAS_OPS_MAX - 10
     jb .x
     mov si, bas_e_long
-    jmp bas_err
+    SHOUTR bas_err
 .neg:
     inc word [bas_src]
     call bas_c_fact
@@ -2724,10 +2735,10 @@ bas_c_fact:
     ret
 .noclose:
     mov si, bas_e_paren
-    jmp bas_err
+    SHOUTR bas_err
 .bad:
     mov si, bas_e_expr
-    jmp bas_err
+    SHOUTR bas_err
 
 ; -----------------------------------------------------------------------------
 ; bas_varfind - the index of the variable named at DI/CX, created if new
@@ -2760,7 +2771,7 @@ bas_varfind:
     push bx
     push cx
     push di
-    call bas_varat                  ; SI = the entry. NOT `mul`: DX is the
+    SHOUT bas_varat                  ; SI = the entry. NOT `mul`: DX is the
                                     ; table's count and mul writes DX:AX, so
                                     ; the scan's own bound would be gone after
                                     ; the first entry and every name would be
@@ -2772,10 +2783,10 @@ bas_varfind:
     or cx, cx
     jz .hitpop
     mov al, [si]
-    call bas_upper
+    SHOUT bas_upper
     mov ah, al
     mov al, [di]
-    call bas_upper
+    SHOUT bas_upper
     cmp al, ah
     jne .nextpop
     inc si
@@ -2798,7 +2809,7 @@ bas_varfind:
 .new:
     cmp dx, BAS_VAR_MAX
     jae .full
-    call bas_varat                  ; SI = the new entry; BX == DX here, the
+    SHOUT bas_varat                  ; SI = the new entry; BX == DX here, the
                                     ; scan having run the table out
     mov [si + BAS_VAR_SRC], di
     mov [si + BAS_VAR_LEN], cx
@@ -2820,7 +2831,7 @@ bas_varfind:
     ret
 .full:
     mov si, bas_e_vars
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .out
 
@@ -2867,7 +2878,7 @@ bas_blkpush:
     ret
 .full:
     mov si, bas_e_deepblk
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .out
 
@@ -2891,7 +2902,7 @@ bas_blkpop:
     ret
 .none:
     mov si, bas_e_noblk
-    call bas_err
+    SHOUT bas_err
     stc
     pop si
     ret
@@ -2912,7 +2923,7 @@ bas_for_step:
     je .maybe
 .one:
     mov ax, 1                       ; no STEP: up by one
-    call fp_i2a
+    SHOUT fp_i2a
     jmp .emit
 .maybe:
     call bas_word
@@ -2928,7 +2939,7 @@ bas_for_step:
     inc word [bas_src]
 .nonneg:
     mov si, [bas_src]
-    call fp_atof                    ; A = the magnitude
+    SHOUT fp_atof                    ; A = the magnitude
     jc .notlit
     mov [bas_src], si
     or bx, bx
@@ -2941,7 +2952,7 @@ bas_for_step:
     jne .sout
     mov di, bas_ops
     add di, [bas_opn]
-    call fp_pack_a
+    SHOUT fp_pack_a
     add word [bas_opn], 8
     mov cx, OP_LE
     cmp byte [fp_as], 0
@@ -2957,7 +2968,7 @@ bas_for_step:
     jmp .one
 .notlit:
     mov si, bas_e_forstep
-    call bas_err
+    SHOUT bas_err
     jmp .sout
 
 ; --- bas_exitshere - the loop just closed: its EXIT IFs land on this op ----
@@ -2980,7 +2991,7 @@ bas_blkinloop:
     ret
 .inone:
     mov si, bas_e_exitloop
-    call bas_err
+    SHOUT bas_err
     stc
     ret
 
@@ -3033,7 +3044,7 @@ bas_loopsame:
     ret
 .lsno:
     mov si, bas_e_lblloop
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .lsout
 
@@ -3237,10 +3248,10 @@ bas_lblfind:
     or cx, cx
     jz .hitpop
     mov al, [si]
-    call bas_upper
+    SHOUT bas_upper
     mov ah, al
     mov al, [di]
-    call bas_upper
+    SHOUT bas_upper
     cmp al, ah
     jne .nextpop
     inc si
@@ -3296,11 +3307,11 @@ bas_lbldef:
     ret
 .lfull:
     mov si, bas_e_lblmax
-    call bas_err
+    SHOUT bas_err
     jmp .dout
 .dup:
     mov si, bas_e_lbldup
-    call bas_err
+    SHOUT bas_err
     jmp .dout
 
 ; --- bas_fwdadd - a GOTO at slot BX still owed the label DI/CX -----------
@@ -3330,7 +3341,7 @@ bas_fwdadd:
     ret
 .ffull:
     mov si, bas_e_fwdmax
-    call bas_err
+    SHOUT bas_err
     jmp .fout
 
 ; --- bas_fwdfix - resolve every GOTO still owed a label ------------------
@@ -3387,11 +3398,11 @@ bas_fwdfix:
     ret
 .nolbl:
     mov si, bas_e_nolbl
-    call bas_err
+    SHOUT bas_err
     jmp .fdone
 .wrongloop:
     mov si, bas_e_lblloop
-    call bas_err
+    SHOUT bas_err
     jmp .fdone
 
 ; -----------------------------------------------------------------------------
@@ -3463,10 +3474,10 @@ bas_prcfind:
     or cx, cx
     jz .hitpop
     mov al, [si]
-    call bas_upper
+    SHOUT bas_upper
     mov ah, al
     mov al, [di]
-    call bas_upper
+    SHOUT bas_upper
     cmp al, ah
     jne .nextpop
     inc si
@@ -3520,11 +3531,11 @@ bas_prcdef:
     ret
 .pfull:
     mov si, bas_e_prcmax
-    call bas_err
+    SHOUT bas_err
     jmp .dout
 .dup:
     mov si, bas_e_prcdup
-    call bas_err
+    SHOUT bas_err
     jmp .dout
 
 ; --- bas_prckind - the procedure being compiled returns a value if DX -----
@@ -3560,15 +3571,15 @@ bas_emitzero:
     cmp byte [bas_bad], 0
     jne .zout
     xor ax, ax
-    call fp_i2a
+    SHOUT fp_i2a
     mov di, bas_ops
     add di, [bas_opn]
-    call fp_pack_a
+    SHOUT fp_pack_a
     add word [bas_opn], 8
     cmp word [bas_opn], BAS_OPS_MAX - 10
     jb .zout
     mov si, bas_e_long
-    call bas_err
+    SHOUT bas_err
 .zout:
     pop di
     pop ax
@@ -3618,7 +3629,7 @@ bas_callemit:
 .cwrongn:
     pop bx
     mov si, bas_e_argcount
-    call bas_err
+    SHOUT bas_err
     jmp .cout
 .cwrongk:
     pop bx
@@ -3660,7 +3671,7 @@ bas_callemit:
     ret
 .cfull:
     mov si, bas_e_calmax
-    call bas_err
+    SHOUT bas_err
     jmp .cout
 
 ; --- bas_prcparams - the PROCEDURE's parameter list and its prologue ------
@@ -3790,19 +3801,19 @@ bas_prcparams:
     ret
 .pnoname:
     mov si, bas_e_locname
-    call bas_err
+    SHOUT bas_err
     jmp .pout
 .ptoomany:
     mov si, bas_e_prcargs
-    call bas_err
+    SHOUT bas_err
     jmp .pout
 .pdupname:
     mov si, bas_e_prcpdup
-    call bas_err
+    SHOUT bas_err
     jmp .pout
 .pnopar:
     mov si, bas_e_argpar
-    call bas_err
+    SHOUT bas_err
     jmp .pout
 
 ; --- bas_callargs - a call's (a, b) list; out: DX = how many -------------
@@ -3889,15 +3900,15 @@ bas_callargs:
     ret
 .atoomany:
     mov si, bas_e_prcargs
-    call bas_err
+    SHOUT bas_err
     jmp .aout
 .avarcall:
     mov si, bas_e_varcall
-    call bas_err
+    SHOUT bas_err
     jmp .aout
 .anopar:
     mov si, bas_e_argpar
-    call bas_err
+    SHOUT bas_err
     jmp .aout
 
 ; --- bas_argsfrom - bas_argsl <- the call record at SI ------------------
@@ -3954,7 +3965,7 @@ bas_varrefs:
     ret
 .vnone:
     mov si, bas_e_varname
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .vout
 
@@ -3973,10 +3984,10 @@ bas_kinderr:
     cmp byte [bas_calfn], 0
     je .wantsnone
     mov si, bas_e_wantfn            ; an expression, and it returns nothing
-    jmp bas_err
+    SHOUTR bas_err
 .wantsnone:
     mov si, bas_e_wantprc           ; a statement, and its value is stranded
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- bas_calfix - resolve every call still owed a procedure --------------
 ; Beside bas_fwdfix, where the program's text ends, for its reason.
@@ -4040,14 +4051,14 @@ bas_calfix:
     ret
 .noprc:
     mov si, bas_e_noprc
-    call bas_err
+    SHOUT bas_err
     jmp .fdone
 .nkind:
     call bas_kinderr
     jmp .fdone
 .nargs:
     mov si, bas_e_argcount
-    call bas_err
+    SHOUT bas_err
     jmp .fdone
 
 ; --- bas_frmat - SI = frame BX --------------------------------------------
@@ -4066,7 +4077,7 @@ bas_arrfind:
     push bx
     push cx
     push di
-    call bas_arrat
+    SHOUT bas_arrat
     cmp cx, [si + BAS_ARR_LEN]
     jne .nextpop
     mov si, [si + BAS_ARR_SRC]
@@ -4074,10 +4085,10 @@ bas_arrfind:
     or cx, cx
     jz .hitpop
     mov al, [si]
-    call bas_upper
+    SHOUT bas_upper
     mov ah, al
     mov al, [di]
-    call bas_upper
+    SHOUT bas_upper
     cmp al, ah
     jne .nextpop
     inc si
@@ -4160,12 +4171,12 @@ bas_swapone:
     ret
 .s1none:
     mov si, bas_e_swapname
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .s1out
 .s1noarr:
     mov si, bas_e_afillno
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .s1out
 
@@ -4209,7 +4220,7 @@ bas_c_subs:
     call bas_bclose
     jc .suout
     mov bx, [bas_acur]              ; ...and the count must match the DIM
-    call bas_arrat
+    SHOUT bas_arrat
     mov ax, [bas_asubs]
     cmp ax, [si + BAS_ARR_DIM]
     jne .sumis
@@ -4218,7 +4229,7 @@ bas_c_subs:
     jmp short .suout
 .sumis:
     mov si, bas_e_arrdim
-    call bas_err
+    SHOUT bas_err
 .subad:
     stc
 .suout:
@@ -4247,10 +4258,10 @@ bas_c_const:
     inc word [bas_src]
 .cnpos:
     mov si, [bas_src]
-    call fp_atof                    ; A = the magnitude, SI advanced
+    SHOUT fp_atof                    ; A = the magnitude, SI advanced
     jc .cnbad
     mov [bas_src], si
-    call fp_a2i
+    SHOUT fp_a2i
     jc .cnbad
     or bx, bx
     jz .cnout
@@ -4262,7 +4273,7 @@ bas_c_const:
     ret
 .cnbad:
     mov si, bas_e_expr
-    call bas_err
+    SHOUT bas_err
     stc
     pop si
     pop bx
@@ -4303,12 +4314,12 @@ bas_dimone:
     jmp short .d1out
 .d1order:
     mov si, bas_e_arrto
-    call bas_err
+    SHOUT bas_err
     stc
     jmp short .d1out
 .d1neg:
     mov si, bas_e_arrto
-    call bas_err
+    SHOUT bas_err
     stc
     jmp short .d1out
 .d1bad:
@@ -4446,7 +4457,7 @@ bas_varhidden:
     cmp dx, BAS_VAR_MAX
     jae .hfull
     mov bx, dx
-    call bas_varat
+    SHOUT bas_varat
     xor ax, ax
     mov [si + BAS_VAR_SRC], ax
     mov [si + BAS_VAR_LEN], ax
@@ -4466,7 +4477,7 @@ bas_varhidden:
     ret
 .hfull:
     mov si, bas_e_vars
-    call bas_err
+    SHOUT bas_err
     stc
     jmp .hout
 
@@ -4656,7 +4667,7 @@ bas_emitw:
 .wfull:
     pop bx
     mov si, bas_e_long
-    jmp bas_err
+    SHOUTR bas_err
 
 ; --- bas_patch - the word at op-stream offset BX becomes AX ------------------
 ; A forward jump's target is not known until its arm is compiled, so the two
@@ -4682,7 +4693,7 @@ bas_emit:
 .full:
     pop bx
     mov si, bas_e_long
-    jmp bas_err
+    SHOUTR bas_err
 
 ; -----------------------------------------------------------------------------
 ; bas_sayfp - A, onto the console, the way this language prints a number
