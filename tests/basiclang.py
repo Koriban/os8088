@@ -1283,6 +1283,130 @@ PART40 = [
      "Error at line 3: ON MENU is the only ON this wave knows"),
 ]
 
+# --- SPEC.md 150.40: DIM of an EXPRESSION ---------------------------------
+# The arena is handed out at RUN time now, so these are the parts that prove
+# a size the compiler could not know. Each has its own CLS and sentinel, and
+# ONE VALUE PER `PRINT` - no part in this file asserts a comma-separated line,
+# so the separator is not something these rows should be the first to assume.
+PART50 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    # --- the headline: a bound that is a variable ------------------------
+    ("n = 4",                            None),       # 3
+    ("DIM score(n)",                     None),       # 4
+    ("score(0) = 7",                     None),       # 5
+    ("score(4) = 9",                     None),       # 6  n is the TOP index
+    ("PRINT score(0) + score(4)",        "16"),       # 7
+    ("PRINT LBOUND(score)",              "0"),        # 8
+    ("PRINT UBOUND(score)",              "4"),        # 9
+    # --- an arithmetic bound, and `lo TO hi` with expressions both ends --
+    ("m = 2",                            None),       # 10
+    ("DIM b(m * 3)",                     None),       # 11
+    ("b(6) = 11",                        None),       # 12
+    ("PRINT b(6)",                       "11"),       # 13
+    ("DIM c(m TO m + 2)",                None),       # 14
+    ("c(2) = 1",                         None),       # 15
+    ("c(4) = 2",                         None),       # 16
+    ("PRINT c(2) + c(4)",                "3"),        # 17
+    ("PRINT LBOUND(c)",                  "2"),        # 18
+    ("PRINT UBOUND(c)",                  "4"),        # 19
+]
+
+# TWO DIMENSIONS, one bound plain and one `TO` - the mixed case, which is
+# where the form bits earn their keep: the compiler emits ONE expression for
+# `2` and TWO for `1 TO k`, and OP_DIM has to pop them in that shape. Get the
+# bits backwards and this part reads a bound off the wrong dimension.
+PART51 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("k = 3",                            None),       # 3
+    ("DIM g(2, 1 TO k)",                 None),       # 4
+    ("g(0, 1) = 5",                      None),       # 5
+    ("g(2, 3) = 6",                      None),       # 6
+    ("PRINT g(0, 1) + g(2, 3)",          "11"),       # 7
+    ("PRINT LBOUND(g)",                  "0"),        # 8
+    ("PRINT UBOUND(g)",                  "2"),        # 9
+    # ...and the bound check still knows the computed second extent
+    ("PRINT g(2, 4)",                                 # 10
+     "Error at line 10: that subscript is outside the array"),
+]
+
+# AN ELEMENT TOUCHED BEFORE ITS DIM HAS RUN. This is the refusal 150.40 gets
+# for free: N0 is 0 until OP_DIM writes it, and every element reference
+# already compares against N0 with `jae`. The DIM sits inside an IF that does
+# not fire, so the array is known to the COMPILER and unallocated at run.
+PART52 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("z = 0",                            None),       # 3
+    ("IF z > 0 THEN",                    None),       # 4
+    ("DIM late(3)",                      None),       # 5
+    ("ENDIF",                            None),       # 6
+    ("PRINT late(0)",                                 # 7
+     "Error at line 7: that subscript is outside the array"),
+]
+
+# ...and LBOUND/UBOUND on that same array refuse BY A DIFFERENT NAME, because
+# they read N0 as an answer rather than as a bound (150.40). Without their
+# own check they would report UBOUND as LBOUND-1 - a wrong answer, which is
+# the one thing this chapter refuses to let an array do.
+PART53 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("z = 0",                            None),       # 3
+    ("IF z > 0 THEN",                    None),       # 4
+    ("DIM late2(3)",                     None),       # 5
+    ("ENDIF",                            None),       # 6
+    ("PRINT UBOUND(late2)",                           # 7
+     "Error at line 7: that array has not been DIMmed yet on this run"),
+]
+
+# A DIM THAT EXECUTES TWICE: it succeeds on the first pass of the loop and is
+# refused on the second. The compile-time rule cannot see this - there is one
+# DIM in the text - and it is the state ERASE will clear (150.40).
+PART54 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("FOR i = 1 TO 2",                   None),       # 3
+    ("DIM twice(3)",                                  # 4
+     "Error at line 4: that array is already DIMmed"),
+    ("NEXT",                             None),       # 5
+]
+
+# HIGH TO LOW, and the arena full - the two refusals that MOVED from compile
+# time to run time, each still by name. The arena is 512 elements, so 400 and
+# 400 cannot both fit.
+PART55 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("hi = 1",                           None),       # 3
+    ("DIM bad(5 TO hi)",                              # 4
+     "Error at line 4: a size runs low TO high"),
+]
+
+PART56 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("big = 400",                        None),       # 3
+    ("DIM p(big)",                       None),       # 4
+    ("DIM q(big)",                                    # 5
+     "Error at line 5: out of room for arrays - this wave holds 512 elements"),
+]
+
+# THE ARENA IS RESET PER RUN, and THIS PART IS WHY PART56 COMES FIRST. 56
+# allocated 400 elements and then failed; 57 is a separate program through
+# File > New, so if `bas_exec` did not zero the arena top this DIM would be
+# refused for room that the previous part's run is still holding. The order
+# is the assertion - neither part proves it alone.
+PART57 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("big = 400",                        None),       # 3
+    ("DIM r(big)",                       None),       # 4
+    ("r(400) = 3",                       None),       # 5
+    ("PRINT r(400)",                     "3"),        # 6
+]
+
 # THREE ROWS, ONE FILE. The whole set is past twenty minutes of typing, which
 # is too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1295,7 +1419,8 @@ LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
         PART22, PART23, PART24, PART25, PART26, PART27, PART28)
 W3TAIL = (PART29, PART30, PART31, PART32, PART33, PART34, PART35,
-          PART36, PART37)
+          PART36, PART37,
+          PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 PARTS = EARLY + LATE + W3TAIL + WAVE4

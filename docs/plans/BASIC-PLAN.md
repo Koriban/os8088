@@ -584,16 +584,27 @@ computed size to re-dimension to anyway.
 So the thing `ERASE` was standing in for is **`DIM` of an EXPRESSION**:
 runtime-sized arrays, the arena allocated and the bounds checked at run
 time. That is one coherent piece of work and it is what makes `ERASE`,
-re-`DIM` and a data-driven program size possible at all; it is now the open
-item, in `ERASE`'s place.
+re-`DIM` and a data-driven program size possible at all; it stood in
+`ERASE`'s place as the open item, and **it is now IN** — SPEC.md 150.40, row
+`basiclang3`, +272 bytes of image.
 
-Still open, in this order: **`DIM` of an expression** (above), **a third
-dimension** (the reference allows seven, product under 65535, and this
-record's size is a power of two for the indexer's sake — so the third costs
-it the shift), **`DIM?()`** for the element count, and **`TYPE` records with
-their dotted names** plus **`BYTE`/`WORD`**, which want the type system
-§150.4 describes and nothing yet builds. The other 56 built-ins are wave
-5's, in the overlay.
+**The arena is handed out at RUN time now**, so every `DIM` compiles to two
+expressions per dimension and an `OP_DIM`, and `DIM score(n)` works. Two
+refusals moved there with it (a size running high TO low, and the arena
+full), one is new (a `DIM` that EXECUTES twice, which the compile-time rule
+cannot see), and one costs no code at all: an element touched before its
+`DIM` has run meets a count of zero, which the bound check already there
+refuses by name. What this unlocks next is `ERASE` itself, which becomes
+little more than clearing that count.
+
+Still open, in this order: **`ERASE` for real** (now that §150.40 has made
+it mean something — it becomes clearing the allocated count, plus returning
+the bytes if it was the last array out), **a third dimension** (the reference
+allows seven, product under 65535, and this record's size is a power of two
+for the indexer's sake — so the third costs it the shift), **`DIM?()`** for
+the element count, and **`TYPE` records with their dotted names** plus
+**`BYTE`/`WORD`**, which want the type system §150.4 describes and nothing
+yet builds. The other 56 built-ins are wave 5's.
 
 **Wave 4 — the event loop and tier A windows. EXIT CRITERION MET**, with the
 window verbs below deferred behind wave 6. The wave that makes it GFA.

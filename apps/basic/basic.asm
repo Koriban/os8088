@@ -912,7 +912,8 @@ BAS_B_bas_narr   equ BAS_B_bas_sarena + BAS_STR_MAX
 BAS_B_bas_arrs   equ BAS_B_bas_narr + 2
 BAS_B_bas_abase  equ BAS_B_bas_arrs + BAS_ARR_MAX*BAS_ARR_SZ
 BAS_B_bas_adimd  equ BAS_B_bas_abase + 2
-BAS_B_bas_asval  equ BAS_B_bas_adimd + 2
+BAS_B_bas_adimf  equ BAS_B_bas_adimd + 2
+BAS_B_bas_asval  equ BAS_B_bas_adimf + 2
 BAS_B_bas_acur   equ BAS_B_bas_asval + 4
 BAS_B_bas_asubs  equ BAS_B_bas_acur + 2
 BAS_B_bas_atop   equ BAS_B_bas_asubs + 2
@@ -1113,10 +1114,20 @@ bas_arrs        equ os88_image_end + BAS_B_bas_arrs  ; ...and the table of
 bas_abase       equ os88_image_end + BAS_B_bas_abase ; word: OPTION BASE's
                                          ; default lower bound, 0 unless a
                                          ; program says otherwise BEFORE any
-                                         ; DIM - compile time only
+                                         ; DIM. Set at compile time and READ
+                                         ; AT RUN TIME by OP_DIM, which uses
+                                         ; it as the low bound of a `a(hi)`
+                                         ; dimension - nothing resets it
+                                         ; between the two (SPEC.md 150.40)
 bas_adimd       equ os88_image_end + BAS_B_bas_adimd ; word: whether a DIM
                                          ; has been seen, so OPTION BASE
                                          ; after one is refused
+bas_adimf       equ os88_image_end + BAS_B_bas_adimf ; word: which of a
+                                         ; DIM's dimensions were written
+                                         ; `lo TO hi` rather than `hi`, bit
+                                         ; per dimension - compile time,
+                                         ; and the byte it becomes is
+                                         ; OP_DIM's second operand (150.40)
 bas_asval       equ os88_image_end + BAS_B_bas_asval ; the (offset,length)
                                          ; OP_ASSTORE is storing, held here
                                          ; rather than juggled: RUN time, and

@@ -22022,7 +22022,7 @@ SOAK = [
         "procedure's body is written below the call that runs it, so a line "
         "may be owed several console lines.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 300.0,
+    Row("basiclang3", "soak", py("tests/basiclang.py", "--w3tail"), 480.0,
         "SPEC.md 150.33 to 150.35: CLR, ARRAYFILL, SWAP, LSET and RSET. EVERY NUMBER IT "
         "ASSERTS IS THE REFERENCE'S OWN - the plan's differential oracle "
         "cannot answer here, `basicnw` being the QuickBASIC line and having "
@@ -22052,7 +22052,28 @@ SOAK = [
         "compaction can happen inside either. Every answer there is "
         "BRACKETED, because a console line comes out of a space-padded cell "
         "buffer where \"7\" and \"7    \" read alike and the padding IS the "
-        "statement.",
+        "statement. "
+        "AND SPEC.md 150.40 JOINED IT - DIM of an EXPRESSION, which is the "
+        "item ERASE was refused in place of: the array arena is handed out "
+        "at RUN time now, so `DIM score(n)` works and every DIM goes through "
+        "OP_DIM. Eight parts. The two that cannot be read off any one of "
+        "them are the ORDER-DEPENDENT pair: part 56 fills 400 of the arena's "
+        "512 elements and is then refused the next 400, and part 57 is a "
+        "separate program through File > New that asks for 400 again - so if "
+        "bas_exec did not zero the arena top, 57 would be refused for room "
+        "the previous RUN is still holding. Neither part proves it alone. "
+        "The mixed two-dimensional case is the other one that earns its "
+        "keep: `DIM g(2, 1 TO k)` emits ONE expression for the first "
+        "dimension and TWO for the second, and the form bits say which, so a "
+        "build that reads them backwards takes a bound off the wrong "
+        "dimension. Three refusals are new or moved - a size running high TO "
+        "low and the arena full are both RUN-time now, and a DIM that "
+        "EXECUTES twice is refused where the compile-time rule cannot see "
+        "it, there being one DIM in the text. The cheapest of them costs no "
+        "code at all: an element touched before its DIM has run meets a "
+        "count of zero, which the bound check already there refuses by name, "
+        "while LBOUND and UBOUND need a check of their own because they read "
+        "that count as an ANSWER and would report UBOUND as LBOUND-1.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "

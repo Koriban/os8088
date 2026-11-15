@@ -252437,6 +252437,98 @@ console buffer is not in memory as cells", which is also exactly what a
 REFUSED program looks like. Check the duration against the last green run
 before reading the diff.
 
+### 150.40 `DIM` of an expression: the arena moves to run time
+
+```basic
+INPUT "how many"; n
+DIM score(n)                   ' a size the compiler cannot know
+DIM grid(1 TO rows, 1 TO cols) ' either bound, either dimension
+```
+
+**Status: BUILT**, row `basiclang3`, +272 bytes of image and 2 of bss — the
+package at 22,009 + 22,171 of `APP_MAX_SIZE`'s 65,024, 67.9%. This is the
+item `ERASE` was standing in for (§150.33): `ERASE` is refused by name
+because its two documented effects both rest on run-time allocation, and
+this is that allocation.
+
+**ONE DEFECT, AND THE OLD TESTS CAUGHT IT BEFORE THE NEW ONES DID.**
+`bas_dimone` was written to take the dimension number in `CL` and set its own
+form bit — and `CL` is dead by then, because between taking it and using it
+the routine calls `bas_c_expr`, a whole expression compiler. The bit was
+therefore never set, so **every `lo TO hi` silently became `OPTION BASE TO
+lo`**: `DIM c(2 TO 4)` reported `LBOUND` 2 as 0, and `DIM bad(5 TO 1)` was
+not refused at all, because it read as `0 TO 5`. The loudest report came from
+`PART30`, the whole-array `SWAP` written for §150.34 — it `DIM`s `c(1 TO 4)`
+and asserts `LBOUND` on both names after the swap, so a lower bound that
+quietly became 0 surfaced there as `1` turning into `0`. The fix is that
+`bas_dimone` ANSWERS the form and the caller places the bit, the caller being
+the only place that still knows which dimension it was.
+
+**EVERY `DIM` IS EVALUATED AT RUN TIME NOW, including a constant one**, and
+the uniformity is the point rather than a simplification. Two paths would be
+two allocators over one arena, and the compile-time path's only advantage was
+refusing an over-large *constant* before the program ran. That refusal is
+worth less than the second allocator costs: it moves to run time and keeps
+its name.
+
+So `bas_atop` stops being a compile-time layout cursor and becomes the
+arena's run-time top, zeroed by `bas_exec` at entry and **not** by
+`bas_exec.resume` — a suspended program that comes back from `ON MENU` keeps
+its arrays, and a fresh `RUN` recompiles from scratch, which is also what
+rebuilds the descriptors.
+
+**THE COMPILER STILL OWNS THE NAME, which is what keeps arrays free of a
+run-time type word** (§150.31). It allocates the descriptor, writes the
+name's place and the dimension count, and emits two expressions per
+dimension — a lower bound and an upper — followed by `OP_DIM` and one index
+byte. The implicit lower bound of `a(8)` is `OPTION BASE`'s value, a
+compile-time constant, so it compiles to a literal push: there is one form at
+run time and not two.
+
+**`BAS_ARR_N0` == 0 IS THE "NOT YET ALLOCATED" STATE, and it costs nothing.**
+Every element reference already bound-checks with `cmp ax, [si+BAS_ARR_N0]` /
+`jae`, so an element touched before its `DIM` has executed is refused by name
+by code that already exists — a count of zero is unreachable for a valid
+array, because a count is at least one. The compiler writes 0 when it
+allocates the descriptor, and `OP_DIM` writes the real count. No field is
+added, which matters: `BAS_ARR_SZ` is 16 and the indexer is a SHIFT, so a
+record that grew would cost that shift (the symptom would surface as elements
+of the wrong array, not as an allocator bug).
+
+`LBOUND` and `UBOUND` are the exception that needs real code, because they
+read `N0` as an answer rather than as a bound: on an unallocated array they
+would report `LBOUND` correctly and `UBOUND` as `LBOUND - 1`, a wrong answer
+rather than a refusal, so both refuse by name instead.
+
+**A `DIM` THAT EXECUTES TWICE IS REFUSED BY NAME** — `N0` is already set — and
+that is the run-time form of §150.31's rule that a second `DIM` of one name is
+refused. The compile-time refusal stays for a second `DIM` in the TEXT; this
+one catches a `DIM` inside a loop, which the text rule cannot see. It is also
+the state `ERASE` will clear when it arrives: the whole of `ERASE` becomes
+`N0 := 0`, plus returning the bytes if it was the last array allocated.
+
+**What refuses where, after this:**
+
+| refusal | when |
+| --- | --- |
+| a second `DIM` of one name in the text | compile time, as now |
+| more than eight arrays | compile time, as now |
+| `DIM` with three or more sizes | compile time, as now |
+| a bound that is not a number | compile time, as now (`DIM a("x")`) |
+| **a size running high TO low** | **run time**, was compile time |
+| **the arena full** | **run time**, was compile time |
+| **a `DIM` that executes twice** | **run time**, new |
+| a subscript outside the array | run time, as now |
+
+**AND `bas_c_const`'S COMMENT IS NOW WRONG WHERE IT IS SHARED.** It says *"A
+BOUND IS NOT AN EXPRESSION, for the reason FOR's STEP is not one: the compiler
+has to know the size to lay the array out"* — a premise this section removes
+for `DIM` and leaves standing for `STEP`, which is encoded in the op stream
+rather than laid out. The helper keeps its job for `STEP` and `OPTION BASE`
+and loses it for `DIM`, and the comment has to say so: a true sentence under
+the wrong scope is the trap this chapter has hit twice (§150.31's "the
+reference", §150.33's `ERASE`).
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

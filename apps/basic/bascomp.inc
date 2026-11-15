@@ -52,9 +52,9 @@ bas_run:
     mov word [bas_opn], 0
     mov word [bas_nblk], 0          ; ...and no block is open yet
     mov word [bas_narr], 0          ; ...no array DIMmed (SPEC.md 150.31),
-    mov word [bas_atop], 0          ; for the reason the variables go: an
-    mov word [bas_abase], 0         ; entry keys on where its name is in a
-    mov word [bas_adimd], 0         ; text the next RUN will have replaced,
+    mov word [bas_abase], 0         ; for the reason the variables go: an
+    mov word [bas_adimd], 0         ; entry keys on where its name is in a
+                                    ; text the next RUN will have replaced,
                                     ; and a second DIM of one name is
                                     ; refused - so a program run twice
                                     ; refused itself the second time
@@ -1358,12 +1358,21 @@ bas_c_stmt:
 .rem:
     call bas_toeol                  ; the rest of the line is a comment
     ret
-; --- DIM name(size[,size]) (SPEC.md 150.31) ----------------------------
-; THE ENTRY IS ALLOCATED FIRST AND FILLED AS THE SIZES ARE PARSED. The
-; first draft of this carried four numbers on the stack through three calls
-; and was unreadable by the time the second dimension was optional; the
-; entry is the natural place to put them, and bas_arrat is cheap enough to
-; re-fetch.
+; --- DIM name(size[,size]) (SPEC.md 150.31, 150.40) --------------------
+; THE COMPILER OWNS THE NAME AND THE RUN OWNS THE SIZE. It takes the
+; descriptor, writes where the name is and how many dimensions there are,
+; and emits TWO EXPRESSIONS PER DIMENSION - low then high, in dimension
+; order - followed by OP_DIM and the index. Nothing is laid out here: the
+; arena is handed out at run time, which is what makes `DIM a(n)` possible
+; at all (SPEC.md 150.40).
+;
+; N0 IS LEFT 0 ON PURPOSE. It is the allocated flag, it needs no storage of
+; its own, and until OP_DIM runs it makes every element reference refuse by
+; name through the bound check that is already there.
+;
+; The entry is still the natural place to keep what IS known here - the
+; first draft carried four numbers on the stack through three calls and was
+; unreadable by the time the second dimension was optional.
 .dim:
     call bas_skipsp
     call bas_word                   ; the name, sigil and all
@@ -1376,17 +1385,16 @@ bas_c_stmt:
     SHOUT bas_arrat
     mov [si + BAS_ARR_SRC], di
     mov [si + BAS_ARR_LEN], cx
-    call bas_bopen
-    jc .x
-    call bas_dimone                 ; AX = low, DX = count
-    jc .x
-    mov bx, [bas_narr]
-    SHOUT bas_arrat
-    mov [si + BAS_ARR_LO0], ax
-    mov [si + BAS_ARR_N0], dx
+    mov word [si + BAS_ARR_N0], 0   ; not allocated yet (150.40)
     mov word [si + BAS_ARR_DIM], 1
     mov word [si + BAS_ARR_LO1], 0
     mov word [si + BAS_ARR_N1], 1   ; ...so the indexer needs no special case
+    mov word [bas_adimf], 0         ; both dimensions plain until proved
+    call bas_bopen
+    jc .x
+    call bas_dimone
+    jc .x
+    or [bas_adimf], ax              ; bit 0: dimension 0 was `lo TO hi`
     call bas_skipsp
     mov si, [bas_src]
     cmp byte [si], ','
@@ -1394,36 +1402,20 @@ bas_c_stmt:
     inc word [bas_src]
     call bas_dimone
     jc .x
+    shl ax, 1
+    or [bas_adimf], ax              ; ...and bit 1 for the second
     mov bx, [bas_narr]
     SHOUT bas_arrat
-    mov [si + BAS_ARR_LO1], ax
-    mov [si + BAS_ARR_N1], dx
     mov word [si + BAS_ARR_DIM], 2
 .dimclose:
     call bas_bclose
     jc .x
-    ; --- how many elements, and does the arena hold them? ---------------
-    mov bx, [bas_narr]
-    SHOUT bas_arrat
-    mov ax, [si + BAS_ARR_N0]
-    push si
-    mul word [si + BAS_ARR_N1]      ; DX:AX, and DX must be 0
-    pop si
-    or dx, dx
-    jnz .dimfull
-    mov cx, 3                       ; eight bytes an element
-.dimsh:
-    shl ax, 1
-    jc .dimfull
-    dec cx
-    jnz .dimsh
-    mov dx, [bas_atop]
-    mov [si + BAS_ARR_AT], dx
-    add ax, dx
-    jc .dimfull
-    cmp ax, BAS_ARR_BYTES
-    ja .dimfull
-    mov [bas_atop], ax
+    mov al, OP_DIM
+    call bas_emit
+    mov ax, [bas_narr]
+    call bas_emit                   ; the index, as a byte
+    mov ax, [bas_adimf]
+    call bas_emit                   ; ...and which bounds were `lo TO hi`
     inc word [bas_narr]
     mov word [bas_adimd], 1         ; ...and OPTION BASE is closed now
     ret
@@ -1436,9 +1428,9 @@ bas_c_stmt:
 .dimmax:
     mov si, bas_e_arrmax
     SHOUTR bas_err
-.dimfull:
-    mov si, bas_e_arrfull
-    SHOUTR bas_err
+; (`.dimfull` was here: the arena-full refusal moved to OP_DIM with the
+; allocation itself, SPEC.md 150.40, and the label this file named once was
+; a body nothing could reach.)
 
 ; --- OPTION BASE 0|1 ---------------------------------------------------
 .option:
@@ -1448,8 +1440,15 @@ bas_c_stmt:
     mov si, bas_kw_base
     call bas_wordis
     jne .optbad
-    cmp word [bas_adimd], 0         ; ...and only before any DIM: an array
-    jne .optlate                    ; already laid out cannot move its base
+    cmp word [bas_adimd], 0         ; ...and only before any DIM, which is a
+    jne .optlate                    ; SHARPER rule since 150.40 than the
+                                    ; "an array already laid out cannot move
+                                    ; its base" it was: nothing is laid out
+                                    ; at compile time now, and OP_DIM reads
+                                    ; bas_abase AT RUN TIME - so an OPTION
+                                    ; BASE after a DIM would reach back and
+                                    ; change that DIM's bounds instead of
+                                    ; merely disagreeing with them
     call bas_c_const
     jc .x
     cmp ax, 1
@@ -4265,9 +4264,16 @@ bas_c_subs:
 
 ; --- bas_c_const - a plain integer literal at the cursor; out AX --------
 ; out: CF=1 and refused by name if there is not one.
-; A BOUND IS NOT AN EXPRESSION, for the reason FOR's STEP is not one: the
-; compiler has to know the size to lay the array out, so a number it would
-; have to run the program to learn is no use to it.
+;
+; ONE CALLER NOW, AND IT IS `OPTION BASE`. This comment used to read "A
+; BOUND IS NOT AN EXPRESSION, for the reason FOR's STEP is not one: the
+; compiler has to know the size to lay the array out", which was true of DIM
+; until SPEC.md 150.40 moved the array arena to run time. `OPTION BASE` still
+; needs a literal, and for a reason of its own: see `.optlate`. (`STEP` is
+; still a literal too, but it never came through here - it reads its own sign
+; and digits inline. The old sentence compared the two rules rather than
+; claiming a shared caller, and this one says which is which, because a true
+; sentence under the wrong scope is the trap this chapter has hit twice.)
 bas_c_const:
     push bx
     push si
@@ -4301,13 +4307,32 @@ bas_c_const:
     pop bx
     ret
 
-; --- bas_dimone - one size: `n` or `a TO b`; out AX = low, DX = count ----
+; --- bas_dimone - COMPILE one size: `hi` or `lo TO hi` (SPEC.md 150.40) --
+; in:  CL = which dimension this is, 0 or 1. out: CF=1 if refused.
+;
+; It EMITS rather than folds, which is the whole of 150.40: the bound may be
+; any expression, so the compiler's job is to put the ops in the stream and
+; let OP_DIM read the numbers off the stack.
+;
+; `lo TO hi` emits two expressions, low then high. `hi` alone emits ONE, and
+; OP_DIM takes the low bound from `bas_abase` - and that asymmetry is forced
+; rather than chosen: the implicit low bound would have to be pushed BEFORE
+; an expression that has already been parsed by the time `TO`'s absence is
+; known, and ops are emitted as they parse. So the FORM is recorded instead,
+; a bit per dimension in bas_adimf, and travels as OP_DIM's second operand.
+;
+; IT ANSWERS THE FORM AND THE CALLER PLACES THE BIT, which is not a style
+; choice: this took the dimension number in CL and set the bit itself, and CL
+; is dead by then - bas_c_expr is a whole expression compiler and clobbers it.
+; The bit was therefore never set, so every `lo TO hi` silently became
+; `OPTION BASE TO lo`: `DIM c(2 TO 4)` reported LBOUND 2 as 0, and
+; `DIM bad(5 TO 1)` was not refused at all because it read as 0 TO 5. The
+; caller is the only place that still knows which dimension this was.
 bas_dimone:
-    push bx
     push si
-    call bas_c_const                ; a plain number, as FOR's STEP is
-    jc .d1bad
-    mov bx, ax                      ; BX = the first number
+    call bas_c_expr                 ; the first bound, whatever it is
+    cmp byte [bas_bad], 0
+    jne .d1bad
     call bas_skipsp
     call bas_word                   ; ...TO?
     jc .d1just
@@ -4316,40 +4341,23 @@ bas_dimone:
     je .d1to
     mov [bas_src], di
 .d1just:
-    ; `DIM a(8)` is 0..8 - NINE slots - with the base OPTION BASE set
-    mov ax, [bas_abase]
-    mov dx, bx
-    sub dx, ax
-    js .d1neg
-    inc dx                          ; inclusive, which is the reference's
+    ; `DIM a(8)` is OPTION BASE..8 - NINE slots at base 0, which is the
+    ; Compendium's. One expression is in the stream, so the form is 0.
+    xor ax, ax
     clc
     jmp short .d1out
 .d1to:
-    call bas_c_const
-    jc .d1bad
-    mov dx, ax
-    sub dx, bx
-    js .d1order
-    inc dx
-    mov ax, bx
+    call bas_c_expr                 ; the HIGH bound, on top of the low one
+    cmp byte [bas_bad], 0
+    jne .d1bad
+    mov ax, 1
     clc
-    jmp short .d1out
-.d1order:
-    mov si, bas_e_arrto
-    SHOUT bas_err
-    stc
-    jmp short .d1out
-.d1neg:
-    mov si, bas_e_arrto
-    SHOUT bas_err
-    stc
     jmp short .d1out
 .d1bad:
     stc
 .d1out:
-    pop si
-    pop bx
-    ret
+    pop si                          ; POP does not touch CF, which is the
+    ret                             ; answer above it
 
 ; -----------------------------------------------------------------------------
 ; The string arena (SPEC.md 150.28)

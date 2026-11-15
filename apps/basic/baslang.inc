@@ -158,7 +158,14 @@ OP_ONMGOSUB equ 57                  ; + a WORD: the handler a pick resumes in,
                                     ; patched like a call's (SPEC.md 150.38)
 OP_MSEL     equ 58                  ; push MENU(0) - which element of m$() was
                                     ; picked (node [300])
-OP_N        equ 59                  ; how many there are, table included
+; --- DIM of an expression (SPEC.md 150.40) -------------------------------
+OP_DIM      equ 59                  ; + an index byte: lay that array out
+                                    ; from bounds on the STACK - two
+                                    ; expressions per dimension, low then
+                                    ; high. It needs no dimension count in
+                                    ; the stream because the descriptor
+                                    ; already carries one from compile time
+OP_N        equ 60                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -950,6 +957,65 @@ bas_asub:
     pop bx
     ret
 
+; --- bas_adimb - pop ONE dimension's bounds; out AX = low, DX = count ----
+; HERE, BESIDE bas_asub, AND NOT BESIDE OP_DIM THAT CALLS IT - because a
+; TOP-LEVEL label placed among bas_exec's op bodies ENDS bas_exec's local
+; scope, and every `.next`/`.done`/`.add` after it then belongs to the new
+; label. Written there first, the build reported `bas_exec.under not
+; defined` and then eleven "label changed during code generation" lines for
+; ops nowhere near the edit: the first line was the only true one.
+;
+; in:  DI = one past the top slot; the HIGH bound is on top of the LOW one.
+; out: AX = the low bound, DX = the inclusive count, BP = the count too
+;      (for bas_adimn, because DX is wanted for the multiply); DI -= two
+;      slots; CF=1 and refused by name if high is below low.
+;
+; INCLUSIVE, which is the Compendium's: `1 TO 5` is five slots, and `a(8)`
+; arrives here as OPTION BASE's value TO 8 because the compiler pushed the
+; base as a literal (150.40). So there is one form here and not two.
+bas_adimb:
+    push cx
+    push bx
+    mov bl, cl                      ; the dimension, kept across bas_asub
+    call bas_asub                   ; AX = the HIGH bound, always emitted
+    mov cx, ax                      ; ...and kept across the next one
+    mov al, 1
+    push cx
+    mov cl, bl
+    shl al, cl                      ; AL = this dimension's form bit
+    pop cx
+    test byte [bas_adimf], al
+    jz .lobase
+    call bas_asub                   ; the LOW bound, below the high one
+    jmp short .logot
+.lobase:
+    mov ax, [bas_abase]             ; `a(hi)`: OPTION BASE's (SPEC.md 150.40)
+.logot:
+    mov dx, cx
+    sub dx, ax                      ; high - low
+    js .bad
+    inc dx                          ; inclusive, which is the Compendium's
+    mov bp, dx                      ; BP, because the multiply in OP_DIM
+    pop bx                          ; wants DX and bas_exec touches BP
+    pop cx                          ; nowhere else at all
+    clc
+    ret
+.bad:
+    mov si, bas_e_arrto
+    call bas_err
+    pop bx
+    pop cx
+    stc
+    ret
+
+; --- bas_adimn - write the count bas_adimb measured, as the LAST act -----
+; in:  SI = the entry, BP = the count. The separation is not tidiness: N0 is
+; the allocated flag (150.40), so it may not be written until the arena has
+; agreed to the bytes.
+bas_adimn:
+    mov [si + BAS_ARR_N0], bp
+    ret
+
 ; --- bas_sarg1 - pop the top slot as a 16-bit count; out AX -------------
 ; in:  DI = one past the top slot. out: DI -= one slot, AX = the number,
 ;      CF=1 and refused by name if it is negative.
@@ -1364,6 +1430,13 @@ bas_upper:
 bas_exec:
     mov si, bas_ops
     mov di, bas_stk                 ; DI = the stack pointer, growing up
+    mov word [bas_atop], 0          ; THE ARRAY ARENA IS RUN-TIME NOW
+                                    ; (SPEC.md 150.40), so its top is reset
+                                    ; HERE and deliberately NOT in .resume:
+                                    ; a program coming back from ON MENU
+                                    ; keeps its arrays, and a fresh RUN
+                                    ; recompiles, which is what rebuilds the
+                                    ; descriptors with N0 = 0
     jmp short .next
 ; --- bas_exec.resume - carry on from an ON MENU (SPEC.md 150.36) --------
 ; TWO WORDS ARE THE WHOLE MACHINE at an op boundary, which is a property of
@@ -2234,6 +2307,13 @@ bas_exec:
     mov bx, ax
     mov al, [bx]                    ; 0 = LBOUND, 1 = UBOUND
     xor ah, ah
+    ; THESE TWO READ N0 AS AN ANSWER rather than as a bound, which is why
+    ; they need the check that every element reference gets free: on an
+    ; array whose DIM has not executed yet N0 is 0 (SPEC.md 150.40), and
+    ; they would report LBOUND correctly and UBOUND as LBOUND-1 - a wrong
+    ; answer, where everything else refuses by name.
+    cmp word [si + BAS_ARR_N0], 0
+    je .abnone
     or al, al
     jnz .abup
     mov ax, [si + BAS_ARR_LO0]
@@ -2250,6 +2330,12 @@ bas_exec:
     pop bx
     add di, BAS_SLOT
     jmp .next
+.abnone:
+    mov si, bas_e_arrnodim
+    call bas_err
+    pop si
+    pop bx
+    jmp .done
 
 .sprint:
     cmp di, bas_stk + BAS_SLOT
@@ -2586,6 +2672,94 @@ bas_exec:
     pop ax
     add di, BAS_SLOT
     jmp .next
+
+; --- OP_DIM (SPEC.md 150.40) --------------------------------------------
+; + an index byte. Lays that array out from bounds the expressions just
+; pushed: two per dimension, LOW then HIGH, in dimension order - so the top
+; of the stack is the LAST dimension's high bound and they pop in reverse.
+;
+; The descriptor already carries the dimension count and the name's place
+; from compile time; what this writes is the two bounds, the two counts and
+; the arena offset. Nothing here is in the op stream but the index.
+;
+; `BAS_ARR_N0` IS THE ALLOCATED FLAG and it needs no storage of its own: a
+; count of zero is unreachable for a real array, every element reference
+; already refuses an index against it, and this refuses a second execution
+; by reading it. The compiler writes 0 when it takes the descriptor.
+.dim:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bl, [si]                    ; the index, resolved at compile time
+    mov al, [si + 1]                ; ...and which bounds were `lo TO hi`
+    inc si
+    inc si
+    xor bh, bh
+    push si
+    mov [bas_adimf], al             ; the form bits, where bas_adimb reads
+    call bas_arrat                  ; SI = the entry
+    mov cx, [si + BAS_ARR_DIM]
+    cmp word [si + BAS_ARR_N0], 0
+    jne .dimtwice                   ; ...this DIM has already run
+    cmp cx, 2
+    jne .dim1
+    ; --- the SECOND dimension is on top, so it pops first ---------------
+    mov cl, 1
+    call bas_adimb                  ; AX = low, DX = count
+    jc .dimout
+    mov [si + BAS_ARR_LO1], ax
+    mov [si + BAS_ARR_N1], dx
+    jmp short .dimboth
+.dim1:
+    mov word [si + BAS_ARR_LO1], 0
+    mov word [si + BAS_ARR_N1], 1   ; ...so the indexer needs no special case
+.dimboth:
+    xor cl, cl
+    call bas_adimb
+    jc .dimout
+    mov [si + BAS_ARR_LO0], ax
+    ; --- how many bytes, and does the arena hold them? ------------------
+    ; N0 IS WRITTEN LAST, after the arena has agreed, because it is the
+    ; allocated flag: a refusal must leave the array unallocated, not
+    ; half-allocated with a count and no room.
+    mov ax, dx
+    mul word [si + BAS_ARR_N1]      ; DX:AX, and DX must be 0
+    or dx, dx
+    jnz .dimfull
+    mov cx, 3                       ; eight bytes an element
+.dimsh:
+    shl ax, 1
+    jc .dimfull
+    dec cx
+    jnz .dimsh
+    mov cx, [bas_atop]              ; the arena's RUN-TIME top (150.40)
+    add ax, cx
+    jc .dimfull
+    cmp ax, BAS_ARR_BYTES
+    ja .dimfull
+    mov [bas_atop], ax
+    mov [si + BAS_ARR_AT], cx
+    call bas_adimn                  ; N0 = the count bas_adimb left in BP
+    clc
+.dimout:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jc .done                        ; refused by name, and bas_err has said
+    jmp .next
+.dimtwice:
+    mov si, bas_e_arrdup
+    call bas_err
+    stc
+    jmp short .dimout
+.dimfull:
+    mov si, bas_e_arrfull
+    call bas_err
+    stc
+    jmp short .dimout
 
 ; --- OP_MENU (SPEC.md 150.38) -------------------------------------------
 ; + an index byte. Walks m$() in the Compendium's layout (node [299]),
@@ -3011,6 +3185,7 @@ bas_optab:
     dw bas_exec.menu                ; OP_MENU
     dw bas_exec.onmgosub            ; OP_ONMGOSUB
     dw bas_exec.msel                ; OP_MSEL
+    dw bas_exec.dim                 ; OP_DIM
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3422,6 +3597,7 @@ bas_e_arrdim:   db 'that array was DIMmed with a different number of sizes', 0
 bas_e_arrrange: db 'that subscript is outside the array', 0
 bas_e_arrto:    db 'a size runs low TO high', 0
 bas_e_arrdims:  db 'DIM takes one or two sizes here', 0
+bas_e_arrnodim: db 'that array has not been DIMmed yet on this run', 0
 bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0
 bas_e_baseval:  db 'OPTION BASE takes 0 or 1', 0
 bas_e_clrarr:   db 'CLR takes variables; ARRAYFILL fills an array', 0
