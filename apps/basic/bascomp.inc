@@ -2646,6 +2646,61 @@ bas_c_fact:
     mov si, bas_kw_menu             ; MENU(0) - node [300]'s answer for which
     call bas_wordis                 ; entry was picked (SPEC.md 150.38)
     je .b_msel
+    ; --- the one-argument numeric functions (SPEC.md 150.44) ------------
+    ; ONE WALK, NOT FOURTEEN `wordis` BRANCHES: the row's position in
+    ; bas_fn1names IS the FN1_* index OP_FN1 takes, so a fifteenth function
+    ; is a name here and a routine there and nothing else. The index rides
+    ; the host stack across the argument, as .b_bound's `which end` does.
+    push dx
+    mov si, bas_fn1names
+    xor dx, dx
+.b_fn1try:
+    cmp byte [si], 0
+    je .b_fn1none
+    call bas_wordis
+    je .b_fn1hit
+.b_fn1nx:
+    cmp byte [si], 0                ; ...past this name
+    je .b_fn1past
+    inc si
+    jmp short .b_fn1nx
+.b_fn1past:
+    inc si                          ; ...and past its NUL
+    inc dx
+    jmp short .b_fn1try
+.b_fn1none:
+    pop dx
+    jmp short .b_notfn1
+.b_fn1hit:
+    ; THE INDEX RIDES THE HOST STACK, and it must: this held it in a WORD OF
+    ; BSS, and the argument being compiled below can contain another one of
+    ; these. `ROUND(FRAC(x-3)*10)` therefore emitted FRAC's index twice -
+    ; the inner compile overwrote the outer's - so the outer ROUND ran as a
+    ; second FRAC and answered the residue of its own argument. A
+    ; recursive-descent compiler cannot keep per-call state in a global, and
+    ; .b_bound two screens down was already doing this correctly with its
+    ; `which end`.
+    mov cx, dx                      ; CX = which function
+    pop dx                          ; ...the caller's DX back
+    push cx                         ; ...and the index, over the argument
+    call bas_bopen
+    jc .b_fn1pop
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .b_fn1pop
+    call bas_wantnum                ; ...and its argument IS a number
+    jc .b_fn1pop
+    call bas_bclose
+    jc .b_fn1pop
+    mov al, OP_FN1
+    call bas_emit
+    pop ax
+    jmp bas_emit                    ; ...the index, as a byte
+.b_fn1pop:
+    pop ax
+    ret
+.b_notfn1:
+
     ; **AN ARRAY ELEMENT, AND THE NAME DECIDES** (SPEC.md 150.31): a(3) is
     ; an element where a has been DIMmed and a procedure call where it has
     ; not, which is what lets arrays cost no run-time type word.

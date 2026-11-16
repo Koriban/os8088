@@ -252779,6 +252779,80 @@ with `DIM?`.
 state), the same answer `LBOUND` and `UBOUND` give, because the count it
 would report is 0 and that is a number a real array cannot have.
 
+### 150.44 Wave 5, slice 1: the fourteen one-argument numeric functions
+
+```basic
+PRINT TRUNC(1.3), INT(-1.4), FIX(3 * -1.4), FRAC(-1.4 - 3)
+'       1          -2          -4            -0.4           ...node [133]'s own
+PRINT SQR(2), SIN(0), ATN(1) * 4, LOG(EXP(1)), ROUND(1.7)
+```
+
+**Status: CONTRACT WRITTEN.** `ABS`, `SGN`, `INT`, `TRUNC`, `FIX`, `FRAC`,
+`ROUND`, `SQR`, `SIN`, `COS`, `TAN`, `ATN`, `EXP`, `LOG`.
+
+**ALL FOURTEEN ARE THE COMPENDIUM'S, and three are ITS ALONE** — `TRUNC`,
+`FRAC` and `ROUND` are not among `basicnw`'s built-ins, which is the right
+direction for a language measured against GFA, and is said here because
+§150.31 has just been corrected for getting an attribution the other way
+round. The other eleven are in both.
+
+**THE LIBRARY IS ALREADY WRITTEN AND ALREADY TESTED.** `apps/os88fp.inc` has
+`fp_sqrt`, `fp_sin`, `fp_cos`, `fp_tan`, `fp_atan`, `fp_exp`, `fp_ln`,
+`fp_floor`, `fp_trunc` and `fp_round`, each with a stated contract and a
+`fptest` case behind it. So this slice is BINDING and not arithmetic: the one
+thing it must get right is which routine each name means.
+
+**IT COSTS 1,680 BYTES, MEASURED**, and they are the library's rather than the
+bindings'. `basic.asm` sets `OS88FP_NOTRANS`, `FP_NO_SQRT` and `FP_NO_POW`
+today — §84.8's opt-out gates, with the comment "the transcendentals, sqrt and
+pow arrive with the built-in library in wave 5" — so dropping those three
+brings in the logarithms, the trigonometry, `fp_sqrt` and `fp_pow` and their
+constant tables. Built both ways: 22,300 bytes of image becomes 23,980, and
+the package goes from 68.6% of `APP_MAX_SIZE` to **71.2%**. The bss does not
+move, its scratch being declared already.
+
+**AND THAT ANSWERS WAVE 5'S OPEN QUESTION: RESIDENT.** The plan asked whether
+the built-ins belong in the package or in part 0, with §150.6's frequency rule
+as the test. They are resident, for a reason the measurement makes concrete:
+the code they call has to be resident ANYWAY, because `bas_exec`'s own
+arithmetic ops work in register A on every `+` a program executes, so moving
+the bindings would add a far vector per `fp_*` routine and leave the bytes
+where they are. A `SIN` inside a `FOR` loop would pay that vector per
+iteration to save 1,680 bytes at 71%.
+
+**ONE OP FOR ALL FOURTEEN**, with a function index byte and a table of routine
+addresses — not fourteen opcodes. The calling convention makes that possible
+rather than merely tidy: every one of these is "A := f(A)", so the op body is
+`fp_unpack_a` from the top slot, an indirect call, `fp_pack_a` back to the
+same slot, and the value stack does not move. A fifteenth is a keyword, a
+table row and nothing else.
+
+**`CX` IS ZEROED BEFORE THE CALL, and that is for `ROUND`.** `fp_round` takes
+the number of decimal places in `CX`, half away from zero, which is node
+[134]'s rule including its negative case (`ROUND(155,-1)` is 160). Zero is
+the one-argument form. The other thirteen ignore `CX`, so one `xor cx, cx`
+buys `ROUND(x)` from the same table, and `ROUND(x, n)` is then a second op
+that sets `CX` from the stack rather than a different routine.
+
+**TWO NAMES FOR ONE ROUTINE, SAID OUT LOUD:** node [133] states that `TRUNC`
+and `FIX` *"are identical"*, so both table rows point at `fp_trunc`. That is
+the Compendium's statement and not an economy.
+
+**`FRAC` IS THE ONE WITH ARITHMETIC OF ITS OWN**, and node [133] defines it by
+an identity rather than a procedure: *"It is always true that
+x=TRUNC(x)+FRAC(x), but INT(x)+FRAC(x) is not equal to x for negative
+values."* So `FRAC` is `x - TRUNC(x)`, keeping x's sign, and that identity is
+what the row asserts — **including its negative half**, because a `FRAC` built
+on `fp_floor` instead would satisfy the first and fail the second, and the
+manual says so in the same sentence.
+
+**Domain errors are refused by name, from the routine's own CF.** `SQR` of a
+negative and `LOG` of a non-positive each set it (`fp_sqrt`: *"CF=1 and A=0 if
+A was negative"*; `fp_ln`: *"CF=1 if A <= 0"*), and `fp_sin`/`fp_cos` set it
+past a word of quadrants where the reduction stops meaning anything. The op
+reports whichever it gets; `fp_exp` never fails, clamping instead, which is
+§84's stated rule for overflow.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

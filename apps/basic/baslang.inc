@@ -175,7 +175,13 @@ OP_ADIMQ    equ 61                  ; + an index byte: push DIM?(a()), the
                                     ; element count (SPEC.md 150.43, node
                                     ; [71]) - which is bas_arrcount's answer
                                     ; with no adjustment of any kind
-OP_N        equ 62                  ; how many there are, table included
+; --- wave 5 slice 1 (SPEC.md 150.44) -------------------------------------
+OP_FN1      equ 62                  ; + a function index byte: A := f(A) for
+                                    ; all FOURTEEN of the one-argument
+                                    ; numeric functions. One op, because
+                                    ; every one of them has that shape - a
+                                    ; fifteenth is a keyword and a table row
+OP_N        equ 63                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1026,6 +1032,121 @@ bas_asub:
     pop si
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; Wave 5 slice 1: the one-argument numeric functions (SPEC.md 150.44)
+; =============================================================================
+; THE TABLE IS THE FEATURE. Every one of these is "A := f(A)", so OP_FN1 is
+; one op with an index and this is what it indexes; ten rows are a routine
+; in apps/os88fp.inc called directly, and the three below it are the only
+; ones needing arithmetic of their own.
+;
+; TRUNC AND FIX ARE THE SAME ROW ON PURPOSE - node [133] says they "are
+; identical", so that is the manual's statement and not an economy here.
+FN1_ABS   equ 0
+FN1_SGN   equ 1
+FN1_INT   equ 2
+FN1_TRUNC equ 3
+FN1_FIX   equ 4
+FN1_FRAC  equ 5
+FN1_ROUND equ 6
+FN1_SQR   equ 7
+FN1_SIN   equ 8
+FN1_COS   equ 9
+FN1_TAN   equ 10
+FN1_ATN   equ 11
+FN1_EXP   equ 12
+FN1_LOG   equ 13
+; WHICH ONES ACTUALLY REPORT A DOMAIN ERROR, because CF from the others is
+; NOISE: fp_exp's header says it "never fails", clamping instead - but it
+; does not CLEAR carry either, so `call / jc` read whatever its last
+; instruction left and PRINT EXP(0) was refused as out of domain. Only these
+; four document a CF, so only these four are believed.
+bas_fn1cf:
+    db 0                            ; FN1_ABS
+    db 0                            ; FN1_SGN
+    db 0                            ; FN1_INT
+    db 0                            ; FN1_TRUNC
+    db 0                            ; FN1_FIX
+    db 0                            ; FN1_FRAC
+    db 0                            ; FN1_ROUND
+    db 1                            ; FN1_SQR - CF=1 on a negative
+    db 1                            ; FN1_SIN - past a word of quadrants
+    db 1                            ; FN1_COS - likewise
+    db 0                            ; FN1_TAN
+    db 0                            ; FN1_ATN - always in (-pi/2, pi/2)
+    db 0                            ; FN1_EXP - clamps, never reports
+    db 1                            ; FN1_LOG - CF=1 if A <= 0
+BAS_FN1CF_N equ $ - bas_fn1cf
+    times BAS_FN1CF_N - (FN1_LOG + 1) db 0
+    times (FN1_LOG + 1) - BAS_FN1CF_N db 0
+
+bas_fn1tab:
+    dw bas_f_abs                    ; FN1_ABS
+    dw bas_f_sgn                    ; FN1_SGN
+    dw fp_floor                     ; FN1_INT   - node [133]: NOT truncation
+    dw fp_trunc                     ; FN1_TRUNC
+    dw fp_trunc                     ; FN1_FIX   - "identical", node [133]
+    dw bas_f_frac                   ; FN1_FRAC
+    dw fp_round                     ; FN1_ROUND - CX places, zeroed by the op
+    dw fp_sqrt                      ; FN1_SQR
+    dw fp_sin                       ; FN1_SIN
+    dw fp_cos                       ; FN1_COS
+    dw fp_tan                       ; FN1_TAN
+    dw fp_atan                      ; FN1_ATN
+    dw fp_exp                       ; FN1_EXP
+    dw fp_ln                        ; FN1_LOG
+BAS_FN1_N equ ($ - bas_fn1tab) / 2
+    ; ...and the table's length IS the index range the compiler may emit, so
+    ; a name added to one and not the other is a build error rather than an
+    ; indirect call into whatever follows.
+    times BAS_FN1_N - (FN1_LOG + 1) db 0
+    times (FN1_LOG + 1) - BAS_FN1_N db 0
+
+; --- bas_f_abs - A = |A| ------------------------------------------------
+; The sign is a BYTE of its own in this library's accumulator, so this is
+; the whole of it and no arithmetic happens.
+bas_f_abs:
+    mov byte [fp_as], 0
+    clc
+    ret
+
+; --- bas_f_sgn - A = -1, 0 or 1 -----------------------------------------
+; fp_iszero WANTS A POINTER IN BX AND ANSWERS IN CF, not in ZF - which is
+; worth the two lines it costs to say, because `call fp_iszero / jz` reads
+; as correct and tests the flags of whatever ran before it.
+bas_f_sgn:
+    push ax
+    push bx
+    mov bx, fp_am0                  ; A's mantissa: zero exactly when A is
+    call fp_iszero
+    jc .zero
+    mov ax, 1
+    cmp byte [fp_as], 0             ; the sign is its own byte here
+    je .got
+    mov ax, -1
+    jmp short .got
+.zero:
+    xor ax, ax
+.got:
+    call fp_i2a                     ; ...which sets A's sign from AX too
+    pop bx
+    pop ax
+    clc
+    ret
+
+; --- bas_f_frac - A = A - TRUNC(A) --------------------------------------
+; NODE [133] DEFINES THIS BY AN IDENTITY and not by a procedure: "It is
+; always true that x=TRUNC(x)+FRAC(x), but INT(x)+FRAC(x) is not equal to x
+; for negative values." So it is built on fp_trunc and NOT on fp_floor -
+; which would satisfy the first half of that sentence and fail the second.
+bas_f_frac:
+    call fp_a_to_b                  ; B = x
+    call fp_trunc                   ; A = TRUNC(x)
+    call fp_swap_ab                 ; A = x, B = TRUNC(x)
+    call fp_sub                     ; A = x - TRUNC(x)
+    clc
     ret
 
 ; --- bas_aerase - delete array BX (SPEC.md 150.41) -----------------------
@@ -2501,6 +2622,58 @@ bas_exec:
     pop bx
     jmp .done
 
+; --- OP_FN1 - A := f(A) (SPEC.md 150.44) --------------------------------
+; + a function index byte, resolved at compile time. The argument is on top
+; of the value stack and the answer REPLACES it, so the stack does not move.
+;
+; CX IS ZEROED FOR fp_round, which takes the number of decimal places there
+; (node [134], half away from zero, negative allowed). Zero is the
+; one-argument form, and the other thirteen ignore CX - so one `xor cx, cx`
+; buys ROUND(x) from this table instead of a routine of its own.
+;
+; A DOMAIN ERROR IS THE ROUTINE'S OWN CF: fp_sqrt sets it on a negative,
+; fp_ln on anything not positive, fp_sin and fp_cos past a word of
+; quadrants. fp_exp never sets it, clamping instead (SPEC.md 84).
+.fn1:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    mov bl, [si]                    ; which function
+    inc si
+    xor bh, bh
+    mov al, [bas_fn1cf + bx]        ; ...does this one REPORT in CF at all?
+    mov [bas_fncf], al
+    shl bx, 1
+    push si
+    push di
+    sub di, BAS_SLOT                ; the top slot: fp_pack_a's destination
+    mov si, di                      ; ...and fp_unpack_a's source
+    call fp_unpack_a
+    xor cx, cx                      ; ROUND(x) is ROUND to nought places
+    call [bas_fn1tab + bx]
+    jnc .fn1ok
+    cmp byte [bas_fncf], 0
+    jne .fn1dom
+.fn1ok:
+    call fp_pack_a                  ; the answer, over the argument
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+.fn1dom:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    mov si, bas_e_fndom
+    call bas_err
+    jmp .done
+
 ; --- OP_ADIMQ - DIM?(a()) (SPEC.md 150.43, node [71]) -------------------
 ; + an index byte. The element count, which is bas_arrcount's answer with
 ; NOTHING done to it: node [71]'s memo gives 12 for `DIM y%(2,3)` at base 0
@@ -3415,6 +3588,7 @@ bas_optab:
     dw bas_exec.dim                 ; OP_DIM
     dw bas_exec.erase               ; OP_ERASE
     dw bas_exec.adimq               ; OP_ADIMQ
+    dw bas_exec.fn1                 ; OP_FN1
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3718,6 +3892,26 @@ bas_kw_mid:     db 'MID$', 0
 bas_kw_dim:     db 'DIM', 0
 bas_kw_option:  db 'OPTION', 0
 bas_kw_base:    db 'BASE', 0
+; --- the one-argument numeric functions (SPEC.md 150.44) ----------------
+; NAME AND INDEX IN ONE TABLE, so the compiler walks it instead of carrying
+; fourteen `wordis` branches: each row is a counted name and the row's
+; position IS the FN1_* index that OP_FN1 emits. A fifteenth is a row.
+bas_fn1names:
+    db 'ABS', 0
+    db 'SGN', 0
+    db 'INT', 0
+    db 'TRUNC', 0
+    db 'FIX', 0
+    db 'FRAC', 0
+    db 'ROUND', 0
+    db 'SQR', 0
+    db 'SIN', 0
+    db 'COS', 0
+    db 'TAN', 0
+    db 'ATN', 0
+    db 'EXP', 0
+    db 'LOG', 0
+    db 0                            ; an empty name ends the walk
 bas_kw_dimq:    db 'DIM', 0       ; ...and a '?' after it (150.43)
 bas_kw_lbound:  db 'LBOUND', 0
 bas_kw_ubound:  db 'UBOUND', 0
@@ -3829,6 +4023,7 @@ bas_e_arrto:    db 'a size runs low TO high', 0
 bas_e_arrdims:  db 'DIM takes one, two or three sizes here', 0
 bas_e_arrnodim: db 'that array has not been DIMmed yet on this run', 0
 bas_e_arrnotdim: db 'ERASE wants an array this program DIMs somewhere', 0
+bas_e_fndom:    db 'that number is outside what the function accepts', 0
 bas_e_basedim:  db 'OPTION BASE must come before any DIM', 0
 bas_e_baseval:  db 'OPTION BASE takes 0 or 1', 0
 bas_e_clrarr:   db 'CLR takes variables; ARRAYFILL fills an array', 0

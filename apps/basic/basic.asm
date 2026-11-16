@@ -771,10 +771,13 @@ bas_ab4:        db 'SPEC.md 150', 0
 
 ; --- software floating point (SPEC.md 84) ------------------------------------
 ; Opt-OUT gates: what a package does not call it need not carry (84.8). The
-; transcendentals, sqrt and pow arrive with the built-in library in wave 5.
-%define OS88FP_NOTRANS
-%define FP_NO_SQRT
-%define FP_NO_POW
+; three that were set here are GONE as of wave 5 slice 1 (SPEC.md 150.44):
+; the logarithms, the trigonometry, fp_sqrt and fp_pow are what SQR, SIN,
+; COS, TAN, ATN, EXP and LOG are bound to, and the comment here said they
+; "arrive with the built-in library in wave 5", which they now have.
+; MEASURED at 1,680 bytes of image - 68.6% of APP_MAX_SIZE to 71.2% - and no
+; bss, its scratch being declared already. fp_pow comes with them for `^`,
+; which is the next slice and the only thing still unbound.
 %define DEC_S16                             ; number -> decimal text, 0 resident
 %include "os88dec.inc"                      ; (SPEC.md 20.5.2) - docs/INDEX.md
                                             ; says of it "reach for it before
@@ -915,7 +918,8 @@ BAS_B_bas_adimd  equ BAS_B_bas_abase + 2
 BAS_B_bas_adimf  equ BAS_B_bas_adimd + 2
 BAS_B_bas_adimx  equ BAS_B_bas_adimf + 2
 BAS_B_bas_adimr  equ BAS_B_bas_adimx + 2
-BAS_B_bas_asval  equ BAS_B_bas_adimr + 2
+BAS_B_bas_fncf   equ BAS_B_bas_adimr + 2
+BAS_B_bas_asval  equ BAS_B_bas_fncf + 2
 BAS_B_bas_acur   equ BAS_B_bas_asval + 4
 BAS_B_bas_asubs  equ BAS_B_bas_acur + 2
 BAS_B_bas_atop   equ BAS_B_bas_asubs + 2
@@ -1142,6 +1146,10 @@ bas_adimr       equ os88_image_end + BAS_B_bas_adimr ; word: the dimension
                                          ; DIM, or 0 if the row is new. A
                                          ; re-DIM may change the bounds and
                                          ; NOT the number of them (150.41)
+bas_fncf        equ os88_image_end + BAS_B_bas_fncf  ; byte: whether the
+                                         ; function now running REPORTS a
+                                         ; domain error in CF - most do not,
+                                         ; and their carry is noise (150.44)
 bas_asval       equ os88_image_end + BAS_B_bas_asval ; the (offset,length)
                                          ; OP_ASSTORE is storing, held here
                                          ; rather than juggled: RUN time, and

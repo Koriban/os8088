@@ -1674,6 +1674,143 @@ PART74 = [
      "Error at line 7: that array has not been DIMmed yet on this run"),
 ]
 
+# THE UNNESTED PART, AND IT STAYS BECAUSE IT IS WHAT SPLIT THE CASE. FRAC
+# first answered a residue instead of -0.4, and reading the library said
+# nothing: fp_trunc, fp_a_to_b, fp_swap_ab and fp_sub are each right on their
+# own and TRUNC through the same op path was right. Line 4 is FRAC and line 5
+# is the same arithmetic by hand through the ordinary operators - they AGREED,
+# which cleared the wrapper and left only the one difference between this part
+# and the ones below: these calls are not NESTED. The outer function of
+# `ROUND(FRAC(...))` was running as a second FRAC, the index having been kept
+# in a word of bss that the inner compile overwrote.
+#
+# So it is kept as the cheap half of the pair: if the functions ever go wrong
+# again, this part says whether it is the arithmetic or the nesting before
+# anything is read.
+PART74B = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT TRUNC(-1.4)",                "-1"),       # 3  known good
+    ("PRINT FRAC(-1.4) * 10",            "-4"),       # 4  the wrapper
+    ("PRINT (-1.4 - TRUNC(-1.4)) * 10",  "-4"),       # 5  ...by hand
+    ("PRINT FRAC(1.4) * 10",             "4"),        # 6  and positive
+    ("PRINT TRUNC(-4.4)",                "-4"),       # 7
+    ("PRINT FRAC(-4.4) * 10",            "-4"),       # 8
+]
+
+# --- wave 5 slice 1: the numeric functions (SPEC.md 150.44) --------------
+# NODE [133]'S OWN EXAMPLE IS THE ORACLE for the four rounding names. It
+# prints `TRUNC(1.3), INT(x), FIX(3*x), FRAC(x-3)` for x = -1.4 and says the
+# answers are 1, -2, -4 and -0.4.
+#
+# THE FIRST THREE ARE ASSERTED AS THE MANUAL PRINTS THEM; the fourth is
+# asserted SCALED, as ROUND(FRAC(...) * 10) = -4. That is the same number -
+# the manual's -0.4 - without resting on how many digits the formatter
+# chooses for a value binary cannot hold exactly, which is a property of
+# PRINT and not of FRAC.
+PART75 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("x = -1.4",                         None),       # 3
+    ("PRINT TRUNC(1.3)",                 "1"),        # 4  node [133]
+    ("PRINT INT(x)",                     "-2"),       # 5  ...its own four
+    ("PRINT FIX(3 * x)",                 "-4"),       # 6
+    ("PRINT ROUND(FRAC(x - 3) * 10)",    "-4"),       # 7  its -0.4, scaled
+    # TRUNC and FIX are ONE routine because node [133] says they are
+    # "identical" - so they must agree on the case that separates them
+    # from INT, which is a negative non-integer.
+    ("PRINT TRUNC(x)",                   "-1"),       # 8
+    ("PRINT FIX(x)",                     "-1"),       # 9
+    ("PRINT INT(x)",                     "-2"),       # 10 ...and INT differs
+]
+
+# NODE [133]'S IDENTITY, BOTH HALVES - which is how it defines FRAC rather
+# than by a procedure: "It is always true that x=TRUNC(x)+FRAC(x), but
+# INT(x)+FRAC(x) is not equal to x for negative values."
+#
+# THE SECOND HALF IS THE TEST THAT MATTERS. A FRAC built on fp_floor instead
+# of fp_trunc satisfies the first sentence and fails the second, so asserting
+# only the identity would pass a wrong FRAC.
+PART76 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("x = -1.4",                         None),       # 3
+    ("PRINT ROUND((TRUNC(x) + FRAC(x)) * 10)", "-14"),  # 4  ...IS x
+    ("PRINT ROUND((INT(x) + FRAC(x)) * 10)",   "-24"),  # 5  ...is NOT x
+    # ...and for a positive x the manual says there is no difference
+    ("y = 1.4",                          None),       # 6
+    ("PRINT ROUND((TRUNC(y) + FRAC(y)) * 10)", "14"),   # 7
+    ("PRINT ROUND((INT(y) + FRAC(y)) * 10)",   "14"),   # 8
+]
+
+# ABS and SGN, whose answers are exact at every point - including SGN of
+# zero, which is the case a sign-byte test gets wrong if it reads the byte
+# without asking whether the number is zero at all.
+PART77 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT ABS(-5)",                    "5"),        # 3
+    ("PRINT ABS(5)",                     "5"),        # 4
+    ("PRINT ABS(0)",                     "0"),        # 5
+    ("PRINT SGN(-3)",                    "-1"),       # 6
+    ("PRINT SGN(7)",                     "1"),        # 7
+    ("PRINT SGN(0)",                     "0"),        # 8  ...the sign byte
+    ("PRINT SGN(-0.5)",                  "-1"),       # 9  of a fraction
+    ("PRINT ROUND(ABS(-1.4) * 10)",      "14"),       # 10
+]
+
+# THE TRANSCENDENTALS, at points where the answer is exact, and then through
+# IDENTITIES at points where it is not - which is how to assert a series
+# approximation without writing its error bound into the row.
+PART78 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT SIN(0)",                     "0"),        # 3
+    ("PRINT COS(0)",                     "1"),        # 4
+    ("PRINT TAN(0)",                     "0"),        # 5
+    ("PRINT EXP(0)",                     "1"),        # 6
+    ("PRINT LOG(1)",                     "0"),        # 7
+    ("PRINT SQR(16)",                    "4"),        # 8  a perfect square
+    ("PRINT SQR(0)",                     "0"),        # 9
+    # ...and the inexact ones, scaled or inverted
+    ("PRINT INT(SQR(2) * 1000)",         "1414"),     # 10
+    ("PRINT ROUND(ATN(1) * 400000)",     "314159"),   # 11 pi, four ways out
+    ("PRINT ROUND(LOG(EXP(1)))",         "1"),        # 12 ln and exp invert
+    ("PRINT ROUND(EXP(LOG(5)))",         "5"),        # 13 ...both ways round
+    ("PRINT ROUND(SIN(ATN(1) * 2))",     "1"),        # 14 sin(pi/2)
+    ("PRINT ROUND(COS(ATN(1) * 4))",     "-1"),       # 15 cos(pi)
+    ("PRINT ROUND(TAN(ATN(1)) * 1000)",  "1000"),     # 16 tan(pi/4)
+]
+
+# ROUND IS NODE [134]'S, and its two worked numbers are a rule rather than
+# two cases: "half away from zero", so -1.2 goes to -1 and 1.7 to 2.
+PART79 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT ROUND(-1.2)",                "-1"),       # 3  node [134]
+    ("PRINT ROUND(1.7)",                 "2"),        # 4  ...its own two
+    ("PRINT ROUND(0.5)",                 "1"),        # 5  away from zero...
+    ("PRINT ROUND(-0.5)",                "-1"),       # 6  ...in both
+    ("PRINT ROUND(2.5)",                 "3"),        # 7  NOT ties-to-even,
+    ("PRINT ROUND(-2.5)",                "-3"),       # 8  which would give 2
+]
+
+# A DOMAIN ERROR IS REFUSED BY NAME, from the routine's own CF - one part
+# each, a refusal ending the program.
+PART80 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT SQR(-1)",                                 # 3
+     "Error at line 3: that number is outside what the function accepts"),
+]
+
+PART81 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT LOG(0)",                                  # 3
+     "Error at line 3: that number is outside what the function accepts"),
+]
+
 # FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1698,7 +1835,8 @@ ARRAYS = (PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
           PART72, PART73, PART74)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
-PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS
+MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81)
+PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
     PARTS = EARLY
@@ -1710,6 +1848,8 @@ elif "--wave4" in sys.argv:
     PARTS = WAVE4
 elif "--arrays" in sys.argv:
     PARTS = ARRAYS
+elif "--math" in sys.argv:
+    PARTS = MATH
 
 FAILED = []
 

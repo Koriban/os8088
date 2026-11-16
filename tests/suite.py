@@ -22110,6 +22110,34 @@ SOAK = [
         "no base term, and a reader who adds one to 'fix' it gets 12 where "
         "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
+    Row("basiclang6", "soak", py("tests/basiclang.py", "--math"), 300.0,
+        "SPEC.md 150.44, wave 5 slice 1: the fourteen one-argument numeric "
+        "functions. EVERY NUMBER IS THE COMPENDIUM'S OWN where it has one. "
+        "Node [133]'s worked example prints TRUNC(1.3), INT(x), FIX(3*x) and "
+        "FRAC(x-3) for x = -1.4 and says the answers are 1, -2, -4 and -0.4; "
+        "node [134]'s prints ROUND(-1.2) and ROUND(1.7) and says -1 and 2, "
+        "which is a RULE and not two cases - half away from zero, so 2.5 "
+        "goes to 3 where ties-to-even would give 2, and that pair is "
+        "asserted too. "
+        "THE -0.4 IS ASSERTED SCALED, as ROUND(FRAC(...)*10) = -4: the same "
+        "number without resting on how many digits PRINT chooses for a value "
+        "binary cannot hold, which is a property of the formatter and not of "
+        "FRAC. "
+        "AND NODE [133] DEFINES FRAC BY AN IDENTITY, both halves of which "
+        "are rows: x = TRUNC(x)+FRAC(x) always, and INT(x)+FRAC(x) is NOT x "
+        "for a negative. The second is the one that matters - a FRAC built "
+        "on fp_floor rather than fp_trunc satisfies the first and fails the "
+        "second, so the identity alone would pass a wrong FRAC. "
+        "The transcendentals are asserted EXACT where they are exact (SIN 0, "
+        "COS 0, EXP 0, LOG 1, SQR 16) and through INVERSES where they are "
+        "not - LOG(EXP(1)), EXP(LOG(5)), SIN and COS of pi built out of "
+        "ATN(1) - which is how to pin a series approximation without writing "
+        "its error bound into the row. SGN of ZERO is its own assertion, "
+        "being the case a sign-byte test gets wrong when it reads the byte "
+        "without asking whether the number is zero at all. Two refusals, one "
+        "part each, from the routines' own CF: SQR of a negative and LOG of "
+        "nought.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "
         "rests on. A program runs on the UI TASK UNDER THE GFX LOCK (12.2's "
