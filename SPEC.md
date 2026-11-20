@@ -261106,6 +261106,71 @@ than silently dropped**: the intent of node [163] is that an accented letter
 upper-cases too, and six of its pairs are unrepresentable here rather than
 unimplemented.
 
+### 150.47 `INSTR` and `RINSTR`, and a bug answered rather than copied
+
+```basic
+a$ = "GFA-Systemtechnik"
+PRINT INSTR(a$, "System")            ' 5                      node [160]
+PRINT INSTR("GFA-BASIC", "BASIC", 6) ' 0  - past where it is
+PRINT RINSTR("a:\FOLDER\*.GFA", "\")  ' 10 - from the end   node [161]
+PRINT INSTR(6, "GFA-BASIC", "BASIC") ' 0  - the SAME call, spelled the other way
+```
+
+**Status: CONTRACT WRITTEN.**
+
+**THE HAYSTACK COMES FIRST**, which is worth stating because dialects differ
+and getting it backwards is a silently reversed answer rather than an error.
+Node [160]: `INSTR(a$,b$)` "searches the character string a$ for an occurrence
+of the string b$", left to right, and returns the 1-BASED position where b$
+begins or **0** if it is not there. `RINSTR` (node [161]) is the same search
+right to left.
+
+**BOTH SPELLINGS OF THE START POSITION ARE THE COMPENDIUM'S**, and both are
+accepted: `INSTR(a$,b$[,x])` and `INSTR([x,]a$,b$)` are listed as three
+signatures of one function. The compiler tells them apart by the FIRST
+argument's type - `bas_restype` after it compiles - and the two orders reach
+one opcode through a flags byte rather than two opcodes, which is §150.46's
+`STRING$` economy again. A call with no `x` gets a 1 the compiler pushes, so
+the op always sees three slots (MID$'s 32767 is the same trick).
+
+**THE BOTH-EMPTY RULE FALLS OUT RATHER THAN BEING A CASE.** Node [160] says
+"If a$ and b$ are both null strings (""), one (1) is returned". Defining an
+EMPTY NEEDLE to answer `x` - the position the search starts from - gives 1 for
+the stated case, because `x` defaults to 1, and gives something sensible for
+the case the Compendium does not mention (an empty needle in a non-empty
+haystack). One rule, and the manual's special case is a consequence of it.
+
+**AND THE MEMOS ARE ANSWERED, NOT INHERITED.** Both nodes carry one:
+*"INSTR() has a bug which only appears if parameter 'x' is used"*, with a
+replacement `FUNCTION` whose body is `IF v&<i& THEN v&=0` - so GFA's own
+`INSTR` can return a position BEFORE the start it was given. `RINSTR`'s memo
+is longer and its workaround repairs two cases (`i&=LEN(b$)` and
+`i&<LEN(b$)`). **These describe GFA's implementation, not the statement**, and
+the fix is simply to be correct: a match is only ever reported at a position
+the search was allowed to look at. Same treatment as §150.41 gave node [94]'s
+"never, ever use ERASE" and §150.46 gave node [162]'s negative lengths - the
+warning is kept, with the answer beside it.
+
+**What `x` means for a RIGHT-to-left search** is the one thing neither node
+states outright, and `RINSTR`'s memo settles it: **`x` bounds the END of the
+match, not its start**. Its workaround reads `IF i&<LEN(b$) THEN v&=0`, which
+can only mean the needle has to FIT inside the first `x` characters, and
+`IF i&=LEN(b$) THEN v&=-(LEFT$(a$,i&)=b$)` then tests position 1 because that
+is the only place it can fit. A start ceiling is the other plausible reading
+and it is WRONG: it answers 1 where the manual's own repair answers 0.
+
+**And the two directions want OPPOSITE defaults** when no `x` is given -
+`INSTR` begins at the front, `RINSTR` at the far end - so the compiler pushes
+1 for one and 32767 for the other, the op clamping that to the haystack it is
+handed. An empty needle answers where the search BEGAN, clamped the same way,
+which is how node [160]'s "both null strings" case stays 1 while `RINSTR`'s
+own default does not report past the end of the string.
+
+**Out of range is 0 and not a refusal**, for both: a start past the end of the
+haystack, or a needle longer than what is left, simply is not found. `INSTR`'s
+own example relies on it - `INSTR("GFA-BASIC","BASIC",6)` is 0 because the
+match begins at 5, one before where the search was told to start.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

@@ -204,7 +204,13 @@ OP_SUPPER   equ 65                  ; pop text, push it upper-cased: ASCII
 OP_SREP     equ 66                  ; pop TEXT then a count, push the text
                                     ; repeated - which is STRING$ both ways
                                     ; and SPACE$ as well (150.46)
-OP_N        equ 67                  ; how many there are, table included
+OP_SINSTR   equ 67                  ; + a flags byte: INSTR/RINSTR, both of
+                                    ; node [160]'s argument orders, one op
+                                    ; (SPEC.md 150.47)
+SI_BACK     equ 1                   ; ...search right to left: RINSTR
+SI_XFIRST   equ 2                   ; ...the start came FIRST, so it is the
+                                    ; BOTTOM slot and not the top
+OP_N        equ 68                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1170,6 +1176,68 @@ bas_f_frac:
     call fp_swap_ab                 ; A = x, B = TRUNC(x)
     call fp_sub                     ; A = x - TRUNC(x)
     clc
+    ret
+
+; --- bas_sxarg - the slot at SI as a count, WITHOUT popping -------------
+; in:  SI = a value stack slot. out: AX = its integer value, 0 if negative
+;      or too wide. DI UNTOUCHED, which is the point: INSTR's number is not
+;      always the top slot (SPEC.md 150.47's two argument orders), so it is
+;      read where it lies instead of popped.
+bas_sxarg:
+    push bx
+    push cx
+    push dx
+    push si
+    call fp_unpack_a
+    call fp_a2i
+    jnc .sxsign
+    xor ax, ax                      ; too wide to be a position in a string
+    jmp short .sxout
+.sxsign:
+    or ax, ax
+    jns .sxout
+    xor ax, ax                      ; a negative start reads as the front,
+.sxout:                             ; which the caller turns into 1
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- bas_simatch - does the needle sit at position DX? ------------------
+; in:  SI = the haystack's slot, SI+BAS_SLOT = the needle's, DX = a 1-based
+;      position known to be legal. out: ZF=1 if it matches there; every
+;      register preserved.
+;
+; NO FLAG FIDDLING AT THE END, and that is deliberate rather than clever:
+; the loop leaves ZF=1 exactly when `dec cx` reaches zero, and leaves it 0
+; through the `jne` on a mismatch - and POP does not touch the flags, so the
+; answer survives the unwind.
+bas_simatch:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov cx, [si + BAS_SLOT + 2]     ; the needle's length (never 0 here)
+    mov di, [si + BAS_SLOT]         ; ...and its bytes
+    mov bx, [si]                    ; the haystack's, at DX
+    add bx, dx
+    dec bx                          ; ...1-based
+.simb:
+    mov al, [bx]
+    cmp al, [di]
+    jne .simout
+    inc bx
+    inc di
+    dec cx
+    jnz .simb
+.simout:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; --- bas_aerase - delete array BX (SPEC.md 150.41) -----------------------
@@ -2882,6 +2950,145 @@ bas_exec:
     pop ax
     jmp .done
 
+; --- OP_SINSTR - INSTR and RINSTR (SPEC.md 150.47, nodes [160], [161]) --
+; + a flags byte: SI_BACK searches right to left, SI_XFIRST says the start
+; position was spelled FIRST. Three slots always - a call with no start gets
+; a 1 the compiler pushes - so the only question the flags answer is WHICH
+; slot holds the number, and one op covers all four combinations.
+;
+; THE ANSWER IS 1-BASED, 0 WHEN NOT FOUND, and never a position the search
+; was not allowed to look at. That last clause is the whole of both nodes'
+; memos: GFA's own INSTR "has a bug which only appears if parameter 'x' is
+; used" and its published workaround is `IF v&<i& THEN v&=0`, so it can
+; report a match BEFORE the start it was given. Being correct is the fix.
+;
+; AN EMPTY NEEDLE ANSWERS THE START POSITION, which is one rule rather than
+; a case: node [160]'s "if a$ and b$ are both null strings, one (1) is
+; returned" is that rule with x defaulting to 1.
+.sinstr:
+    cmp di, bas_stk + 3*BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    push dx
+    ; THE CURSOR IS BANKED ONCE, AND ONLY AFTER IT IS PAST THE FLAGS BYTE.
+    ; It was pushed twice - once here still pointing AT the flags, once
+    ; after the `inc si` - and the two pops then put the EARLIER one back,
+    ; so the interpreter resumed on the operand and ran the flags byte as an
+    ; OPCODE. Each spelling failed differently and none of them looked like
+    ; a cursor: 0 is OP_END so a plain INSTR stopped the program, 2 is
+    ; OP_NEG so INSTR(x,a$,b$) negated every answer, and 1 is OP_PUSHN so
+    ; RINSTR ate the bytes after it. stkbalance passes either way - the
+    ; pushes and the pops balance, and WHICH value lands in SI is not a
+    ; depth question.
+    mov bl, [si]                    ; the flags...
+    inc si                          ; ...and past them
+    push si                         ; the op cursor, restored at .sihit
+    ; --- where the three slots are ------------------------------------
+    ; x on top (a$,b$,x) or on the bottom (x,a$,b$); the two strings keep
+    ; their order either way, which is what makes one op enough
+    mov si, di
+    sub si, 3*BAS_SLOT              ; SI = the first slot pushed
+    test bl, SI_XFIRST
+    jz .sixlast
+    mov bp, si                      ; x is the FIRST slot...
+    add si, BAS_SLOT                ; ...and the strings follow it
+    jmp short .sigot
+.sixlast:
+    mov bp, si
+    add bp, 2*BAS_SLOT              ; x is the LAST slot; the strings lead
+.sigot:
+    ; SI = the haystack slot, SI+BAS_SLOT = the needle, BP = the count
+    push bx                         ; the flags, over bas_asub
+    push si
+    mov si, bp
+    call bas_sxarg                  ; AX = the start, 1 if below it
+    pop si
+    pop bx
+    mov dx, ax                      ; DX = the start, 1-based
+    ; --- the lengths -------------------------------------------------
+    mov cx, [si + BAS_SLOT + 2]     ; the needle's length
+    jcxz .siempty                   ; an empty needle: the start position
+    mov ax, [si + 2]                ; the haystack's
+    cmp cx, ax
+    ja .sinone                      ; longer than the haystack: not there
+    sub ax, cx
+    inc ax                          ; AX = the LAST position a match may
+                                    ; start at, 1-based
+    or dx, dx
+    jnz .sihavex
+    mov dx, 1                       ; a start of 0 or less reads as 1
+.sihavex:
+    test bl, SI_BACK
+    jnz .siback
+    cmp dx, ax
+    ja .sinone                      ; a forward start past any possible match
+    ; --- forward: the FIRST match at or after dx ----------------------
+.sifwd:
+    call bas_simatch
+    je .sihit
+    inc dx
+    cmp dx, ax
+    jbe .sifwd
+    jmp short .sinone
+    ; --- backward: the LAST match at or before dx --------------------
+    ; dx is a CEILING here, which is what node [161]'s own workaround says
+    ; its x means - and it makes a needle longer than x answer 0 with no
+    ; special case
+.siback:
+    ; X BOUNDS THE END OF THE MATCH HERE, NOT ITS START, and node [161]'s
+    ; own workaround is what says so: `IF i&<LEN(b$) THEN v&=0` can only
+    ; mean the needle has to FIT inside the first x characters, and
+    ; `IF i&=LEN(b$) THEN v&=-(LEFT$(a$,i&)=b$)` then checks position 1
+    ; because that is the only place it can fit. A start ceiling would
+    ; answer 1 where the manual's own repair answers 0, so the memo settles
+    ; the one thing neither node states outright.
+    sub dx, cx                      ; x - the needle's length...
+    jc .sinone                      ; ...which does not fit in x characters
+    inc dx                          ; = the LAST start x allows
+    cmp dx, ax
+    jbe .siblp
+    mov dx, ax                      ; ...never past the haystack's own last
+.siblp:
+    call bas_simatch
+    je .sihit
+    dec dx
+    jnz .siblp
+    jmp short .sinone
+.siempty:
+    ; AN EMPTY NEEDLE ANSWERS WHERE THE SEARCH BEGAN, clamped to the string
+    ; it was handed - one rule, which gives node [160]'s stated case ("both
+    ; null strings" is 1, because x defaults to 1) and also keeps RINSTR,
+    ; whose own default start is the FAR end, from reporting past it.
+    mov ax, [si + 2]                ; the haystack's length
+    or ax, ax
+    jnz .siecl
+    inc ax                          ; an empty haystack: position 1
+.siecl:
+    or dx, dx
+    jnz .siecx
+    inc dx                          ; below the front reads as 1
+.siecx:
+    cmp dx, ax
+    jbe .sihit
+    mov dx, ax
+    jmp short .sihit
+.sinone:
+    xor dx, dx
+.sihit:
+    pop si                          ; the op cursor, past the flags
+    sub di, 3*BAS_SLOT              ; three slots in...
+    mov ax, dx
+    call fp_i2a
+    call fp_pack_a                  ; ...one number out, at [di]
+    add di, BAS_SLOT
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+
 ; --- OP_FN1 - A := f(A) (SPEC.md 150.44) --------------------------------
 ; + a function index byte, resolved at compile time. The argument is on top
 ; of the value stack and the answer REPLACES it, so the stack does not move.
@@ -3860,6 +4067,7 @@ bas_optab:
     dw bas_exec.strim               ; OP_STRIM
     dw bas_exec.supper              ; OP_SUPPER
     dw bas_exec.srep                ; OP_SREP
+    dw bas_exec.sinstr              ; OP_SINSTR
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4184,6 +4392,8 @@ bas_fn1names:
     db 'EXP', 0
     db 'LOG', 0
     db 0                            ; an empty name ends the walk
+bas_kw_instr:   db 'INSTR', 0
+bas_kw_rinstr:  db 'RINSTR', 0
 bas_kw_trim:    db 'TRIM$', 0
 bas_kw_upper:   db 'UPPER$', 0
 bas_kw_space:   db 'SPACE$', 0

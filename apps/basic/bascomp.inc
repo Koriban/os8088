@@ -2743,6 +2743,12 @@ bas_c_fact:
     call bas_wordis
     je .fnword
     ; --- the built-ins that answer a NUMBER (SPEC.md 150.29) -----------
+    mov si, bas_kw_instr            ; node [160] - and RINSTR, node [161],
+    call bas_wordis                 ; which is the same search backwards
+    je .b_instr
+    mov si, bas_kw_rinstr
+    call bas_wordis
+    je .b_rinstr
     mov si, bas_kw_len
     call bas_wordis
     je .b_len
@@ -2970,6 +2976,99 @@ bas_c_fact:
     pop ax
     jmp bas_emit
 .b_s1x:
+    pop ax
+    ret
+
+; --- INSTR / RINSTR (SPEC.md 150.47, nodes [160] and [161]) ------------
+; NODE [160] LISTS THREE SIGNATURES FOR ONE FUNCTION - INSTR(a$,b$),
+; INSTR(a$,b$,x) and INSTR(x,a$,b$) - so both orders are accepted, and the
+; FIRST ARGUMENT'S TYPE is what tells them apart: bas_restype after it
+; compiles. The two reach ONE opcode through a flags byte rather than two
+; opcodes, and a call with no start gets a 1 from bas_emitnum exactly as
+; MID$ above gets its 32767.
+.b_instr:
+    xor al, al                      ; forward
+    jmp short .b_in
+.b_rinstr:
+    mov al, SI_BACK
+.b_in:
+    push ax                         ; the flags, over the whole parse
+    call bas_bopen
+    jc .b_inx
+    call bas_c_rel                  ; ...the first argument, either kind
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    cmp byte [bas_restype], 0
+    je .b_inxfirst                  ; a NUMBER there: INSTR(x,a$,b$)
+    ; --- INSTR(a$,b$[,x]) ---------------------------------------------
+    call bas_bcomma
+    jc .b_inx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    je .b_in3
+    ; NO START GIVEN - and the two directions want OPPOSITE defaults: INSTR
+    ; begins at the front, RINSTR at the far end, so a 1 here searched only
+    ; position 1 backwards. 32767 is MID$'s missing length again, and the op
+    ; clamps it to the string it is given.
+    pop ax
+    push ax                         ; ...the flags, read without losing them
+    test al, SI_BACK
+    mov ax, 1
+    jz .b_innox
+    mov ax, 32767
+.b_innox:
+    call bas_emitnum
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    jmp short .b_inend
+.b_in3:
+    inc word [bas_src]
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    call bas_wantnum
+    jc .b_inx
+    jmp short .b_inend
+    ; --- INSTR(x,a$,b$) - the same call, the start spelled first -------
+.b_inxfirst:
+    call bas_wantnum
+    jc .b_inx
+    pop ax
+    or al, SI_XFIRST                ; ...so the op reads the BOTTOM slot
+    push ax
+    call bas_bcomma
+    jc .b_inx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    call bas_bcomma
+    jc .b_inx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_inx
+.b_inend:
+    call bas_bclose
+    jc .b_inx
+    ; AND THE RESULT IS A NUMBER whatever the arguments were. bas_c_rel sets
+    ; bas_restype from what it just parsed, so INSTR(a$,b$) left it saying
+    ; TEXT - a$ was the last thing it typed - and PRINT then emitted the
+    ; STRING print, which read the packed double as an offset and a length,
+    ; found length 0, and printed a BLANK LINE the harness drops. The forms
+    ; ending in a number were all correct, which is why only half of them
+    ; failed. LEN and ASC never needed this: they reach bas_c_str directly
+    ; and never let bas_c_rel retype anything.
+    mov byte [bas_restype], 0
+    mov al, OP_SINSTR
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .b_inx
+    pop ax
+    jmp bas_emit                    ; ...and which search it was
+.b_inx:
     pop ax
     ret
 

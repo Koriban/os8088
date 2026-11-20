@@ -1965,6 +1965,90 @@ PART91 = [
      "Error at line 3: that many characters is a negative number"),
 ]
 
+# --- INSTR and RINSTR (SPEC.md 150.47, nodes [160] and [161]) -----------
+# NODE [160]'S OWN EXAMPLE: a$ = "GFA-Systemtechnik", INSTR(a$,"System") is
+# 5, and INSTR("GFA-BASIC","BASIC",6) is 0 - the second because the match
+# begins at 5, ONE BEFORE where the search was told to start. That pair is
+# the whole contract in two lines: haystack first, 1-based, 0 when absent,
+# and a start that is honoured.
+PART92 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('a$ = "GFA-Systemtechnik"',         None),        # 3
+    ('PRINT INSTR(a$, "System")',        "5"),        # 4  node [160]
+    ('PRINT INSTR("GFA-BASIC", "BASIC", 6)', "0"),    # 5  ...and its other
+    ('PRINT INSTR("GFA-BASIC", "BASIC")',    "5"),    # 6  without the start
+    ('PRINT INSTR("GFA-BASIC", "BASIC", 5)', "5"),    # 7  AT it, not past
+    ('PRINT INSTR(a$, "zzz")',           "0"),        # 8  absent
+    ('PRINT INSTR("abcabc", "abc")',     "1"),        # 9  the FIRST one...
+    ('PRINT INSTR("abcabc", "abc", 2)',  "4"),        # 10 ...then the next
+]
+
+# THE SAME CALLS, SPELLED THE OTHER WAY. Node [160] lists INSTR([x,]a$,b$)
+# as a signature of the same function, so these must agree with the rows
+# above exactly - the compiler tells the orders apart by the FIRST
+# argument's type and both reach one opcode.
+PART93 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('PRINT INSTR(6, "GFA-BASIC", "BASIC")', "0"),    # 3  = part 92 line 5
+    ('PRINT INSTR(5, "GFA-BASIC", "BASIC")', "5"),    # 4  = its line 7
+    ('PRINT INSTR(2, "abcabc", "abc")',  "4"),        # 5  = its line 10
+    ('PRINT INSTR(1, "abcabc", "abc")',  "1"),        # 6
+]
+
+# RINSTR SEARCHES RIGHT TO LEFT, and node [161]'s own example is the row:
+# RINSTR("a:\FOLDER\*.GFA","\") finds the LAST backslash at position 10.
+PART94 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('PRINT RINSTR("a:\\FOLDER\\*.GFA", "\\")', "10"),  # 3  node [161]
+    # ...verbatim, backslashes and all: _QCHAR can type one, and BASIC has
+    # no escapes, so "\\" is the one-character string the manual means
+    ('PRINT RINSTR("abcabc", "abc")',    "4"),        # 4  the LAST one...
+    ('PRINT INSTR("abcabc", "abc")',     "1"),        # 5  ...where INSTR
+    ('PRINT RINSTR("abcabc", "zzz")',    "0"),        # 6  absent
+    # ...and for a backward search x bounds where the match ENDS (150.47),
+    # which is what node [161]'s own workaround for GFA's bug implies: the
+    # needle must FIT inside the first x characters
+    ('PRINT RINSTR("abcabc", "abc", 3)', "1"),        # 7  not 4
+    ('PRINT RINSTR(3, "abcabc", "abc")', "1"),        # 8  either spelling
+]
+
+# THE BUG BOTH MEMOS DESCRIBE, WHICH THIS DOES NOT HAVE. Node [160]: "INSTR()
+# has a bug which only appears if parameter 'x' is used", and its published
+# workaround is `IF v&<i& THEN v&=0` - so GFA can report a match BEFORE the
+# start it was given. Node [161] patches two more cases the same way. These
+# rows are those workarounds' conditions asked directly: a position before
+# the start must never come back, and a needle longer than a backward
+# search's ceiling must answer 0.
+PART95 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('PRINT INSTR("abcabc", "abc", 2)',  "4"),        # 3  never 1
+    ('PRINT INSTR("abc", "abc", 2)',     "0"),        # 4  never 1
+    ('PRINT INSTR("abc", "abc", 4)',     "0"),        # 5  past the end
+    ('PRINT RINSTR("abc", "abc", 2)',    "0"),        # 6  node [161]'s
+    ('PRINT RINSTR("abc", "abc", 3)',    "1"),        # 7  i& = LEN(b$)
+]
+
+# THE EMPTY STRINGS, which node [160] states for ONE case and 150.47 makes a
+# rule: an empty needle answers the START, so both-empty is 1 because x
+# defaults to 1.
+PART96 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('PRINT INSTR("", "")',              "1"),        # 3  node [160] says 1
+    ('PRINT RINSTR("", "")',             "1"),        # 4  node [161] too
+    ('PRINT INSTR("abc", "")',           "1"),        # 5  the rule, not a
+    ('PRINT INSTR("abc", "", 2)',        "2"),        # 6  case: the START
+    ('PRINT INSTR("", "abc")',           "0"),        # 7  nothing to find
+    # ...and RINSTR's default start is the FAR end, so the same rule puts
+    # an empty needle at the end of the haystack rather than at 1
+    ('PRINT RINSTR("abc", "")',          "3"),        # 8
+    ('PRINT RINSTR("", "abc")',          "0"),        # 9
+]
+
 # FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1991,7 +2075,8 @@ WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
         PART82, PART83, PART84, PART85, PART86,
-        PART87, PART88, PART89, PART90, PART91)
+        PART87, PART88, PART89, PART90, PART91,
+        PART92, PART93, PART94, PART95, PART96)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
