@@ -2061,6 +2061,182 @@ PART96 = [
 # `--arrays` IS A SPLIT OF `--w3tail` AND NOT A NEW IDEA: that group went from
 # 9 parts to 30 while 150.40 to 150.42 were built, 236 seconds to 744, which
 # is the same reasoning that made these groups in the first place.
+# --- CALC.BAS: an application, not a feature (apps/basic/samples/) ------
+# THE PROGRAM UNDER TEST IS A FILE, not a list in this one. Every other part
+# here types a few lines written to exercise an opcode; these two type a
+# whole application off disk, which is the only way to find the defects that
+# need a hundred lines of someone else's program to show up. The suite has
+# been paid this lesson once already (driving all three apps end to end
+# found a reload defect no unit row could).
+#
+# IT IS SPLIT AT ITS OWN MARKERS so the ENGINE can be driven WITHOUT the
+# GUI. calc.bas keeps press(k) free of any knowledge of menus - kd() turns a
+# menu index into a key code - so CALC1 calls press() directly and asserts
+# all eight functions, while CALC2 types the same file whole and clicks it.
+# A harness that can only reach a menu's FIRST item could never assert the
+# arithmetic through the bar.
+#
+# COMMENTS AND INDENTATION ARE STRIPPED BEFORE TYPING and nothing else is:
+# at about three seconds a line, calc.bas's 65 comment lines are four
+# minutes of keystrokes that no assertion depends on. The code typed is the
+# file's own, line for line.
+def _calc_src():
+    p = os.path.join(ROOT, "apps", "basic", "samples", "calc.bas")
+    out = {"main": [], "glue": [], "engine": []}
+    where = None
+    for raw in open(p):
+        t = raw.strip()
+        if t == "' == MAIN ==":
+            where = "main"
+            continue
+        if t == "' == GLUE ==":
+            where = "glue"
+            continue
+        if t == "' == ENGINE ==":
+            where = "engine"
+            continue
+        if where is None or not t or t.startswith("'"):
+            continue
+        # a TRAILING comment goes too, but only when its ' is outside a
+        # string - the keypad's labels are quoted text and must survive
+        q = t.find("'")
+        while q >= 0:
+            if t[:q].count('"') % 2 == 0:
+                t = t[:q].rstrip()
+                break
+            q = t.find("'", q + 1)
+        out[where].append(t)
+    if not out["main"] or not out["glue"] or not out["engine"]:
+        raise SystemExit("calc.bas: a == MAIN == / == GLUE == / == ENGINE == "
+                         "marker moved")
+    return out["main"], out["glue"], out["engine"]
+
+
+# THE GLUE IS SEPARATE BECAUSE THE SEPARATION HAS TO BE REAL. pressed() is
+# the one procedure that knows kd() exists, and while it sat among the rest
+# the engine could not compile without the menu table: kd parsed as a BARE
+# VARIABLE, which left `(i))` for the argument list to choke on, and the
+# whole program was refused at pressed()'s line before any of it ran. The
+# marker is what makes "the engine knows nothing of menus" checkable rather
+# than merely asserted.
+CALC_MAIN, CALC_GLUE, CALC_ENG = _calc_src()
+
+# EVERY ANSWER BELOW IS A TAPE LINE, because show() PRINTs and the console
+# pane appends - so a key that changes nothing still leaves a number, and the
+# column reads like an adding machine's roll. That is also why Mem+ answers
+# with the DISPLAY and not the memory: it does not touch cur.
+#
+# AND THAT IS WHY THERE ARE FOUR PARTS. The console buffer is 25 ROWS, and it
+# SCROLLS - so a program that prints 78 lines pushes the 31415 sentinel off
+# the top, and the sentinel is what console_lines() FINDS THE BUFFER BY. The
+# row then fails as "the console buffer is found by its shape" with the
+# program having run perfectly, which is a diagnosis that costs a screenshot
+# to make. _CALC_CAP below turns that into an import-time error instead.
+_CALC_CAP = 20                      # tape lines a part may print
+
+_CALC_INIT = ["acc = 0", "cur = 0", "pend = 0", "ent = 0", "mem = 0",
+              "err = 0", "done = 0"]
+
+# --- the groups, each a sequence that starts from a known display --------
+G_ADD   = [("press(7)",  "7"), ("press(12)", "7"), ("press(7)", "7"),
+           ("press(10)", "14")]
+G_SUB   = [("press(11)", "0"), ("press(9)",  "9"), ("press(13)", "9"),
+           ("press(4)",  "4"), ("press(10)", "5")]
+G_MUL   = [("press(11)", "0"), ("press(6)",  "6"), ("press(14)", "6"),
+           ("press(7)",  "7"), ("press(10)", "42")]
+G_DIV   = [("press(11)", "0"), ("press(8)",  "8"), ("press(4)",  "84"),
+           ("press(15)", "84"), ("press(4)", "4"), ("press(10)", "21")]
+# AN OPERATOR FOLDS THE PENDING ONE, so a chain needs no Equals at all
+G_CHAIN = [("press(11)", "0"), ("press(7)",  "7"), ("press(12)", "7"),
+           ("press(7)",  "7"), ("press(12)", "14")]
+G_SQRT  = [("press(11)", "0"), ("press(8)",  "8"), ("press(1)",  "81"),
+           ("press(16)", "9")]
+G_PCT   = [("press(11)", "0"), ("press(5)",  "5"), ("press(0)",  "50"),
+           ("press(17)", ".5")]          # ...and PRINT drops the leading 0
+G_RECIP = [("press(11)", "0"), ("press(4)",  "4"), ("press(18)", ".25")]
+# A DIGIT AFTER THE SIGN KEY EXTENDS AWAY FROM ZERO: keying 5, Negate, 3 is
+# -53 on every desk calculator, and cur * 10 + k alone gives -47. Found by
+# tracing these expectations by hand, before the program was ever run.
+G_NEG   = [("press(11)", "0"), ("press(5)",  "5"), ("press(19)", "-5"),
+           ("press(3)",  "-53")]
+# Mem+ LEAVES THE DISPLAY ALONE, which is why these answer with cur
+G_MEM   = [("press(11)", "0"), ("press(7)",  "7"), ("press(20)", "7"),
+           ("press(11)", "0"), ("press(21)", "7"), ("press(3)",  "3"),
+           ("press(20)", "3"), ("press(11)", "0"), ("press(21)", "10")]
+# SEVEN DIGITS, NOT EIGHT, and the difference is PRINT's: the formatter
+# keeps seven significant figures, so a display holding 12345678 prints as
+# 12345680 - the last key pressed is not the one shown. A desk calculator
+# shows exactly what it holds, so calc.bas stops the entry where the display
+# stops, and the EIGHTH key is the one ignored here.
+G_SEVEN = [("press(11)", "0"), ("press(1)", "1"), ("press(2)", "12"),
+           ("press(3)", "123"), ("press(4)", "1234"), ("press(5)", "12345"),
+           ("press(6)", "123456"), ("press(7)", "1234567"),
+           ("press(8)", "1234567")]      # ...and the eighth is ignored
+# EACH OF THESE THREE WOULD END THE PROGRAM if its guard were missing - / 0
+# and SQR of a negative are refusals BY NAME - so a tape that carries on past
+# them is the assertion, and E staying up under other keys is the lock.
+G_EDIV  = [("press(11)", "0"), ("press(4)",  "4"), ("press(15)", "4"),
+           ("press(0)",  "0"), ("press(10)", "E"), ("press(7)",  "E"),
+           ("press(10)", "E"), ("press(11)", "0")]
+G_ESQR  = [("press(11)", "0"), ("press(5)",  "5"), ("press(19)", "-5"),
+           ("press(16)", "E"), ("press(11)", "0")]
+G_EREC  = [("press(18)", "E"), ("press(11)", "0")]
+G_AGAIN = [("press(2)",  "2"), ("press(12)", "2"), ("press(3)",  "3"),
+           ("press(10)", "5")]
+
+
+# THE DRIVER IS A PROCEDURE, AND IT COMES AFTER THE ENGINE, which is not
+# tidiness: a call to a procedure not yet compiled occupies one of SIXTEEN
+# slots until it is, and the driver's calls at the top level exhausted them -
+# the refusal then landed on the ENGINE's own `GOSUB fold`, naming a line
+# that was perfectly correct. Written below the engine, every press() here is
+# a BACKWARD reference that resolves as it is parsed, and only `GOSUB run` is
+# ever waiting.
+#
+# The expectations still read in order: the console prints them in the order
+# the lines are written, because the lines are written in the order they run.
+def _calc_part(*groups):
+    drive = [t for g in groups for t in g]
+    n = sum(1 for _, e in drive if e is not None)
+    if n > _CALC_CAP:
+        raise SystemExit("calc: a part prints %d tape lines and the console "
+                         "buffer is 25 rows - split it (cap %d)"
+                         % (n, _CALC_CAP))
+    return ([("CLS", None), ("PRINT 31415", "31415"), ("GOSUB run", None),
+             ("END", None)]
+            + [(l, None) for l in CALC_ENG]
+            + [("PROCEDURE run", None)]
+            + [(l, None) for l in _CALC_INIT]
+            + drive
+            + [("RETURN", None)])
+
+
+CALC1 = _calc_part(G_ADD, G_SUB, G_MUL, G_DIV)
+CALC2 = _calc_part(G_CHAIN, G_SQRT, G_PCT, G_RECIP, G_NEG)
+CALC3 = _calc_part(G_MEM, G_SEVEN)
+CALC4 = _calc_part(G_EDIV, G_ESQR, G_EREC, G_AGAIN)
+
+# THE WHOLE FILE, TYPED AND CLICKED. Four picks of four menus' FIRST items -
+# 7, Add, 7, Add - and the second Add is what folds, so 14 arrives through
+# the bar without an Equals the harness cannot reach.
+#
+# THIS PART IS LAST IN THE GROUP ON PURPOSE: the program it types does not
+# terminate, because a calculator runs until you quit it and Quit is the
+# fifth item of its menu, not the first. `#pick` aims at y=30 - the first
+# item - and the item pitch is NOT a flat ten pixels, so reaching the fifth
+# wants the dropdown read off the glass rather than a remembered offset.
+# That is owed; until it exists, this part leaves its program running and
+# nothing may follow it.
+CALC5 = ([("CLS", None), ("PRINT 31415", "31415")]
+         + [(l, None) for l in CALC_MAIN]
+         + [(l, None) for l in CALC_GLUE]
+         + [(l, None) for l in CALC_ENG]
+         + [("#bar Keys", None), ("#bar Math", None), ("#bar Calc", None),
+            ("#pick Keys", "0"),      # the display the program opens with
+            ("#pick Math", "7"),      # ...then 7 from the pick above
+            ("#pick Keys", "7"),      # Add, folding nothing
+            ("#pick Math", ["7", "14"])])
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2077,6 +2253,7 @@ MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
         PART82, PART83, PART84, PART85, PART86,
         PART87, PART88, PART89, PART90, PART91,
         PART92, PART93, PART94, PART95, PART96)
+CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2091,6 +2268,8 @@ elif "--arrays" in sys.argv:
     PARTS = ARRAYS
 elif "--math" in sys.argv:
     PARTS = MATH
+elif "--calc" in sys.argv:
+    PARTS = CALC
 
 FAILED = []
 

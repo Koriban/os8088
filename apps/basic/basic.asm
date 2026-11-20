@@ -95,7 +95,7 @@ BAS_CON_PAD equ 2                           ; the console text inset inside
 BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
-BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
+BAS_PROG_MAX equ 4096                       ; the program buffer, NUL included
 
 ; F5 = Run. W_ONKEY is handed AL = ascii, AH = the scancode (SPEC.md 9.7.1),
 ; and a function key has no ascii - so this is scancode 0x3F with AL = 0, the

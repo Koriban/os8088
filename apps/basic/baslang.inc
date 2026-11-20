@@ -3727,15 +3727,22 @@ bas_exec:
 .mnreal:
     cmp word [bas_mwn], BAS_MEN_ITEMS
     jae .mnitems
-    call bas_mcopy                  ; AX = the item's stable text
-    jc .mntext
+    ; THE ITEM IS COPIED ONCE. It was copied TWICE: a bas_mcopy here, whose
+    ; AX the `mov ax, di` below overwrote two lines later, and then the real
+    ; one after bas_melem - so every item spent its bytes in the arena twice
+    ; and only the second address was ever recorded. 256 bytes held half the
+    ; menu it says it does, and the `jc` guarded the DEAD copy, leaving the
+    ; live one's overflow unchecked. Two menus of one item each never came
+    ; near it; CALC.BAS's 23 items did (SPEC.md 150.48).
     mov di, [bas_mwm]
     mov ax, di
     mov cl, BAS_MEN_ITEMS*2
     mul cl
     mov dx, ax                      ; DX = this menu's table offset
-    call bas_melem
-    call bas_mcopy
+    call bas_melem                  ; SI = the element again: the arithmetic
+                                    ; above does not preserve it
+    call bas_mcopy                  ; AX = the item's stable text
+    jc .mntext
     mov di, dx
     add di, [bas_mwn]
     add di, [bas_mwn]

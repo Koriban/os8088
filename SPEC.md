@@ -261171,6 +261171,104 @@ haystack, or a needle longer than what is left, simply is not found. `INSTR`'s
 own example relies on it - `INSTR("GFA-BASIC","BASIC",6)` is 0 because the
 match begins at 5, one before where the search was told to start.
 
+### 150.48 `CALC.BAS`, the first application, and what it measured
+
+**Status: BUILT** - `apps/basic/samples/calc.bas`, driven by row `basiccalc`.
+
+An eight-function desk calculator: add, subtract, multiply, divide, square
+root, percent, reciprocal and sign change, with the ten digits, Equals, Clear
+and two memory keys around them. It exists because **an application finds
+what a feature row cannot**, and four of the five things below were found by
+writing it rather than by testing it.
+
+**THE MENU BAR IS THE KEYPAD, because nothing in the language delivers a
+mouse click on something a program DREW.** `ON MENU` and `ALERT` are the only
+two event sources that exist (§150.36, §150.37), so a clickable key has to be
+a menu item or a dialog button. Drawing a keypad is *already* possible through
+§150.8's tier C - every kernel slot is reachable - and learning that one of
+its keys was pressed is not. That asymmetry, not the absence of the drawing
+verbs, is what stands between this language and a conventional GUI
+application, and it is one statement rather than a wave.
+
+**THREE MENUS, because `MENU_APPMAX` is five** and BASIC's own bar already
+carries File and Run. The titles are short for a second reason: what really
+bounds the bar is its WIDTH, the kernel's layout pass stopping at the first
+title that would reach the clock (§12.2).
+
+**THE DISPLAY IS A PAPER TAPE**, which is the console pane's doing rather than
+a compromise. `PRINT` appends, so every key leaves its value behind and the
+column reads like an adding machine's roll. A calculator that overwrote one
+display line would want the drawing verbs.
+
+**THE ENGINE TAKES KEY CODES AND KNOWS NOTHING OF MENUS.** `press(k)` is the
+whole calculator; `kd()` maps a menu index to a key code. That is ordinary
+separation, but here it is also what makes the program TESTABLE: `#pick` can
+only reach a menu's FIRST item, so the arithmetic could not be asserted
+through the bar at all. The row calls `press()` directly for all eight
+functions and clicks the bar only to prove the wiring.
+
+**`E` AND A LOCK, NOT A DIALOG, and this one is a requirement rather than a
+style.** Divide by zero and `SQR` of a negative are **fatal refusals** in this
+language - they end the program by name - so an interactive program must never
+let its own arithmetic be the thing that stops it. Every such key is guarded
+and answers `E`, which the display holds until Clear, exactly as the hardware
+does. `ALERT` would have been the obvious way to report a bad key and is the
+wrong one: it SUSPENDS the program, correctly by §150.36's re-entrant seam,
+and a calculator whose divide key stops the machine until someone clicks OK is
+not a calculator.
+
+**AND THE SIGN KEY DOES NOT END THE ENTRY**, which was a defect in the first
+draft of this program, found by tracing the row's own expectations by hand
+before it ran. Keying 5, Negate, 3 means -53 on every desk calculator;
+`cur * 10 + k` alone gives -47, so `digit()` is where the sign has to be
+honoured.
+
+**THE DISPLAY IS SEVEN DIGITS BECAUSE `PRINT` IS.** The formatter keeps seven
+significant figures, so a display holding 12345678 prints as **12345680** -
+the last key pressed is not the one shown. A desk calculator's display shows
+exactly what it holds, so the entry stops where the display stops. The
+arithmetic is unaffected: a double holds far more, and only the ENTRY is
+capped.
+
+**TWO LIMITS THE PROGRAM FOUND BY HITTING THEM, both of which refuse in a
+way that points away from the cause.**
+
+- **A call to a procedure not yet compiled holds one of SIXTEEN slots** until
+  the procedure appears. The row's driver made eighty `press()` calls at the
+  top level, exhausted the table, and the refusal then landed on the
+  **engine's own `GOSUB fold`** - a line that was entirely correct, and the
+  first one unlucky enough to need a slot after they ran out. A shared
+  resource exhausted by one piece of code is reported at whichever OTHER
+  piece asks next. The fix is ordering, not a bigger table: a driver written
+  BELOW the procedures it calls makes every call a backward reference that
+  resolves as it is parsed.
+- **Every menu ITEM was copied into the text arena TWICE**, which `MENU m$()`
+  had done since it was written: the first `bas_mcopy`'s result is overwritten
+  by the index arithmetic two lines later and only the second is recorded, so
+  256 bytes held half the menu they claim - and the `jc` guarded the DEAD
+  copy, leaving the live one's overflow unchecked. CALC.BAS's three menus and
+  23 items need 166 bytes copied once and 317 copied twice, which is exactly
+  the refusal it got. §150.38's own rows never came near it: two menus of ONE
+  item each. **This is what an application is for** - the defect is in a path
+  a feature row exercised and passed.
+- **The console buffer is 25 rows and it SCROLLS**, which is the real cap on
+  how much of a program a single run can assert. A driver printing 78 tape
+  lines pushes the `31415` sentinel off the top - and the sentinel is what
+  `console_lines()` LOCATES THE BUFFER BY - so the row fails as "the console
+  buffer is found by its shape" while the program underneath it has run
+  perfectly. That is a diagnosis that costs a screenshot, so `_CALC_CAP`
+  turns it into an import-time error in `tests/basiclang.py` instead.
+
+**`BAS_PROG_MAX` DOUBLED TO 4,096 BECAUSE OF THIS PROGRAM, and that is the
+measurement worth keeping.** calc.bas types as 2,023 bytes - 99% of the old
+2,048-byte buffer - for one modest application with no file handling, no
+string work to speak of and three menus. The program buffer, not the op
+budget or the variable table, is the first wall an application hits here. It
+costs 2,048 bytes of bss (22,305 to 24,353, so 75.5% of the 65,024 cap) and
+the editor's own `TX_MAX` follows it, both because the declared total is
+DERIVED from the chain rather than written down (§150.39's trap 4) - raising
+the literal was the whole change.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
