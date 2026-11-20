@@ -1811,6 +1811,75 @@ PART81 = [
      "Error at line 3: that number is outside what the function accepts"),
 ]
 
+# --- `^` (SPEC.md 150.45, node [128]) -----------------------------------
+# NODE [128]'S OWN EXAMPLE opens it: `PRINT 3*2^2` displays 12, which is the
+# manual's check that `^` is above `* /`. The rest of this part is the
+# hierarchy's OTHER consequence, which is the one that matters.
+PART82 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT 3 * 2 ^ 2",                  "12"),       # 3  node [128]
+    ("PRINT 2 ^ 2 * 3",                  "12"),       # 4  ...either side
+    ("PRINT 2 ^ 3",                      "8"),        # 5
+    ("PRINT 10 ^ 2",                     "100"),      # 6  EXACTLY 100: whole
+    ("PRINT 10 ^ 4",                     "10000"),    # 7  exponents square
+    ("PRINT 2 ^ 0",                      "1"),        # 8
+    # `.125` AND NOT `0.125`: this formatter omits a leading zero below 1,
+    # which is every BASIC of this line's habit - and worth a note, because
+    # node [133]'s own example prints FRAC(-4.4) as `-0.4` WITH one. That is
+    # a question about PRINT's number format (and SPEC.md 150's, not this
+    # section's); `^` is doing arithmetic here, and PART75 asserts FRAC
+    # SCALED for exactly this reason.
+    ("PRINT 2 ^ -3",                     ".125"),     # 9  no brackets needed
+    ("PRINT (-2) ^ 3",                   "-8"),       # 10 a NEGATIVE base is
+    ("PRINT (-2) ^ 2",                   "4"),        # 11 ordinary here
+]
+
+# THE DIVERGENCE, ON ITS OWN, because it is the first place following the
+# Compendium over basicnw produces a different NUMBER. Node [128] puts
+# SIGNING above exponentiation, so the base is already negated when `^` sees
+# it: `-2^2` is (-2)^2 = 4. basicnw's parser says the opposite in as many
+# words - "`^` binds tighter than unary minus" - and answers -4. A
+# differential run against the oracle is EXPECTED to disagree here.
+PART83 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT -2 ^ 2",                     "4"),        # 3  NOT -4
+    ("PRINT -3 ^ 2",                     "9"),        # 4  NOT -9
+    ("PRINT -2 ^ 3",                     "-8"),       # 5  (-2)^3, either way
+    # ...and the brackets that force the other reading, so the row shows both
+    ("PRINT -(2 ^ 2)",                   "-4"),       # 6  basicnw's answer
+    ("x = 2",                            None),       # 7
+    ("PRINT -x ^ 2",                     "4"),        # 8  a variable too
+]
+
+# RIGHT-ASSOCIATIVE, which node [128] does NOT state - it is basicnw's answer
+# taken where the Compendium is silent. 2^3^2 is 2^(3^2) = 512, where
+# left-associativity would give (2^3)^2 = 64, so the two readings are 448
+# apart and this row cannot be satisfied by both.
+PART84 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT 2 ^ 3 ^ 2",                  "512"),      # 3  NOT 64
+    ("PRINT (2 ^ 3) ^ 2",                "64"),       # 4  ...the other way
+    ("PRINT 2 ^ (3 ^ 2)",                "512"),      # 5  ...and this one
+]
+
+# THE TWO PAIRS WITH NO REAL ANSWER, one part each, from fp_pow's own CF.
+PART85 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT (-8) ^ 0.5",                              # 3  a negative base to
+     "Error at line 3: that number is outside what the function accepts"),
+]
+
+PART86 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT 0 ^ 0",                                   # 3
+     "Error at line 3: that number is outside what the function accepts"),
+]
+
 # FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1835,7 +1904,8 @@ ARRAYS = (PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
           PART72, PART73, PART74)
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
-MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81)
+MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
+        PART82, PART83, PART84, PART85, PART86)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:

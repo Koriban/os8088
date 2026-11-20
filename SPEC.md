@@ -260968,6 +260968,81 @@ past a word of quadrants where the reduction stops meaning anything. The op
 reports whichever it gets; `fp_exp` never fails, clamping instead, which is
 §84's stated rule for overflow.
 
+### 150.45 `^`, and the one place the two authorities disagree
+
+```basic
+PRINT 3 * 2 ^ 2                ' 12 - node [128]'s own example
+PRINT -2 ^ 2                   ' 4, and basicnw says -4. See below.
+PRINT 2 ^ 3 ^ 2                ' 512 - right-associative
+PRINT 10 ^ 2                   ' exactly 100, not 99.999999999998
+PRINT 2 ^ -3                   ' 0.125 - the sign needs no brackets here
+```
+
+**Status: CONTRACT WRITTEN.** `fp_pow` has been linked in since §150.44
+dropped `FP_NO_POW` to get the transcendentals, and bound to nothing until
+now.
+
+**NODE [128], "OPERATOR HIERARCHY", IS THE AUTHORITY AND IT IS EXPLICIT.** Its
+table, top first, with "the operators at the top of this hierarchy are
+processed first":
+
+| | |
+| --- | --- |
+| `()` | brackets |
+| `+` | character string addition |
+| `= < > => <= <>` | character string comparison |
+| **`+ -`** | **signing** |
+| **`^`** | **exponentiation** |
+| `* /` | multiplication, division |
+| `DIV MOD` | integral and modulo division |
+| `+ -` | addition, subtraction |
+| … | comparisons, then the logical operators, then `NOT` |
+
+So `^` binds tighter than `*`, which the node's own example checks — `PRINT
+3*2^2` displays 12 — and the parser gets a level between `term` and `factor`
+for it.
+
+**AND SIGNING BINDS TIGHTER THAN `^`, WHICH IS WHERE THE TWO AUTHORITIES PART
+COMPANY.** `-2^2` is `(-2)^2` = **4** in this language, because node [128]
+puts signing above exponentiation. `basicnw` does the opposite, and says so in
+its parser in as many words: *"`^` binds tighter than unary minus, and is
+right-associative"* — so the oracle answers **-4** for the same line, and
+**the comparison will differ on purpose**.
+
+The Compendium wins because §150.9 is the rule: `basicnw` is what this
+language's answers are COMPARED with, the Compendium is what the language IS
+measured against, and no QuickBASIC program is a specification for it. **This
+is the first case where following that rule produces a visibly different
+number**, which is why it is written here rather than left to be discovered by
+a differential run. §150.31's correction is the nearby precedent: the mistake
+to avoid is not choosing wrongly, it is choosing without naming which
+authority said what.
+
+**ASSOCIATIVITY IS THE OTHER WAY ROUND: the Compendium is SILENT and
+`basicnw` decides it.** Node [128] ranks the operators and says nothing about
+`2^3^2`. Where the authority has no statement, the oracle is a better guide
+than a coin toss, so `^` is **right-associative** and `2^3^2` is `2^(3^2)` =
+512. Recorded as a CHOICE and not as a reading, which is the distinction this
+chapter keeps having to relearn.
+
+**A WHOLE-NUMBER EXPONENT IS EXACT, and that is `fp_pow`'s own doing** rather
+than this section's: it goes by repeated squaring instead of `exp(y·ln x)`,
+"for two reasons rather than speed - `exp(y*ln x)` is inexact for cases
+everyone expects to be exact (10^2 must be 100, not 99.999999999998) and it
+cannot do a NEGATIVE base at all, where (-2)^3 is perfectly ordinary."
+
+**TWO REFUSALS, both `fp_pow`'s own CF:** a negative base with a fractional
+exponent, which has no real answer, and `0^0`. Refused by name like any
+domain error (§150.44's message serves both).
+
+**`OP_LINE` MOVED TO THE END OF THE OPCODE SPACE to make room.** The binaries
+share one operand prologue and are dispatched by `bas_bintab + opcode`, so
+they must be CONTIGUOUS - and `OP_LINE`'s own comment already recorded being
+moved once for that reason. It moves again, by one op, rather than `^` paying
+for a second prologue of its own. Safe because nothing persists an op stream:
+BASIC has no file I/O yet, so an opcode number lives and dies inside one
+`RUN`.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

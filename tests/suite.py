@@ -23317,8 +23317,8 @@ SOAK = [
         "no base term, and a reader who adds one to 'fix' it gets 12 where "
         "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang6", "soak", py("tests/basiclang.py", "--math"), 300.0,
-        "SPEC.md 150.44, wave 5 slice 1: the fourteen one-argument numeric "
+    Row("basiclang6", "soak", py("tests/basiclang.py", "--math"), 420.0,
+        "SPEC.md 150.44 and 150.45, wave 5: the fourteen one-argument numeric "
         "functions. EVERY NUMBER IS THE COMPENDIUM'S OWN where it has one. "
         "Node [133]'s worked example prints TRUNC(1.3), INT(x), FIX(3*x) and "
         "FRAC(x-3) for x = -1.4 and says the answers are 1, -2, -4 and -0.4; "
@@ -23343,7 +23343,19 @@ SOAK = [
         "being the case a sign-byte test gets wrong when it reads the byte "
         "without asking whether the number is zero at all. Two refusals, one "
         "part each, from the routines' own CF: SQR of a negative and LOG of "
-        "nought.",
+        "nought. "
+        "AND `^` (150.45), where THE TWO AUTHORITIES DISAGREE and the rows say "
+        "so: node [128]'s hierarchy puts SIGNING above exponentiation, so "
+        "`-2^2` is (-2)^2 = 4 here, while basicnw's parser says in as many "
+        "words that `^` binds tighter than unary minus and answers -4 - a "
+        "differential run against the oracle is EXPECTED to differ on that "
+        "line. Associativity is the other way round: node [128] is silent and "
+        "basicnw decides it, so `2^3^2` is 512 where left-associativity gives "
+        "64, and both readings are asserted with their brackets beside them. "
+        "Node [128]'s own example opens it (3*2^2 = 12), 10^2 is asserted "
+        "EXACTLY 100 because fp_pow squares a whole exponent rather than "
+        "going through the logarithm, and the two pairs with no real answer - "
+        "a negative base to a fractional power, and 0^0 - are a part each.",
         needs=("qemu",), wants=("build/basic.img",)),
     Row("basiclang4", "soak", py("tests/basiclang.py", "--wave4"), 260.0,
         "SPEC.md 150.36: the suspend/resume seam, which wave 4's event loop "

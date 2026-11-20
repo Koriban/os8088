@@ -2542,7 +2542,7 @@ bas_c_expr:
 ; bas_c_term - term:  factor { (*|\) factor }
 ; -----------------------------------------------------------------------------
 bas_c_term:
-    call bas_c_fact
+    call bas_c_pow
     cmp byte [bas_bad], 0
     jne .x
 .more:
@@ -2558,7 +2558,7 @@ bas_c_term:
     ret
 .mul:
     inc word [bas_src]
-    call bas_c_fact
+    call bas_c_pow
     cmp byte [bas_bad], 0
     jne .x
     mov al, OP_MUL
@@ -2566,7 +2566,7 @@ bas_c_term:
     jmp .more
 .idiv:
     inc word [bas_src]
-    call bas_c_fact
+    call bas_c_pow
     cmp byte [bas_bad], 0
     jne .x
     mov al, OP_IDIV
@@ -2574,12 +2574,44 @@ bas_c_term:
     jmp .more
 .slash:
     inc word [bas_src]
-    call bas_c_fact
+    call bas_c_pow
     cmp byte [bas_bad], 0
     jne .x
     mov al, OP_DIV
     call bas_emit
     jmp .more
+.x:
+    ret
+
+; -----------------------------------------------------------------------------
+; bas_c_pow - power:  factor [ '^' power ]   (SPEC.md 150.45, node [128])
+; -----------------------------------------------------------------------------
+; BETWEEN term AND factor, which is the whole of node [128]'s ranking: `^` is
+; above `* /` and BELOW signing, so its operands are FACTORS - and a factor
+; is where unary minus lives. That is what makes `-2^2` four here and not
+; minus four: the base is already negated when `^` sees it.
+;
+; RIGHT-ASSOCIATIVE, by recursing instead of looping, so `2^3^2` is 2^(3^2).
+; Node [128] ranks the operators and says nothing about this, so it is
+; basicnw's answer taken as a CHOICE where the Compendium is silent - not a
+; reading of it (SPEC.md 150.45).
+;
+; `2^-3` needs no brackets for the same reason the base does not: the
+; exponent is a factor too, and signing is inside it.
+bas_c_pow:
+    call bas_c_fact
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '^'
+    jne .x
+    inc word [bas_src]
+    call bas_c_pow                  ; ...itself, which is the associativity
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_POW
+    jmp bas_emit
 .x:
     ret
 

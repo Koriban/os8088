@@ -71,9 +71,6 @@ OP_JF       equ 9                   ; + a word: pop, and jump there if FALSE
 OP_JMP      equ 10                  ; + a word: jump there
 OP_CLS      equ 23                  ; clear the console
 OP_JT       equ 24                  ; + a word: pop, and jump there if TRUE
-OP_LINE     equ 22                  ; + a word: the line now running, for a
-                                    ; refusal's message (it is LAST because
-                                    ; the binaries must stay contiguous)
 ; --- the binaries, contiguous and last --------------------------------------
 OP_ADD      equ 11
 OP_SUB      equ 12
@@ -90,6 +87,12 @@ OP_LT       equ 18
 OP_GT       equ 19
 OP_LE       equ 20
 OP_GE       equ 21
+OP_POW      equ 22                  ; `^` (SPEC.md 150.45, node [128]): a
+                                    ; binary like any other, two slots in and
+                                    ; one out, so it shares the prologue - and
+                                    ; THAT is why it is numbered here and why
+                                    ; OP_LINE moved to the end of the space
+                                    ; for the second time
 OP_CALL     equ 25                  ; + a word: call the procedure there
 OP_RET      equ 26                  ; ...and come back out of one
 OP_LOCAL    equ 27                  ; + an index byte: save that variable on
@@ -181,8 +184,14 @@ OP_FN1      equ 62                  ; + a function index byte: A := f(A) for
                                     ; numeric functions. One op, because
                                     ; every one of them has that shape - a
                                     ; fifteenth is a keyword and a table row
-OP_N        equ 63                  ; how many there are, table included
-OP_BIN_N    equ 11                  ; ...and how many of them are binaries
+OP_LINE     equ 63                  ; + a word: the line now running, for a
+                                    ; refusal's message. LAST, because the
+                                    ; binaries must stay contiguous and `^`
+                                    ; took 22 (SPEC.md 150.45) - the same
+                                    ; move this op's comment already recorded
+                                    ; making once before
+OP_N        equ 64                  ; how many there are, table included
+OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
 ; An entry does NOT hold the name. It holds where the name IS - an offset into
@@ -1779,6 +1788,14 @@ bas_exec:
     call fp_div                     ; CF=1 and A=0 when B is zero, which is
     jc .divzero                     ; the one failure this layer reports
     jmp .store
+.pow:
+    ; A^B, A being the base and B the exponent, which is the order .binary
+    ; already put them in. fp_pow refuses two pairs that have no real answer
+    ; - a negative base with a fractional exponent, and 0^0 - and reports
+    ; them in CF like fp_div does (SPEC.md 150.45).
+    call fp_pow
+    jc .powdom
+    jmp .store
 .idiv:
     ; `\` is INTEGER division and truncates both operands first, which is
     ; what it means in every BASIC of this line. fp_a2i/fp_i2a carry the
@@ -2906,6 +2923,13 @@ bas_exec:
     pop si
     mov si, bas_e_div0
     jmp bas_err
+.powdom:
+    ; a negative base with a fractional exponent, or 0^0 (SPEC.md 150.45).
+    ; The same message the one-argument functions give for the same kind of
+    ; answerlessness - 150.44's - rather than a second wording for it.
+    pop si
+    mov si, bas_e_fndom
+    jmp bas_err
 .wide:
     pop si
     mov si, bas_e_wide
@@ -3543,7 +3567,7 @@ bas_optab:
     dw bas_exec.binary              ; OP_GT
     dw bas_exec.binary              ; OP_LE
     dw bas_exec.binary              ; OP_GE
-    dw bas_exec.line                ; OP_LINE
+    dw bas_exec.binary              ; OP_POW
     dw bas_exec.cls                 ; OP_CLS
     dw bas_exec.jt                  ; OP_JT     (NO TRAILING BACKSLASH IN A
                                     ; COMMENT: nasm continues the line on one
@@ -3589,6 +3613,7 @@ bas_optab:
     dw bas_exec.erase               ; OP_ERASE
     dw bas_exec.adimq               ; OP_ADIMQ
     dw bas_exec.fn1                 ; OP_FN1
+    dw bas_exec.line                ; OP_LINE
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3618,6 +3643,7 @@ bas_bintab:
     dw bas_exec.cmp                 ; OP_GT    .binary leaves there: one table
     dw bas_exec.cmp                 ; OP_LE    of masks instead of six bodies
     dw bas_exec.cmp                 ; OP_GE
+    dw bas_exec.pow                 ; OP_POW
 BAS_BINTAB_N equ ($ - bas_bintab) / 2
     times BAS_BINTAB_N - OP_BIN_N db 0
     times OP_BIN_N - BAS_BINTAB_N db 0

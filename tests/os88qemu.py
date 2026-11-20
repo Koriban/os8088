@@ -478,7 +478,14 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           # the statement at all. Shift-backslash, the same key as `\\`
           # above. (`[` and `]` are still absent and have no caller;
           # tests/basiclang.py uses `<` and `>` where it wants a delimiter.)
-          "|": ("backslash", 1)}
+          "|": ("backslash", 1),
+          # ...and the CARET, which SPEC.md 150.45's `^` cannot be written
+          # without - shift-6 on the US layout. Added when the operator's own
+          # row could not be typed at all: the language was right and
+          # type_text raised `no qcode for '^'`, which is the THIRD gap this
+          # table has had found by a new statement needing a character
+          # (`[`/`]` are still absent and still have no caller).
+          "^": ("6", 1)}
 
 
 class _Sock(object):
