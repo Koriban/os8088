@@ -185,12 +185,26 @@ OP_FN1      equ 62                  ; + a function index byte: A := f(A) for
                                     ; every one of them has that shape - a
                                     ; fifteenth is a keyword and a table row
 OP_LINE     equ 63                  ; + a word: the line now running, for a
-                                    ; refusal's message. LAST, because the
-                                    ; binaries must stay contiguous and `^`
-                                    ; took 22 (SPEC.md 150.45) - the same
-                                    ; move this op's comment already recorded
-                                    ; making once before
-OP_N        equ 64                  ; how many there are, table included
+                                    ; refusal's message. OUT OF THE BINARY
+                                    ; RANGE, which is all its position has to
+                                    ; be: the binaries share one operand
+                                    ; prologue and are dispatched by
+                                    ; `bas_bintab + opcode`, so they must be
+                                    ; contiguous and `^` took 22 (SPEC.md
+                                    ; 150.45) - the same move this op's
+                                    ; comment already recorded making once
+; --- wave 5 slice 2: the string chapter's own four (SPEC.md 150.46) -------
+OP_STRIM    equ 64                  ; pop text, push it with the spaces off
+                                    ; BOTH ends - and it allocates NOTHING,
+                                    ; a value being an offset and a length
+OP_SUPPER   equ 65                  ; pop text, push it upper-cased: ASCII
+                                    ; and the eight accented pairs CP437 can
+                                    ; spell (node [163]'s fourteen are the
+                                    ; Atari's)
+OP_SREP     equ 66                  ; pop TEXT then a count, push the text
+                                    ; repeated - which is STRING$ both ways
+                                    ; and SPACE$ as well (150.46)
+OP_N        equ 67                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1718,6 +1732,55 @@ bas_upper:
 .no:
     ret
 
+; --- bas_supcase - AL upper-cased, ACCENTS INCLUDED (SPEC.md 150.46) -----
+; UPPER$'s own mapper and NOT an extension of bas_upper above, deliberately:
+; that one is what the compiler folds KEYWORDS and names with, and it wants
+; ASCII only. Widening it would quietly change what two names differing by
+; an accent's case mean.
+;
+; NODE [163]'s FOURTEEN PAIRS ARE THE ATARI'S. Its table is
+; `üéäàåçæöñãõøœĳ` -> `ÜÉÄÀÅÇÆÖÑÃÕØŒĲ`; this machine's console is CP437
+; (SPEC.md 70.8), which has an upper-case form for EIGHT of them and none at
+; all for a-grave, a-tilde, o-tilde, o-slash, oe and ij - so those six pass
+; through, which is unrepresentable here rather than unimplemented.
+bas_supcase:
+    call bas_upper                  ; a-z first, which is most of every string
+    cmp al, 0x80
+    jb .scdone                      ; plain ASCII: bas_upper settled it
+    push bx
+    push cx
+    mov bx, bas_upacc
+    mov cx, BAS_UPACC_N
+.scl:
+    cmp al, [bx]
+    je .schit
+    add bx, 2
+    dec cx
+    jnz .scl
+    pop cx
+    pop bx
+.scdone:
+    ret
+.schit:
+    mov al, [bx + 1]
+    pop cx
+    pop bx
+    ret
+
+; the eight pairs CP437 can spell, lower byte then upper byte
+bas_upacc:
+    db 0x81, 0x9A                   ; u-diaeresis -> U-diaeresis
+    db 0x82, 0x90                   ; e-acute     -> E-acute
+    db 0x84, 0x8E                   ; a-diaeresis -> A-diaeresis
+    db 0x86, 0x8F                   ; a-ring      -> A-ring
+    db 0x87, 0x80                   ; c-cedilla   -> C-cedilla
+    db 0x91, 0x92                   ; ae          -> AE
+    db 0x94, 0x99                   ; o-diaeresis -> O-diaeresis
+    db 0xA4, 0xA5                   ; n-tilde     -> N-tilde
+BAS_UPACC_N equ ($ - bas_upacc) / 2
+    times BAS_UPACC_N - 8 db 0
+    times 8 - BAS_UPACC_N db 0
+
 ; -----------------------------------------------------------------------------
 ; bas_exec - run the compiled op stream
 ; -----------------------------------------------------------------------------
@@ -2637,6 +2700,186 @@ bas_exec:
     call bas_err
     pop si
     pop bx
+    jmp .done
+
+; --- OP_STRIM - TRIM$ (SPEC.md 150.46, node [159]) ----------------------
+; Pop text, push it with the SPACES off both ends. Node [159]: "removes
+; spaces from the left and right ends of strings", and its example takes
+; "   test  " (9) to "test" (4).
+;
+; IT ALLOCATES NOTHING, which falls out of 150.28's model rather than being
+; an optimisation: a value is a DS offset and a length, so this is a new
+; offset and a shorter length over the CALLER'S OWN bytes. The top slot is
+; rewritten in place, so the stack does not move either.
+.strim:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push bx
+    push cx
+    push si
+    mov si, [di - BAS_SLOT]         ; the bytes...
+    mov cx, [di - BAS_SLOT + 2]     ; ...and how many
+.strlead:
+    jcxz .strdone                   ; all spaces: the empty string
+    cmp byte [si], ' '
+    jne .strtail
+    inc si
+    dec cx
+    jmp short .strlead
+.strtail:
+    mov bx, si
+    add bx, cx
+    cmp byte [bx - 1], ' '
+    jne .strdone
+    dec cx
+    jnz .strtail                    ; (a one-space string reaches 0 here)
+.strdone:
+    mov [di - BAS_SLOT], si         ; NARROWED, not copied
+    mov [di - BAS_SLOT + 2], cx
+    pop si
+    pop cx
+    pop bx
+    jmp .next
+
+; --- OP_SUPPER - UPPER$ (SPEC.md 150.46, node [163]) --------------------
+; Pop text, push it upper-cased. This one DOES copy: the bytes change, so it
+; takes a temporary like .scat does.
+.supper:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, [di - BAS_SLOT + 2]
+    call bas_stmpalloc              ; AX = the destination, CX bytes
+    jc .supfull
+    mov si, [di - BAS_SLOT]
+    mov bx, ax
+    mov [di - BAS_SLOT], ax         ; the result is the temporary; its
+                                    ; LENGTH is unchanged, so the slot's
+                                    ; second word already says it
+    jcxz .supdone
+.supb:
+    mov al, [si]
+    call bas_supcase
+    mov [bx], al
+    inc si
+    inc bx
+    dec cx
+    jnz .supb
+.supdone:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+.supfull:
+    ; NO MESSAGE HERE: bas_stmpalloc refuses BY NAME itself - "longer than
+    ; the arena" or "out of room for text" - so a second bas_err puts two
+    ; lines on the console and shifts every answer after it. .sslx above is
+    ; the pattern: unwind and stop.
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp .done
+
+; --- OP_SREP - STRING$ both ways, and SPACE$ (SPEC.md 150.46, node [162])
+; Pop the TEXT (on top) and then the COUNT, push the text repeated. The
+; compiler puts them in that order because the SOURCE does - `STRING$(x,a$)`
+; names the count first - and one op serves all three spellings: SPACE$(x)
+; is a literal space here, and STRING$(x,code) is an OP_NCHR the compiler
+; inserts (150.46).
+;
+; THE LIMIT IS THE ARENA and not node [162]'s 32767: bas_stmpalloc refuses
+; what 150.28's 4,096 bytes cannot hold, which is the answer to that node's
+; own memo about negative lengths in compiled GFA.
+.srep:
+    cmp di, bas_stk + 2*BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [di - BAS_SLOT]         ; the text's bytes...
+    mov cx, [di - BAS_SLOT + 2]     ; ...and its length
+    sub di, BAS_SLOT                ; drop it: the COUNT is the top now
+    push si
+    push cx
+    call bas_sarg1                  ; AX = the count, a negative refused
+    pop cx
+    pop si
+    jc .srepbad
+    mul cx                          ; DX:AX = the bytes wanted
+    or dx, dx
+    jnz .srepbig                    ; past a word: the arena cannot either,
+                                    ; and nothing has been asked for yet, so
+                                    ; THIS path owes the message
+    mov dx, ax                      ; DX = the total
+    push cx
+    mov cx, dx
+    call bas_stmpalloc              ; AX = the destination
+    pop cx
+    jc .srepfull
+    ; BOTH OPERANDS ARE GONE BY NOW, so the result goes at [di] and DI is
+    ; advanced past it - .sslice's convention two screens up, and the thing
+    ; this op got wrong first time round: it wrote [di - BAS_SLOT] and left
+    ; DI alone, which put the answer one slot BELOW the live stack and left
+    ; the next op reading whatever was under it. A wrong number, not a
+    ; crash, which is the failure mode this row's `why` names.
+    mov [di], ax
+    mov [di + 2], dx
+    mov bx, ax
+    jcxz .srepdone                  ; an empty source repeats to empty
+    or dx, dx
+    jz .srepdone                    ; ...and so does a count of nought
+.srepone:
+    push cx
+    push si
+.srepb:
+    mov al, [si]
+    mov [bx], al
+    inc si
+    inc bx
+    dec cx
+    jnz .srepb
+    pop si
+    pop cx
+    sub dx, cx                      ; one copy down
+    jnz .srepone
+.srepdone:
+    add di, BAS_SLOT                ; ...and PUSH it
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+.srepbad:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .done                       ; bas_sarg1 has already said why
+.srepbig:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov si, bas_e_strfull
+    call bas_err
+    jmp .done
+.srepfull:
+    ; ...whereas here bas_stmpalloc has already said which way it refused
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     jmp .done
 
 ; --- OP_FN1 - A := f(A) (SPEC.md 150.44) --------------------------------
@@ -3614,6 +3857,9 @@ bas_optab:
     dw bas_exec.adimq               ; OP_ADIMQ
     dw bas_exec.fn1                 ; OP_FN1
     dw bas_exec.line                ; OP_LINE
+    dw bas_exec.strim               ; OP_STRIM
+    dw bas_exec.supper              ; OP_SUPPER
+    dw bas_exec.srep                ; OP_SREP
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -3938,6 +4184,13 @@ bas_fn1names:
     db 'EXP', 0
     db 'LOG', 0
     db 0                            ; an empty name ends the walk
+bas_kw_trim:    db 'TRIM$', 0
+bas_kw_upper:   db 'UPPER$', 0
+bas_kw_space:   db 'SPACE$', 0
+bas_kw_string:  db 'STRING$', 0
+bas_s_sp1:      db ' '              ; ONE SPACE, for SPACE$ to repeat - the
+                                    ; compiler pushes it as a literal where
+                                    ; the source wrote none (SPEC.md 150.46)
 bas_kw_dimq:    db 'DIM', 0       ; ...and a '?' after it (150.43)
 bas_kw_lbound:  db 'LBOUND', 0
 bas_kw_ubound:  db 'UBOUND', 0

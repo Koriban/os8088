@@ -1880,6 +1880,91 @@ PART86 = [
      "Error at line 3: that number is outside what the function accepts"),
 ]
 
+# --- wave 5 slice 2: the string chapter's four (SPEC.md 150.46) ---------
+# NODE [159]'S OWN EXAMPLE for TRIM$: b$ = "   test  " displays 9, then the
+# word without spaces, then 4. Asserted BRACKETED, because a console line
+# comes out of a space-padded cell buffer where "test" and "test   " read
+# alike - and spaces are the whole subject here, which is PART29's rule for
+# LSET/RSET applied where it matters even more.
+PART87 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('b$ = "   test  "',                 None),       # 3
+    ("PRINT LEN(b$)",                    "9"),        # 4  node [159]
+    ('PRINT "<" + TRIM$(b$) + ">"',      "<test>"),   # 5  ...its middle
+    ("PRINT LEN(TRIM$(b$))",             "4"),        # 6  ...and its last
+    # ...both ends in ONE call, which is why GFA has no LTRIM$/RTRIM$ pair
+    ('PRINT "<" + TRIM$("  a") + ">"',   "<a>"),      # 7
+    ('PRINT "<" + TRIM$("a  ") + ">"',   "<a>"),      # 8
+    ('PRINT "<" + TRIM$("   ") + ">"',   "<>"),       # 9  all spaces
+    ('PRINT "<" + TRIM$("") + ">"',      "<>"),       # 10 and empty
+    ('PRINT "<" + TRIM$("a b") + ">"',   "<a b>"),    # 11 the MIDDLE stays
+]
+
+# NODE [163]'S OWN EXAMPLE for UPPER$, verbatim: a$ = " test",
+# b$ = UPPER$(a$) + UPPER$("ware"), PRINT UPPER$("Gfa basic 3"); b$ puts
+# 'GFA BASIC 3 TESTWARE' on the screen - the leading space of " TEST" being
+# what separates the two halves.
+PART88 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('a$ = " test"',                     None),       # 3
+    ('b$ = UPPER$(a$) + UPPER$("ware")', None),       # 4
+    ('PRINT UPPER$("Gfa basic 3") + b$', "GFA BASIC 3 TESTWARE"),   # 5
+    # ...and what it must NOT touch: digits, punctuation, and capitals
+    ('PRINT UPPER$("a1-B!z")',           "A1-B!Z"),   # 6
+    ('PRINT LEN(UPPER$("abc"))',         "3"),        # 7  length unchanged
+]
+
+# NODE [162]'S OWN EXAMPLE for the repeaters, in pieces: it prints
+# SPACE$(5); STRING$(3,a$); SPC(4); STRING$(5,65) for a$ = "GFA " and gets
+# '     GFA GFA GFA     AAAAA'. SPC() is a PRINT item rather than a function
+# and is not in this slice, so the row asserts the other three and the
+# spaces are BRACKETED.
+PART89 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ('a$ = "GFA "',                      None),       # 3
+    ('PRINT "<" + SPACE$(5) + ">"',      "<     >"),  # 4  five
+    ("PRINT LEN(SPACE$(5))",             "5"),        # 5
+    ('PRINT "<" + STRING$(3, a$) + ">"', "<GFA GFA GFA >"),  # 6  node [162]
+    ('PRINT STRING$(5, 65)',             "AAAAA"),    # 7  ...its code form
+    ("PRINT LEN(STRING$(5, 65))",        "5"),        # 8
+    # ...the two forms are one op, so they must agree where they overlap
+    ('PRINT STRING$(3, "x")',            "xxx"),      # 9
+    ('PRINT STRING$(3, 120)',            "xxx"),      # 10 120 is 'x'
+    # ...and the degenerate counts
+    ('PRINT "<" + STRING$(0, "x") + ">"', "<>"),      # 11 none at all
+    ('PRINT "<" + SPACE$(0) + ">"',      "<>"),       # 12
+    ('PRINT "<" + STRING$(4, "") + ">"', "<>"),       # 13 empty, repeated
+]
+
+# A COUNT THE ARENA CANNOT HOLD is refused by name, which is the answer to
+# node [162]'s own memo - "SPACE$() and STRING$(count,code) do weird things
+# without of range string sizes in compiled applications. No error is
+# generated and the string LEN() ends up -negative." 150.28's whole arena is
+# 4,096 bytes, so 5000 cannot be had.
+PART90 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    # bas_stmpalloc has TWO refusals and this is the specific one: 5000 in
+    # ONE piece is more than the arena could ever hold, which it says before
+    # it even looks at what is free. The op adds no message of its own -
+    # doing so put two lines on the console and shifted every answer after
+    # them, which is how this expectation was wrong twice over.
+    ("PRINT LEN(SPACE$(5000))",                       # 3
+     "Error at line 3: one piece of text is longer than the arena"),
+]
+
+# ...and a NEGATIVE count is refused as a count, which bas_sarg1 already
+# does for every count in the language (SPEC.md 150.29).
+PART91 = [
+    ("CLS",                              None),       # 1
+    ("PRINT 31415",                      "31415"),    # 2
+    ("PRINT LEN(SPACE$(-1))",                         # 3
+     "Error at line 3: that many characters is a negative number"),
+]
+
 # FIVE ROWS, ONE FILE. The whole set is past half an hour of typing, which is
 # too slow to iterate against and too slow to sit in one soak slot while
 # docs/plans/SOAK-PARALLEL.md has others idle. `--early` is the language
@@ -1905,7 +1990,8 @@ ARRAYS = (PART50, PART51, PART52, PART53, PART54, PART55, PART56, PART57,
 WAVE4 = (PART38, PART39, PART39B, PART40, PART41, PART42, PART43, PART44,
          PART45, PART46, PART47, PART48, PART49)
 MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
-        PART82, PART83, PART84, PART85, PART86)
+        PART82, PART83, PART84, PART85, PART86,
+        PART87, PART88, PART89, PART90, PART91)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:

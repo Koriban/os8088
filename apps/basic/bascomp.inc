@@ -2030,6 +2030,18 @@ bas_c_sfact:
     mov si, bas_kw_mid
     call bas_wordis
     je .b_mid
+    mov si, bas_kw_trim             ; node [159], hidden in LEN's node
+    call bas_wordis
+    je .b_trim
+    mov si, bas_kw_upper            ; node [163] - and there is no LOWER$
+    call bas_wordis
+    je .b_upper
+    mov si, bas_kw_space            ; node [162], both of its forms and
+    call bas_wordis                 ; SPACE$ too (SPEC.md 150.46)
+    je .b_space
+    mov si, bas_kw_string
+    call bas_wordis
+    je .b_string
     ; a `$` ARRAY's element reads as text, and the same OP_ALOAD serves:
     ; an element is eight bytes and a string value is the first four of
     ; them, so the copy onto the stack is already right (SPEC.md 150.31)
@@ -2156,6 +2168,80 @@ bas_c_sfact:
     jmp bas_emit
 .b_snx:
     pop ax
+    ret
+
+; --- TRIM$(a$) and UPPER$(a$) - one string in, one out ------------------
+.b_trim:
+    mov al, OP_STRIM
+    jmp short .b_s1
+.b_upper:
+    mov al, OP_SUPPER
+.b_s1:
+    push ax
+    call bas_bopen
+    jc .b_s1x
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_s1x
+    call bas_bclose
+    jc .b_s1x
+    pop ax
+    jmp bas_emit
+.b_s1x:
+    pop ax
+    ret
+
+; --- SPACE$(x), STRING$(x,a$) and STRING$(x,code) - ONE op ---------------
+; MID$ below does the same thing for the same reason: its missing length is
+; a 32767 THE COMPILER PUSHES, "so there is one opcode and not two". Here
+; SPACE$'s repeated text is a literal space the compiler pushes, and
+; STRING$'s numeric second form is an OP_NCHR it inserts - so OP_SREP
+; serves all three and node [162]'s two signatures need no second op
+; (SPEC.md 150.46).
+;
+; THE COUNT IS COMPILED FIRST because the SOURCE names it first, and
+; OP_SREP pops the text off the top for exactly that reason.
+.b_space:
+    call bas_bopen
+    jc .b_s2x
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_s2x
+    call bas_wantnum
+    jc .b_s2x
+    call bas_bclose
+    jc .b_s2x
+    mov al, OP_SPUSHL               ; ...and the space the source never wrote
+    call bas_emit
+    mov ax, bas_s_sp1
+    call bas_emitw
+    mov ax, 1
+    call bas_emitw
+    mov al, OP_SREP
+    jmp bas_emit
+.b_string:
+    call bas_bopen
+    jc .b_s2x
+    call bas_c_rel                  ; the COUNT
+    cmp byte [bas_bad], 0
+    jne .b_s2x
+    call bas_wantnum
+    jc .b_s2x
+    call bas_bcomma
+    jc .b_s2x
+    call bas_c_rel                  ; ...and what to repeat, either kind
+    cmp byte [bas_bad], 0
+    jne .b_s2x
+    call bas_bclose
+    jc .b_s2x
+    cmp byte [bas_restype], 0       ; a NUMBER there is a character CODE,
+    jne .b_srep                     ; which is node [162]'s second form
+    mov al, OP_NCHR
+    call bas_emit
+.b_srep:
+    mov al, OP_SREP
+    jmp bas_emit
+.b_s2x:
     ret
 
 ; --- MID$(s$, start [, n]) -------------------------------------------

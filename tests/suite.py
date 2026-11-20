@@ -23317,7 +23317,7 @@ SOAK = [
         "no base term, and a reader who adds one to 'fix' it gets 12 where "
         "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
-    Row("basiclang6", "soak", py("tests/basiclang.py", "--math"), 420.0,
+    Row("basiclang6", "soak", py("tests/basiclang.py", "--math"), 600.0,
         "SPEC.md 150.44 and 150.45, wave 5: the fourteen one-argument numeric "
         "functions. EVERY NUMBER IS THE COMPENDIUM'S OWN where it has one. "
         "Node [133]'s worked example prints TRUNC(1.3), INT(x), FIX(3*x) and "

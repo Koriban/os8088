@@ -261043,6 +261043,69 @@ for a second prologue of its own. Safe because nothing persists an op stream:
 BASIC has no file I/O yet, so an opcode number lives and dies inside one
 `RUN`.
 
+### 150.46 Wave 5, slice 2: the string chapter's own four
+
+```basic
+b$ = "   test  "
+PRINT LEN(b$), TRIM$(b$), LEN(TRIM$(b$))   ' 9, test, 4      node [159]
+PRINT UPPER$("Gfa basic 3")                ' GFA BASIC 3     node [163]
+PRINT SPACE$(5); STRING$(3, "GFA "); STRING$(5, 65)
+'      5 spaces, GFA GFA GFA , AAAAA                          node [162]
+```
+
+**Status: CONTRACT WRITTEN.** `TRIM$`, `UPPER$`, `SPACE$` and `STRING$`, with
+both of `STRING$`'s forms.
+
+**THE SET IS CHAPTER 5'S, NOT THE ORACLE'S, AND THEY ARE DIFFERENT SETS.**
+Node [154] lists the string chapter's functions, and the gaps in it are
+`TRIM$`, `INSTR`, `RINSTR`, `STRING$`, `SPACE$`, `SPC`, `UPPER$`, `PRED` and
+`SUCC`. What is NOT there matters as much: **`UCASE$`, `LCASE$`, `LTRIM$` and
+`RTRIM$` appear nowhere in the Compendium** - they are the QuickBASIC line's,
+like `REDIM` and `LBOUND` before them. GFA's spellings are `UPPER$` and
+`TRIM$`, and `TRIM$` does BOTH ends in one call, which is why there is no
+pair to spell separately. **There is also no `LOWER$`**: node [154] lists
+`UPPER$` alone and no node defines a lower-casing function, so this language
+has one direction until something asks for the other.
+
+`TRIM$` is also a function hidden INSIDE another node's title - node [159] is
+"LEN" and defines both - which is the same misfiling that put `CLR` and
+`ERASE` inside node [94] (BASIC-PLAN §0.3: 53 of 136).
+
+**`TRIM$` ALLOCATES NOTHING, and that falls out of §150.28's string model**: a
+value is a DS offset and a length, so trimming spaces off both ends is
+NARROWING THE SAME BYTES - a new offset and a shorter length over the
+caller's own text. No temporary, no arena pressure, and it is safe for the
+same reason a literal needs no copy.
+
+**`SPACE$` AND BOTH `STRING$` FORMS ARE ONE OP.** `SPACE$(x)` is
+`STRING$(x, " ")` with the space as a literal the compiler emits, and
+`STRING$(x, code)` is `STRING$(x, CHR$(code))` with an `OP_NCHR` the compiler
+inserts - so one repeat op serves all three spellings, chosen by
+`bas_restype` after the second argument compiles, which is the flag that
+already tells a number from text at compile time. Node [162] gives the
+worked answers: `STRING$(3, "GFA ")` is `"GFA GFA GFA "` and
+`STRING$(5, 65)` is `"AAAAA"`.
+
+**The count's limit is the ARENA, not node [162]'s 32767.** The Compendium
+allows 32767 repeats; §150.28's string arena is 4,096 bytes for the whole
+program, so the real ceiling is what the arena can hand out and a request
+past it is refused by name. Node [162]'s own memo says GFA got this wrong -
+"SPACE$() and STRING$(count,code) do weird things without of range string
+sizes in compiled applications. No error is generated and the string LEN()
+ends up -negative" - so the refusal here is answering that memo rather than
+inheriting it, as §150.41 did for `ERASE`'s warnings.
+
+**`UPPER$` UPPER-CASES THE ACCENTED LETTERS CP437 CAN SPELL, and the table is
+NOT the Compendium's.** Node [163] says "This also happens to characters
+containing umlauts" and prints the ST's own 14 pairs
+(`üéäàåçæöñãõøœĳ` → `ÜÉÄÀÅÇÆÖÑÃÕØŒĲ`). This machine's console is CP437
+(§70.8), which has an upper-case form for **eight** of those fourteen - ä→Ä,
+å→Å, é→É, æ→Æ, ö→Ö, ü→Ü, ç→Ç, ñ→Ñ - and none at all for à, ã, õ, ø, œ and ĳ.
+So those eight map and the other six pass through unchanged. **Stated rather
+than silently dropped**: the intent of node [163] is that an accented letter
+upper-cases too, and six of its pairs are unrepresentable here rather than
+unimplemented.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
