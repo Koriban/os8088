@@ -276,7 +276,7 @@ def main():
             sys.exit("brgifems: BROWSER.O88 did not open a window")
         bw = wins2[-1]
         rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[dispcp.W_SEG] | (rec[dispcp.W_SEG + 1] << 8)
         say("browser at %04X" % pseg)
 
         def rb(name, off=0):
@@ -428,8 +428,9 @@ def main():
                         say("  %s slice %d from %04X:%04X DIFFERS"
                             % (gs[k][0], sl, r["es"], r["si"]))
                 m.run()
-        m.key("Escape")                 # the keyboard back to the page
-        os88marty.settle(m)
+        m.key("Escape")                 # the keyboard back to the page - and
+        drain()                         # 1.8 repaints on it, through the armed
+                                        # breakpoint: drained, not settled
         for _ in range(4 * a.n):        # down to the end, then the top again:
             if rw("br_top") + rw("br_rows") >= rw("br_nlines"):
                 break                   # the load drew the top before its

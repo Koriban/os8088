@@ -71,13 +71,19 @@ import os88sym  # noqa: E402
 # merge, which is the same call 2026-10-20 made - a pad inserted to chase one
 # symbol shifts every symbol behind it, so it is a measured pass or nothing.
 #
+#
+# AND wm_paint_all HAS LEFT BOTH LISTS, with its layered walk (SPEC.md
+# 11.91.7): it is a second entry into wm_paint_dmg now - a straight-line
+# prologue that falls into wm_paint_dmg.go - so it has no loop of its own for
+# a LOOP parity table to price. Checked in the merged kernel rather than
+# taken on trust: the label is still there, the loop is not.
 HOT = {
     "big": {
         "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 1, "font_run_x": 1,
         "font_run_cell": 1, "mou_isr": 0, "mou_isr_body": 0,
         "mou_p2_isr": 0, "kbm_isr": 1, "cur_move": 0, "cur_move_1": 1,
         "sch_isr": 1, "sch_switch": 1, "ui_task": 0, "dsk_xfer": 1,
-        "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
+        "dsk_runcap": 1, "dsk_next_clus_x": 0,
         # the VGA rung's busiest bodies, pinned where kernel hot-paths pass 1
         # measured them (docs/plans/khp1/vga.md). The rung starts on a
         # paragraph, so only `.vga` bytes above them can move these
@@ -118,7 +124,6 @@ HOT = {
         "font_run_cell": 1, "mou_isr": 1, "mou_isr_body": 1, "kbm_isr": 1,
         "cur_move": 1, "sch_isr": 1, "sch_switch": 0, "ui_task": 0,
         "dsk_xfer": 0, "dsk_runcap": 0, "dsk_next_clus_x": 1,
-        "wm_paint_all": 0,
     },
 }
 

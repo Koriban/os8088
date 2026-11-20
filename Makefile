@@ -149,6 +149,7 @@ EXAMPLESIMGS := $(BUILD)/examples.img $(BUILD)/examples720.img \
 OFFICEIMG360  := $(BUILD)/office360.img
 NETWORKIMG360 := $(BUILD)/network360.img
 GAMESIMG360   := $(BUILD)/games360.img
+GAMES2IMG360  := $(BUILD)/games2-360.img
 EMUIMG360     := $(BUILD)/emu360.img
 UTILIMG360    := $(BUILD)/util360.img
 # ...and the 720KB geometry's SECOND apps disk (SPEC.md 24.7): what the 720KB
@@ -176,7 +177,7 @@ ARCRELIMG120  := $(BUILD)/arcrel120.img
 ARCRELIMG720  := $(BUILD)/arcrel720.img
 ARCRELIMG360  := $(BUILD)/arcrel360.img
 
-# ...and all THIRTY-THREE in one list, because it appeared in FOUR places (`all`
+# ...and all THIRTY-FOUR in one list, because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -184,7 +185,8 @@ ARCRELIMG360  := $(BUILD)/arcrel360.img
 SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
-            $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) $(EXAMPLESIMGS) \
+            $(GAMES2IMG360) $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
+            $(EXAMPLESIMGS) \
             $(SMALLIMG360) $(SMALLIMG720) \
             $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360) \
             $(ARCRELIMG) $(ARCRELIMG120) $(ARCRELIMG720) $(ARCRELIMG360) \
@@ -195,7 +197,10 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
 # twenty-five, and upstream's said twenty-five when DEBUGIMGS had already made
 # it twenty-nine. A count in prose is a claim no build reads, so `make` reads
 # this one - add or remove a disk and the error names the new number.
-SHIPIMGS_N := 33
+# 33 -> 34 at the 2026-11-19 upstream merge: GAMES2IMG360 joined the list,
+# and this fork's $(EXAMPLESIMGS) is still in it - the merge offered to drop
+# one or the other and the assertion is what asked.
+SHIPIMGS_N := 34
 ifneq ($(words $(SHIPIMGS)),$(SHIPIMGS_N))
 $(error SHIPIMGS holds $(words $(SHIPIMGS)) images, not the $(SHIPIMGS_N) the \
 comment above claims - correct the comment AND SHIPIMGS_N together)
@@ -642,6 +647,16 @@ $(error BOOTPROF=1 and QUANTUM= cannot be built together: QUANTUM reprograms \
 the PIT divisor (SPEC.md 53.2.1) and the phase stamps are counted against it)
 endif
 VIDDEF += -DBOOT_PROFILE
+endif
+
+#> [Knobs] RARECNT=1 :: count every rare-door call and every rare-cell call, per cell (kernel size pass 19, V7)
+# RARECNT=1 compiles a 32-bit counter into the rare door (one an index,
+# SPEC.md 20.3.4) and into the five rare cell bodies (one a cell, keyed by the
+# cell's offset in the table), in `.lowbss`: the reading that draws T5's
+# hot/rare line by measured frequency rather than by site count
+# (docs/plans/completed/ksp19/door.md). A knob kernel, so guard 2 alone binds it.
+ifneq ($(RARECNT),)
+VIDDEF += -DRARE_COUNTERS
 endif
 
 #> [Knobs] STKDIAG=1 :: measure what an interrupt costs a task stack, on the desktop
@@ -2328,7 +2343,7 @@ endif
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOFDMEDIA NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
-                             SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
+                             SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT RARECNT \
                              CURFIX \
                              FONT INSTCHUNK NOPICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
@@ -2455,7 +2470,7 @@ endif
 # for and what a knob build has to announce.
 empty :=
 space := $(empty) $(empty)
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(MEGAFDMASK),-mfm$(MEGAFDMASK))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(MEMGRAN),-mg$(MEMGRAN))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(B3POISON),-b3p$(B3POISON))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(MEGAFDMASK),-mfm$(MEGAFDMASK))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(RARECNT),-rcn$(RARECNT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(MEMGRAN),-mg$(MEMGRAN))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(B3POISON),-b3p$(B3POISON))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -2736,8 +2751,10 @@ STKLST = -l $(@:.bin=.lst) --before "[map all $(@:.bin=.map)]"
 # per make invocation, so making it a prerequisite here and excluding the two
 # rows keeps `make test-fast` complete on its own and runs each once under
 # `make`. `python3 tools/os88test.py fast` direct still runs them as rows.
+# $(BUILD)/livepayload.txt is the `wants=` of three fast rows (retired,
+# livefull, docglyph) - prebuild only CHECKS it inside a make, so it is here.
 #> [Test] test-fast :: host-side regression tier (budget 30s CPU); `all` already runs it
-test-fast: checkdocs $(SHIPIMGS) $(WEAVEWABS)
+test-fast: checkdocs $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/livepayload.txt
 ifeq ($(KNOBS),)
 	@OS88_PKGDEFS="$(PKGSBDEF)" python3 tools/os88test.py fast -x checkdocs -x docindex
 else
@@ -2747,9 +2764,16 @@ endif
 
 # $(BUILD)/small360.img is small128's `wants=`: inside this make the runner only
 # checks a declared artefact exists (os88test.prebuild, MAKELEVEL), so the
-# target that brings it current has to be here.
+# target that brings it current has to be here - and so are kern_emu's and
+# kern_mega's trees, api-abi-all's: `all` builds neither, and without them
+# `make test-full` on a box that had never typed `make emu` SKIPPED the one
+# row that reads every kernel's API table. Their SYSTEM DISKS and not their
+# kernel.bin: that rule (kernsub-force) builds the kernel alone, a tree
+# bootfence then fails for its missing boot sectors and whose map os88sym
+# refuses; the disk brings the whole tree, as `make emu` and `make mega` do.
 #> [Test] test-full :: did you obviously break the OS: boots on three adapters and kern_small (~1-4 min)
-test-full: $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/small360.img
+test-full: $(SHIPIMGS) $(WEAVEWABS) $(BUILD)/small360.img \
+           $(BUILD)/emu.img $(BUILD)/mega.img
 	@python3 tools/os88test.py full
 
 # THIS TARGET RUNS THE TIER SERIALLY (`--marty-jobs 1`), which is right for a
@@ -3690,6 +3714,10 @@ DRIVERS += $(BUILD)/thmpal.drv
 # every kern_big disk, and kern_small's $(SMALLDRIVERS) is a restatement that
 # never held it
 DRIVERS += $(BUILD)/usbmouse.drv
+# ...and the Olivetti Prodest PC1's Yamaha V6335D mouse (SPEC.md 9.15).
+# It shares DRVC_POINT with USBMOUSE.DRV, so the two rows are alternatives;
+# attach's class fence refuses a second publisher. It is optional and unticked.
+DRIVERS += $(BUILD)/pc1mouse.drv
 # ...and SPEC.md 107's EMS.DRV, a LIM EMS board's page registers: a drv_tab
 # row with SYSTEM.CFG bit 7, not wanted by default (its probe writes ports),
 # so a disk that carries it costs a machine with no board one directory slot
@@ -4029,7 +4057,15 @@ COREAPPSARGS := $(addprefix APPS:,$(CORE_TOOLS)) \
 # rest"). ...AND CDRACK (11 clusters), after main's tree of 2026-11-11 put
 # the disk back at 708 of 713: a CD-ROM drive is an AT's, whose 1.44MB
 # system disk keeps it, and more720.img carries it here
-SYS720OMIT := $(BUILD)/redline.o88 $(BUILD)/telnet.o88 $(BUILD)/cdrack.o88
+# ...AND THE BROWSER (2026-11-14, the owner's decision): 1.8's colours, fonts,
+# tables and 192 KB pictures took it to 109 clusters and this disk to 6 KB
+# free, under t_sysfree's floor of ten. No primary 720KB disk carries it:
+# apps720.img left it off on 2026-11-11 and more720.img has 62 clusters
+# spare, so SYS720MORE keeps it off that one too. The Wire fetches it, and
+# every other geometry's disks carry it
+SYS720OMIT := $(BUILD)/redline.o88 $(BUILD)/telnet.o88 $(BUILD)/cdrack.o88 \
+              $(BUILD)/browser.o88
+SYS720MORE := $(filter-out $(BUILD)/browser.o88,$(SYS720OMIT))
 COREAPPS720 := $(filter-out $(SYS720OMIT),$(COREAPPS))
 COREAPPSARGS720 := $(filter-out $(addprefix APPS:,$(SYS720OMIT)),$(COREAPPSARGS))
 
@@ -4502,9 +4538,9 @@ $(BUILD)/snddiag/sound.drv: $(BUILD)/snddiag/sound.bin tools/os88drv.py $(PKGZST
 # The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
 # stamps it and names it 'overlay' because its class byte is DRVC_OVL, which
 # the kernel deliberately does not know - so nothing can load it but xm_boot.
-$(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc apps/os88la.inc apps/os88ub.inc \
+$(BUILD)/xmem.bin: drivers/xmem/xmem.asm kernel/xmabi.inc drivers/os88drv.inc apps/os88api.inc apps/os88la.inc apps/os88ub.inc \
                    | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/xmem/xmem.asm
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -I kernel/ -o $@ drivers/xmem/xmem.asm
 	@echo "xmem:   $(call FILESIZE,$@) bytes"
 
 $(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py $(PKGZSTAMP)
@@ -4988,6 +5024,25 @@ $(BUILD)/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.i
 
 $(BUILD)/usbmouse.drv: $(BUILD)/usbmouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/usbmouse.bin -o $@
+
+# PC1MOUSE.DRV - the Olivetti PC1's Yamaha V6335D mouse (SPEC.md 9.15)
+$(BUILD)/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ $<
+	@echo "pc1mouse: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pc1mouse.drv: $(BUILD)/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pc1mouse.bin -o $@
+
+# A conservative sensitivity arm on the DOS-reference axis map the shipped
+# driver uses. Fractional mickeys are carried so slow motions still advance
+# the pointer.
+$(BUILD)/pc1slow/pc1mouse.bin: drivers/pc1mouse/pc1mouse.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/pc1slow
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -DPC1_SCALE8 -o $@ $<
+	@echo "pc1mouse (1/8 scale): $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pc1slow/pc1mouse.drv: $(BUILD)/pc1slow/pc1mouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pc1slow/pc1mouse.bin -o $@
 
 # EMS.DRV - expanded memory on a LIM EMS board (SPEC.md 107)
 $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
@@ -5733,6 +5788,30 @@ $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img: $(BUILD)/usbm%.img: $(BUILD)/boot360
 usbmousetest: $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img
 	@echo "usbmousetest: build/usbmsim.img + build/usbmbusy.img - USBMOUSE.DRV"
 
+# PC1MOUSETEST - a 720KB field disk for the Olivetti Prodest PC1 (SPEC.md 9.15).
+# The PC1 controller is not modeled by the emulators here. This 3.5" DD disk
+# wants the optional row (stable SYSTEM.CFG bit 12); boot it on the PC1 and
+# check attach, cursor movement, left/right clicks, keyboard operation, and
+# restart/detach. USBMOUSE.DRV is not requested, so the DRVC_POINT slot is free.
+$(BUILD)/pc1cfg/system.cfg: kernel/driver.inc | $(BUILD)
+	@mkdir -p $(BUILD)/pc1cfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 12).to_bytes(2,'little') + b'\0\0')" > $@
+
+
+$(BUILD)/pc1mouse720-ref.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS720) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $(BUILD)/pc1cfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(filter-out $(addprefix SYSTEM:,$(SYS720OMIT)),$(SYSOPTIONALARGS)) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS720) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(SYSVIDARGS) $(BUILD)/pc1cfg/system.cfg $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
+
+#> [Gate disks] pc1mousetest :: field disk for the Olivetti Prodest PC1's Yamaha mouse
+.PHONY: pc1mousetest
+pc1mousetest: $(BUILD)/pc1mouse720-ref.img
+	@echo "pc1mousetest: build/pc1mouse720-ref.img - the PC1 field disk (SYSTEM.CFG bit 12)."
+	@echo "              Carries the shipped PC1MOUSE.DRV: the DOS reference axis mapping."
+
 # EMSTEST - SPEC.md 107.7's gate disk: the 360KB system disk with a SYSTEM.CFG
 # that wants EMS.DRV (bit 7) and EMSTEST.O88 in its root. MartyPC's
 # os8088_5150_herc_hdd_sb_ems_gla carries the Lo-tech board the driver finds;
@@ -5942,8 +6021,12 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) 
 # an application carries one (SPEC.md 19.9).
 # Makefile is a prerequisite for dirsw360.img's reason: the folder list IS
 # the payload and lives in the recipe.
+# --spc 4 gives it a HARD DISK's cluster, 2KB, and not a floppy's: a big
+# entry's pieces must be whole clusters of the destination (SPEC.md 92.13.1,
+# issue #381), and 63KB is a multiple of 512 and 1KB, so on the IBM geometry
+# assertion 13 could never see a piece cut at the wrong size.
 $(BUILD)/thewiredata.img: tools/os88disk.py Makefile | $(BUILD)
-	python3 tools/os88disk.py -o $@ --size 1440 \
+	python3 tools/os88disk.py -o $@ --size 1440 --spc 4 \
 		--folder MEDIA --folder SYSTEM/APPDATA
 
 .PHONY: thewiretest
@@ -7838,7 +7921,8 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py $(PKGZSTAMP)
 # A third-party file is the only one that cannot share a misreading with the
 # decoder, so run it with them if you have them - and revert the .inc after.
 $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
-                      apps/os88img.inc apps/os88api.inc | $(BUILD)
+                      apps/os88img.inc apps/os88rgb.inc apps/os88api.inc \
+                      | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
 	@echo "imgtest: $(call FILESIZE,$@) bytes"
 
@@ -7964,7 +8048,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/brdocmarks.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
-                      apps/browser/brimage.inc apps/browser/brimage_const.inc \
+                      apps/browser/brimage.inc apps/browser/brimage_const.inc apps/browser/brcolor.inc apps/browser/brcolor_const.inc apps/browser/brfont.inc apps/browser/brfont_const.inc apps/browser/brtabres.inc apps/browser/bropts.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
@@ -9092,7 +9176,7 @@ $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # The primary's CONSTANTS the rarely used UI (apps/browser/brcold.inc, SPEC.md
 # 71.24) reads: a part is assembled alone, and these are the primary's equs
-BRCOLDK := BN_ERR BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
+BRCOLDK := BN_ERR BN_DONE OPT_N br_saved FLD_SCAN FLD_FIRST FLD_W BR_IDMAX BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
            BR_BMRECSZ BR_BMTITLE BR_BMURL BR_BMURLBASE BR_CTXGAP BR_CTXH \
            BR_CTXH_COPY BR_CTXH_LINK BR_CTXPAD BR_HIDMAX BR_SUBSZ BR_URLBM \
            FLD_FORM FLD_LEN FLD_NAME FLD_OFS FLD_TYPE FLD_VALUE SUB_AEND SUB_ASTART
@@ -9133,7 +9217,7 @@ $(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols
 # PART 1, the images (SPEC.md 71.26): the engine, the GIF reader on the shared
 # LZW, and PiXEL's plan search and threshold assembled from PiXEL's own source
 # (apps/pixel/pxplan1.inc, pxt1.inc, pxbayer.inc) - shared, never copied
-BRIMGK := BR_CHUNK BR_IMGRMAX BR_CELL
+BRIMGK := BR_CHUNK BR_IMGRMAX BR_CELL OPT_ANIM OPT_CACHE
 $(BUILD)/brimage_part_symbols.inc: $(BUILD)/browser.bin \
                            apps/browser/brimage_part.asm \
                            apps/browser/brimage_anim.inc \
@@ -9195,11 +9279,31 @@ $(BUILD)/brxbm.bin: apps/browser/brxbm.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
 	$(NASM) -f bin -w+error -I $(BUILD)/brpx/ -I apps/ \
 	        -I apps/pixel/ -o $@ apps/browser/brxbm.asm
 
+# PART 7, the 1.8 renderer's on-demand half (SPEC.md 71.34, 71.35): colours,
+# fonts and the table composer, ONE part so ONE heap claim - with the table
+# body's every br_* imported from browser.map
+BRTBLK := BR_MAXCOL BR_TCOLS BR_TFLRMAX COL_BGDEF COL_FGDEF LN_END LN_FL LN_OFS LN_X
+$(BUILD)/brtable_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brext_part.asm \
+                           apps/browser/brtable.inc tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brext_part.asm apps/browser/brtable.inc \
+	        --also $(BRTBLK) -o $@
+
+$(BUILD)/brcolor.bin: apps/browser/brext_part.asm \
+                      apps/browser/brcolor_body.inc apps/browser/brfont_body.inc \
+                      apps/browser/brtable.inc $(BUILD)/brtable_part_symbols.inc \
+                      apps/browser/brcolor_const.inc apps/browser/brfont_const.inc \
+                      apps/browser/brdocmarks.inc apps/os88rgb.inc \
+                      apps/os88type.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ -o $@ \
+	        apps/browser/brext_part.asm
+
 $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
                       $(BUILD)/browser.imgpart.bin \
                       $(BUILD)/brpxpng.bin $(BUILD)/brpxjpeg.bin \
                       $(BUILD)/brpxextra.bin $(BUILD)/brpxsimp.bin \
-                      $(BUILD)/brxbm.bin \
+                      $(BUILD)/brxbm.bin $(BUILD)/brcolor.bin \
                       tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(BUILD)/browser.bin -o $@ \
 	        --part $(BUILD)/browser.part.bin \
@@ -9208,7 +9312,8 @@ $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
 	        --part $(BUILD)/brpxjpeg.bin \
 	        --part $(BUILD)/brpxextra.bin \
 	        --part $(BUILD)/brpxsimp.bin \
-	        --part $(BUILD)/brxbm.bin --part-compress lz4
+	        --part $(BUILD)/brxbm.bin \
+	        --part $(BUILD)/brcolor.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -11411,6 +11516,321 @@ $(BUILD)/msegwz360.img: $(BUILD)/msegwzd/MSEG.O88 tools/os88disk.py | $(BUILD)
 .PHONY: msegw
 msegw: $(BUILD)/msegw.img $(BUILD)/msegw360.img $(BUILD)/msegwz.img \
        $(BUILD)/msegwz360.img
+
+# --- MSEGB: ONE PART past 64KB, three times over (SPEC.md 20.12.15) ---------
+# mseg.asm built -DMSEG_BIG puts OP_BIG on parts 1, 2 and 6, and each is
+# padded past 65,024 bytes by tests/multiseg/mkwide.py: part 1 with noise,
+# plain in both builds; part 2 and part 6 (the lazy one) with text, which the
+# `z` build compresses (-DMSEG_COMP -DMSEG_LZC) and packs past 64KB too. So
+# the plain build reads two big rows straight into the carve and moves a big
+# lazy row down onto its claim; the `z` build expands a big row, moves a big
+# PLAIN row down through a compressed carve in pieces, and expands a big lazy
+# row. tests/multiseg.py --big compares every byte of all three. Before
+# 20.12.15 the packer refused each row.
+$(BUILD)/msegb.bin: tests/multiseg/mseg.asm apps/os88api.inc apps/os88parts.inc \
+                    apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DMSEG_BIG -I apps/ -I tests/multiseg/ -o $@ $<
+
+$(BUILD)/msegbz.bin: tests/multiseg/mseg.asm apps/os88api.inc apps/os88parts.inc \
+                     apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DMSEG_BIG -DMSEG_COMP -DMSEG_LZC -I apps/ \
+		-I tests/multiseg/ -o $@ $<
+
+$(BUILD)/msegbp1.bin: $(BUILD)/msegp1.bin tests/multiseg/mkwide.py
+	python3 tests/multiseg/mkwide.py noise 70000 $< $@
+
+$(BUILD)/msegbp2.bin: $(BUILD)/msegp2.bin tests/multiseg/mkwide.py
+	python3 tests/multiseg/mkwide.py text 120000 $< $@
+
+$(BUILD)/msegbp4.bin: $(BUILD)/msegp4.bin tests/multiseg/mkwide.py
+	python3 tests/multiseg/mkwide.py text 115000 $< $@
+
+MSEGB_PARTS = $(BUILD)/msegp0.bin $(BUILD)/msegbp1.bin $(BUILD)/msegbp2.bin \
+              $(BUILD)/msegp3.bin $(BUILD)/msegbp4.bin
+
+$(BUILD)/msegbd/MSEG.O88: $(BUILD)/msegb.bin $(MSEGB_PARTS) tools/os88pkg.py
+	@mkdir -p $(BUILD)/msegbd
+	python3 tools/os88pkg.py $(BUILD)/msegb.bin -o $@ \
+		$(foreach p,$(MSEGB_PARTS),--part $(p))
+
+$(BUILD)/msegbzd/MSEG.O88: $(BUILD)/msegbz.bin $(MSEGB_PARTS) tools/os88pkg.py \
+                           tools/os88lz.py
+	@mkdir -p $(BUILD)/msegbzd
+	python3 tools/os88pkg.py $(BUILD)/msegbz.bin -o $@ \
+		--part-compress lz4 $(foreach p,$(MSEGB_PARTS),--part $(p))
+
+$(BUILD)/msegb.img: $(BUILD)/msegbd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegb360.img: $(BUILD)/msegbd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegbz.img: $(BUILD)/msegbzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegbz360.img: $(BUILD)/msegbzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 $<
+	@python3 tools/os88disk.py --verify $@
+
+.PHONY: msegb
+msegb: $(BUILD)/msegb.img $(BUILD)/msegb360.img $(BUILD)/msegbz.img \
+       $(BUILD)/msegbz360.img
+
+# Breadboard XT's real 8088 arithmetic bridge capability fixture.
+$(eval $(call CC_PACKAGE,bbnum,../tests/breadxtnum))
+$(BUILD)/bbnum.raw.asm: apps/breadxt/bb.h tests/breadxtnum/expected.inc
+$(BUILD)/bbnum.bin: apps/breadxt/numeric.inc apps/breadxt/draw.inc apps/os88fp.inc apps/os88ui.inc
+$(BUILD)/bbnum360.img: $(BUILD)/bbnum.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bbnum.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] breadxtnum :: actual 8088 Breadboard XT numeric bridge fixture and negative control
+breadxtnum: $(BUILD)/bbnum360.img
+.PHONY: breadxtnum
+
+# --- Breadboard XT native circuit workbench (SPEC.md 130) ------------------
+$(eval $(call CC_PACKAGE,breadxt,breadxt,BREADXT.OVL,,part,$(BUILD)/BBART.BIN))
+BREADXTSRC := apps/breadxt/bb.h apps/breadxt/model.c apps/breadxt/sim.c \
+              apps/breadxt/file.c apps/breadxt/examples.c apps/breadxt/ui.c \
+              apps/breadxt/face.c apps/breadxt/art.h
+# The face's art (SPEC.md 130.6.3): the text art and WIN16's font art are the
+# source; the PNG master is not read.
+$(BUILD)/BBART.BIN: tools/os88bbart.py apps/breadxt/art.h apps/breadxt/art/sprites.txt apps/breadxt/art/help.txt \
+                    $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bbart.py --selfcheck build -o $@
+$(BUILD)/breadxt.raw.asm: $(BREADXTSRC)
+$(BUILD)/breadxt.bin: $(wildcard apps/breadxt/*.inc) apps/os88fp.inc apps/os88ui.inc
+
+#> [Applications] breadxt :: Breadboard XT native breadboard editor and simulator (SPEC.md 130)
+breadxt: $(BUILD)/breadxt.o88
+
+# Examples are produced by the shipping model/codec; no host-only dialect.
+BREADXTEX := LEDTEST DIVIDER POT SWITCH LOGIC BROKEN RC FLASHER
+BREADXTFILES := $(addprefix $(BUILD)/breadxt-data/,$(addsuffix .BBX,$(BREADXTEX))) \
+                apps/breadxt/HELP.TXT
+$(BUILD)/breadxt-examples.stamp: $(BREADXTSRC) apps/breadxt/hosttest/export.c | $(BUILD)
+	@mkdir -p $(BUILD)/breadxt-data
+	$(CC) -std=c99 -O2 -DBB_HOST -I apps/breadxt apps/breadxt/hosttest/export.c -lm -o $(BUILD)/breadxt-export
+	$(BUILD)/breadxt-export $(BUILD)/breadxt-data
+	@touch $@
+$(filter %.BBX,$(BREADXTFILES)): $(BUILD)/breadxt-examples.stamp
+	@test -f $@
+
+#> [Applications] breadxtdisk :: Breadboard XT software disk in all four floppy geometries
+breadxtdisk: $(BUILD)/breadxt.img $(BUILD)/breadxt720.img $(BUILD)/breadxt120.img $(BUILD)/breadxt360.img
+$(BUILD)/breadxt.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt720.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt120.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/breadxt360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/breadxt.o88 $(BREADXTFILES)
+	@python3 tools/os88disk.py --verify $@
+
+#> [Applications] breadxtbundle :: build and verify the local Breadboard XT WPK installer
+breadxtbundle: $(BUILD)/BREADXT.WPK
+$(BUILD)/BREADXT.WPK: $(BUILD)/breadxt.o88 $(BREADXTFILES) tools/os88wire.py
+	@mkdir -p $(BUILD)/breadxt-stage
+	@cp $(BUILD)/breadxt.o88 $(BUILD)/breadxt-stage/BREADXT.O88
+	@cp $(filter %.BBX,$(BREADXTFILES)) $(BUILD)/breadxt-stage/
+	@cp apps/breadxt/HELP.TXT $(BUILD)/breadxt-stage/HELP.TXT
+	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/breadxt-stage --home BREADXT --program BREADXT.O88
+	@python3 tools/os88wire.py --verify $@
+.PHONY: breadxt breadxtdisk breadxtbundle
+
+# Independent electrical bridge regression projects, encoded by the real core.
+$(BUILD)/breadxt-coretest: apps/breadxt/hosttest/coretest.c $(BREADXTSRC) | $(BUILD)
+	$(CC) -std=c99 -Wall -Wextra -Werror -O1 -g apps/breadxt/hosttest/coretest.c -lm -o $@
+$(BUILD)/breadxt-fixtures.stamp: $(BUILD)/breadxt-coretest
+	@mkdir -p $(BUILD)/breadxt-fixtures
+	$(BUILD)/breadxt-coretest --emit $(BUILD)/breadxt-fixtures
+	@touch $@
+BREADXTBRIDGES := $(addprefix $(BUILD)/breadxt-fixtures/,HCLOW.BBX HCMID.BBX HCHIGH.BBX BCLK.BBX RESET.BBX FLOATLED.BBX MAX24.BBX)
+$(BREADXTBRIDGES): $(BUILD)/breadxt-fixtures.stamp
+	@test -f $@
+
+#> [Gate disks] breadxtcheckdisk :: Breadboard XT installed test disk plus target arithmetic and HC regressions
+breadxtcheckdisk: $(BUILD)/breadxt-check360.img
+$(BUILD)/breadxt-check360.img: $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbnum.o88 $(BREADXTBRIDGES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/breadxt.o88 $(BREADXTFILES) $(BUILD)/bbnum.o88 $(BREADXTBRIDGES)
+	@python3 tools/os88disk.py --verify $@
+.PHONY: breadxtcheckdisk
+
+# --- Byteopoly, the vintage-computer trading game, in C (SPEC.md 131) -------
+# One C package, BYTEOPLY.O88: the resident image, an eager embedded overlay
+# (73.14.2) and the art as a lazy part after it (131.10), Breadboard XT's
+# shape. Every included .c/.h and .inc is a prerequisite (131.12): make
+# cannot see through #include or %include.
+# The second art part BPART2.BIN (131.10.7) is art2.h's IDs: sprites2.txt,
+# the tx-*.txt text records, the kit's scenes and the music, each tool only
+# when it exists - so its prerequisites name the tools by wildcard.
+$(eval $(call CC_PACKAGE,byteoply,byteopoly,BYTEOPLY.OVL,,part,$(BUILD)/BPART.BIN $(BUILD)/BPART2.BIN))
+BYTEOPOLYSRC := $(wildcard apps/byteopoly/*.c apps/byteopoly/*.h)
+$(BUILD)/BPART.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h \
+                    $(wildcard apps/byteopoly/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88bpart.py build -o $@
+$(BUILD)/BPART2.BIN: tools/os88bpart.py tools/os88bbart.py apps/byteopoly/art.h apps/byteopoly/art2.h \
+                     apps/byteopoly/bptx.h $(wildcard apps/byteopoly/art/*.txt) \
+                     $(wildcard tools/os88gk.py tools/os88gkmus.py) | $(BUILD)
+	python3 tools/os88bpart.py build2 -o $@
+$(BUILD)/byteoply.raw.asm: $(BYTEOPOLYSRC)
+$(BUILD)/byteoply.bin: $(wildcard apps/byteopoly/*.inc) apps/breadxt/draw.inc \
+                       $(wildcard apps/cc/gk.inc apps/cc/gkmus.inc) \
+                       apps/os88cable.inc apps/os88ui.inc
+$(BUILD)/byteoply.raw.asm: apps/cc/gk.h
+$(BUILD)/byteoply.bin: apps/cc/gkmus.inc
+
+#> [Applications] byteopoly :: Byteopoly vintage-computer trading game, local and null-modem (SPEC.md 131)
+byteopoly: $(BUILD)/byteoply.o88
+BYTEOPOLYFILES := $(BUILD)/byteoply.o88 $(wildcard apps/byteopoly/disk/*)
+#> [Applications] byteopolydisk :: Byteopoly software disk in all four floppy geometries
+byteopolydisk: $(BUILD)/byteopoly.img $(BUILD)/byteopoly720.img $(BUILD)/byteopoly120.img $(BUILD)/byteopoly360.img
+$(BUILD)/byteopoly.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly720.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly120.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/byteopoly360.img: $(BYTEOPOLYFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BYTEOPOLYFILES)
+	@python3 tools/os88disk.py --verify $@
+
+# The host harness (131.12): every apps/byteopoly/hosttest/t_*.c is one
+# program over the SHIPPING rules/codec/link C with BP_HOST (16-bit stored
+# words), built with ASan/UBSan and run. A supplement to the guest, never a
+# substitute: it proves no SS/DS, stack, thunk or 8088 promotion fact.
+BYTEOPOLYHOSTT := $(patsubst apps/byteopoly/hosttest/%.c,$(BUILD)/bphost/%,$(wildcard apps/byteopoly/hosttest/t_*.c))
+$(BUILD)/bphost/%: apps/byteopoly/hosttest/%.c apps/byteopoly/hosttest/bphost.h $(BYTEOPOLYSRC)
+	@mkdir -p $(BUILD)/bphost
+	$(CC) -std=c99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-DBP_HOST -I apps/byteopoly -I apps/byteopoly/hosttest $< -o $@
+#> [Test] byteopolyhost :: Byteopoly host harness over the shipping C (rules, codec, link) under ASan/UBSan
+byteopolyhost: $(BYTEOPOLYHOSTT)
+	@set -e; for t in $(BYTEOPOLYHOSTT); do echo "== $$t"; $$t; done
+
+#> [Applications] byteopoly-pair :: two 86Box XTs joined by a COM2 null modem, Byteopoly on each
+byteopoly-pair: byteopolydisk
+	python3 tools/wireball-pair.py --game byteopoly
+.PHONY: byteopoly byteopolydisk byteopolyhost byteopoly-pair
+
+# Byteopoly's two-word arithmetic executed on the 8088 (SPEC.md 131.4.1): the
+# shipping bp_math.c under the real C ABI, against hand-worked literals, with
+# a negative control on N. The host harness cannot see an 8088 promotion
+# fact; this can. Rules lane.
+$(eval $(call CC_PACKAGE,bpmath,../tests/bpmath))
+$(BUILD)/bpmath.raw.asm: apps/byteopoly/bp.h apps/byteopoly/bp_math.c
+$(BUILD)/bpmath360.img: $(BUILD)/bpmath.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/bpmath.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] bpmath :: actual 8088 Byteopoly two-word arithmetic fixture and negative control
+bpmath: $(BUILD)/bpmath360.img
+.PHONY: bpmath
+
+# The C game kit's gallery (SPEC.md 133): a gate package drawing every gk_
+# widget of apps/cc/gk.inc and one scene compiled by tools/os88gk.py, with an
+# art part of its own (three WIN16 faces, two pictures, the scene). Kit lane.
+$(eval $(call CC_PACKAGE,gkdemo,../tests/gkdemo,,$(BUILD)/GKDART.BIN))
+$(BUILD)/GKDART.BIN: tests/gkdemo/mkart.py tests/gkdemo/gkd.h tests/gkdemo/sprites.txt \
+                     tests/gkdemo/scenes.txt tools/os88gk.py tools/os88bbart.py \
+                     $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tests/gkdemo/mkart.py -o $@
+$(BUILD)/gkdemo.raw.asm: tests/gkdemo/gkd.h apps/cc/gk.h
+$(BUILD)/gkdemo.bin: apps/cc/gk.inc apps/breadxt/draw.inc
+$(BUILD)/gkdemo.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkdemo360.img: $(BUILD)/gkdemo.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkdemo.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkdemo :: the C game kit's gallery: every gk_ widget and a compiled scene (SPEC.md 133)
+gkdemo: $(BUILD)/gkdemo.img $(BUILD)/gkdemo360.img
+.PHONY: gkdemo
+
+# The game kit's music player (SPEC.md 133.8) as a jukebox: GKMJUKE.O88 plays
+# every song and effect of Byteopoly's banks, so the player can be LISTENED
+# to on an AdLib/SB or the speaker before a game wires it. A gate package;
+# its one eager part holds the two banks (os88gkmus.py part).
+$(eval $(call CC_PACKAGE,gkmjuke,../tests/gkmusdemo,,$(BUILD)/GKMBANKS.BIN))
+$(BUILD)/GKMBANKS.BIN: tools/os88gkmus.py apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt | $(BUILD)
+	python3 tools/os88gkmus.py part -o $@ apps/byteopoly/art/music.txt apps/byteopoly/art/sfx.txt
+$(BUILD)/gkmjuke.raw.asm: apps/cc/gk.h
+$(BUILD)/gkmjuke.bin: apps/cc/gkmus.inc apps/breadxt/draw.inc
+$(BUILD)/gkmjuke.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/gkmjuke360.img: $(BUILD)/gkmjuke.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/gkmjuke.o88
+	@python3 tools/os88disk.py --verify $@
+#> [Test] gkmusdemo :: the game kit's music and effects player as a jukebox over Byteopoly's banks (SPEC.md 133.8)
+gkmusdemo: $(BUILD)/gkmjuke.img $(BUILD)/gkmjuke360.img
+.PHONY: gkmusdemo
+
+# --- 2BASIC, a BASIC interpreter, and 2BRES, its resource editor (SPEC.md 132)
+# Contributed by techdistractions (github.com/techdistractions/2basic) and
+# ported to the flag day's ABI (PKG_FMT 13). Two asm packages and a B: disk
+# that mirrors the upstream one exactly, because the shipped docs, HELP.TXT and
+# every sample name their files from the disk's ROOT ("\GAMES\2B99").
+# apps/2basic/disk/ is that tree; res/ holds the host-side 2BR3 inputs, and
+# the four files shared between folders are listed once and placed twice.
+# `all` builds both packages so an SDK change cannot break them unseen
+# (RECORDER's arrangement, above); the disk is on demand.
+TWOB := apps/2basic
+$(BUILD)/2basic.bin: $(TWOB)/2basic.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2basic.lst -o $@ $<
+$(BUILD)/2bres.bin: $(TWOB)/2bres.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/2bres.lst -o $@ $<
+$(BUILD)/2basic.o88: $(BUILD)/2basic.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+$(BUILD)/2bres.o88: $(BUILD)/2bres.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+all: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+TWOBROOT := $(BUILD)/2basic.o88 $(BUILD)/2bres.o88 \
+            $(addprefix $(TWOB)/disk/,README.TXT HELP.TXT RESGUIDE.TXT)
+TWOBDATA := $(wildcard $(TWOB)/disk/EXAMPLES/*.* $(TWOB)/disk/GAMES/*/*.* \
+                       $(TWOB)/disk/TESTS/*.* $(TWOB)/disk/TESTS/MULTIBAS/*.* \
+                       $(TWOB)/disk/TOOLS/2BRES/*.*) \
+            $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT)
+TWOBARGS := $(TWOBROOT) \
+            $(addprefix EXAMPLES:,$(wildcard $(TWOB)/disk/EXAMPLES/*.*) \
+                                  $(TWOB)/res/demo/RESDEMO.RES) \
+            $(addprefix GAMES/2B99:,$(wildcard $(TWOB)/disk/GAMES/2B99/*.*)) \
+            $(addprefix GAMES/BLACKJAK:,$(wildcard $(TWOB)/disk/GAMES/BLACKJAK/*.*)) \
+            $(addprefix GAMES/2BCHECK:,$(wildcard $(TWOB)/disk/GAMES/2BCHECK/*.*)) \
+            $(addprefix TESTS:,$(wildcard $(TWOB)/disk/TESTS/*.*) \
+                               $(addprefix $(TWOB)/res/demo/,RESDEMO.RES TARGETS.TXT MAP.DAT) \
+                               $(TWOB)/disk/GAMES/2B99/2B99.RES) \
+            $(addprefix TESTS/MULTIBAS:,$(wildcard $(TWOB)/disk/TESTS/MULTIBAS/*.*)) \
+            $(addprefix TOOLS/2BRES:,$(wildcard $(TWOB)/disk/TOOLS/2BRES/*.*))
+# THE LIVE VOLUME CARRIES THE SAME TREE ONE FOLDER DOWN, in 2BASIC/ (SPEC.md
+# 132.5, 80.6), so there the docs' root paths read \2BASIC\GAMES\2B99.
+TWOBLIVEARGS := $(addprefix 2BASIC:,$(TWOBROOT)) \
+                $(addprefix 2BASIC/,$(filter-out $(TWOBROOT),$(TWOBARGS)))
+#> [Applications] 2basic :: 2BASIC interpreter and 2BRES resource editor packages (SPEC.md 132)
+2basic: $(BUILD)/2basic.o88 $(BUILD)/2bres.o88
+#> [Applications] 2basicdisk :: 2BASIC's B: disk (programs, games, examples, tests) in all four floppy geometries
+2basicdisk: $(BUILD)/2basic.img $(BUILD)/2basic720.img $(BUILD)/2basic120.img $(BUILD)/2basic360.img
+$(BUILD)/2basic.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic720.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic120.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/2basic360.img: $(TWOBROOT) $(TWOBDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(TWOBARGS) --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify $@
+.PHONY: 2basic 2basicdisk
 
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
@@ -13788,7 +14208,7 @@ SCRIBESRC := apps/scribe/scribe.asm apps/scribe/scdoc.inc apps/scribe/scrtf.inc 
 # operation - word.o88's rule above says what a rule per half cost.
 $(BUILD)/scribe.bin: $(SCRIBESRC) apps/scribe/scicon.inc apps/os88api.inc \
                      apps/os88ui.inc apps/os88type.inc apps/os88img.inc \
-                     apps/os88dec.inc $(SBSTAMP) | $(BUILD)
+                     apps/os88rgb.inc apps/os88dec.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) $(PKGSBDEF) -I apps/ -I apps/scribe/ \
 		-o $@ apps/scribe/scribe.asm
 	@echo "scribe: $(call FILESIZE,$@) bytes"
@@ -15157,6 +15577,12 @@ VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(
 # Hercules's since its 2026-11-09 videos left it room - and five of its
 # pictures ($(PX_GALLERY_CGAVID)) the CGA's, whose videos of that day left
 # room for no more with 100 KB free (SPEC.md 106.7).
+# THE CGA DISK LEAVES THE BROWSER OFF (2026-11-16, the owner's, SPEC.md
+# 98.5): Wire Arena and Browser 1.7 (34 -> 101 KB) together put the derived
+# install 10 clusters past the ST11R volume, and the 5150 the disk is for
+# has no network card. Its page in MEDIA goes with it - nothing else on the
+# disk opens a .HTM.
+VIDDEMO_CGA_OMIT = APPS:$(BUILD)/browser.o88 MEDIA:$(ZDATA)/BROWSER.HTM
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
 	$(sort $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
 	       $(FACESARG) $(SYSVIDARGS) \
@@ -15200,7 +15626,7 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
 		$(filter %/system.cfg,$^) \
-		$(VIDDEMO_INSTALL) $(if $(filter CGA,$*),$(PX_GALLERY_CGAVID),$(PX_GALLERY)) \
+		$(if $(filter CGA,$*),$(filter-out $(VIDDEMO_CGA_OMIT),$(VIDDEMO_INSTALL)) $(PX_GALLERY_CGAVID),$(VIDDEMO_INSTALL) $(PX_GALLERY)) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
@@ -15576,8 +16002,12 @@ $(BUILD)/br16c-check360.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)
 
-$(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
+# ...with the Times face in SYSTEM/FONTS on the BROWSER's own volume, where
+# ty_gofonts looks when the 360KB system disk has none (24.3.1.5): the face
+# tests/brfont.py sets <h2> in (SPEC.md 71.35)
+$(BUILD)/brtest360.img: $(BRFILES) $(BUILD)/faces/times.f88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES) \
+	        SYSTEM/FONTS:$(BUILD)/faces/times.f88
 
 # Browser memory gate: put Note Pad at the top of its test-only disk listing so
 # QEMU can launch the second app without depending on a blind scrollbar walk.
@@ -16315,6 +16745,19 @@ $(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS
 # kernel - not "compatible with", THE SAME - and build/apps.img pairs with it
 # unchanged. `make small` has to say this carefully because the two kernels
 # there have different feature sets; here there is nothing to say beyond it.
+# THE KERN_EMU AND KERN_MEGA KERNELS AS TARGETS OF THEIR OWN. A row's `wants=`
+# names $(EMUDIR)/kernel.bin and $(MEGADIR)/kernel.bin (api-abi-all, every
+# kernel's API table), and a soak's own frozen tree has neither until a
+# sub-make writes one - `make <tree>/emuk/kernel.bin` answered "No rule" and
+# the whole tier refused to start. The sub-make keeps every freshness decision
+# with the kernel's own rules, so the phony prerequisite only means "ask it".
+.PHONY: kernsub-force
+kernsub-force:
+$(EMUDIR)/kernel.bin: kernsub-force
+	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/kernel.bin
+$(BUILD)/megak/kernel.bin: kernsub-force
+	@$(MAKE) BUILD=$(BUILD)/megak KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(BUILD)/megak/kernel.bin
+
 #> [Kernels] emu :: kern_emu (kern_big + the VMware absolute pointer) and build/emu.img
 emu: $(BUILD)/emu.img
 	@echo "emu: $< - kern_emu on 1.44MB, VMMOUSE.DRV wanted from the first"
@@ -18289,7 +18732,17 @@ $(BUILD)/os88cz.com: dostools/os88cz.asm kernel/lz.inc kernel/lzfilt.inc | $(BUI
 os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
-APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
+# WIREARENA (docs/plans/MULTIPLAYER-FPS-PLAN.md 17.2, the owner's of
+# 2026-11-15): a game now, off apps/RETIRED.txt's instruments. 67,537 bytes
+# packed - 66 of 360KB's clusters, which games360.img has with one to
+# spare, and a game disk at its last cluster is a high score that cannot be
+# saved - so at 360KB it is games2-360.img's, the second games disk. The
+# 1.44MB and 1.2MB apps disks carry it in GAMES/ (147KB and 152KB free
+# before it) and so does more720.img, the 720KB apps disk's other half
+# (126KB free); apps720.img (25KB free) leaves it off. kern_mega's apps disks
+# are the kern_mega session's to decide (MEGAAPPSARGS does not name it).
+WA_SHIP := $(BUILD)/wirerena.o88
+APPS := $(APPS_TOOLS) $(APPS_GAMES) $(WA_SHIP) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
         $(APPS_DOSCZ) $(MIDISONGS) $(RDG_SHIP) $(RDG_DEMO)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
@@ -18498,7 +18951,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) \
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
-            $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP)) \
+            $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(WA_SHIP)) \
             $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
             $(APPSYSARGS) \
@@ -18549,18 +19002,16 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
 # ...AND THE BROWSER'S SECOND COPY IS NOT ON IT (SPEC.md 24.6.1's rule, the
 # owner's decision of 2026-11-11): its PNG and JPEG parts (71.30) are 25 KB
-# and put this disk 20 clusters over. The 720KB system disk carries it, as a
-# core package (24.3), so every 720KB machine has it from the disk it boots.
-# BROWSER.HTM stays in MEDIA/ here (3 clusters): the system disk carries the
-# program and not its manual (SPEC.md 71.12), so the page rides the disk in
-# B: beside the other documents rather than on no 720KB disk at all.
+# and put this disk 20 clusters over. The 720KB system disk carried it until
+# 2026-11-14, when 1.8 took it past that disk's room too (SYS720OMIT): no
+# primary 720KB disk carries it now, and The Wire fetches it.
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
              $(BUILD)/browser.o88 \
-             $(RDG_SHIP) $(RDG_DEMO),$(APPS))
+             $(RDG_SHIP) $(RDG_DEMO) $(WA_SHIP),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
                  APPS:$(BUILD)/waverack.o88 APPS:$(BUILD)/browser.o88 \
-                 GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
+                 GAMES:$(RDG_SHIP) GAMES:$(WA_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
 # the single largest thing on the disk, bigger than SHEET and its chart module
@@ -18677,8 +19128,12 @@ $(WIN16IMG360): $(WIN16SHIP) tools/os88disk.py
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
 # two geometries kern_mega ships in (14.1 answer 19), on demand through `make
 # mega` and never in `all`. Every other file is the shipped disk's own.
+# WIREARENA rides both in GAMES/ as the 1.44MB and 1.2MB apps disks carry it
+# (the shipped build, which has no arm: it runs on kern_mega as it is -
+# docs/plans/MULTIPLAYER-FPS-PLAN.md's kern_mega pass). 133 clusters: the
+# 1.2MB disk keeps 49 of its 182 free after it.
 MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
-               $(addprefix GAMES:,$(call MEGASUB,$(APPS_GAMES) $(RDG_SHIP))) \
+               $(addprefix GAMES:,$(call MEGASUB,$(APPS_GAMES) $(RDG_SHIP) $(WA_SHIP))) \
                $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
                $(MIDISONGARGS) \
                $(addprefix SYSTEM:,$(call MEGASUB,$(APPSYS))) \
@@ -18694,7 +19149,13 @@ MEGAAPPS = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(call MEGASUB,$(APPS))) \
            $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC
 MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
                   $(MEGAAPPSXTRA) $(APPDATAFOLDER)
-MEGAAPPSARGS120 = $(MEGAAPPSARGS144)
+# ...AND THE 1.2MB ONE LEAVES THE DEMO VIDEO OFF (2026-11-16, the merge of
+# the Wire Arena round onto main's Browser 1.7): BROWSER.O88 grew 34KB ->
+# 101KB, and with WIRERENA.O88 the disk wanted 2,436 of its 2,371 clusters.
+# os8088.v88 is 107 of them, and APPSARGS720's precedent is exactly this one -
+# the sample goes, the PLAYER stays - a decision with a date on it (SPEC.md
+# 24.6.1), not a property of the file. megaapps.img (1.44MB) still carries it.
+MEGAAPPSARGS120 = $(filter-out $(LOGOVIDARG),$(MEGAAPPSARGS144))
 $(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
@@ -18733,11 +19194,11 @@ $(APPSIMG720): $(APPS720) tools/os88disk.py
 # the owner places it (24.7's note). The order of what goes where is expected
 # to change - 24.6.1's rule, a decision with a date on it.
 MORE720_SONGS := $(filter-out $(MIDISONGS720),$(MIDISONGS))
-MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(RDG_DEMO) $(LOGOVID) \
-           $(MORE720_SONGS) $(PX_SAMPLES_360) $(SYS720OMIT)
+MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(WA_SHIP) $(RDG_DEMO) $(LOGOVID) \
+           $(MORE720_SONGS) $(PX_SAMPLES_360) $(SYS720MORE)
 MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
-               $(addprefix APPS:,$(SYS720OMIT)) \
-               $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
+               $(addprefix APPS:,$(SYS720MORE)) \
+               $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP) $(WA_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
                $(PX_GALLERY_360) $(APPDATAFOLDER)
@@ -18890,6 +19351,18 @@ $(NETWORKIMG360): $(NETWORK360) tools/os88disk.py
 
 $(GAMESIMG360): $(GAMES360) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(GAMESARGS360)
+
+# --- games2-360 -------------------------------------------------------------
+# THE SECOND GAMES DISK (SPEC.md 24.6, the owner's of 2026-11-15): the games
+# games360.img has no room for, a category disk in every way - the packages
+# at the root, MEDIA/ and SYSTEM/APPDATA/ made. WireArena first (WA_SHIP,
+# above); the next game too big for games360 goes here rather than off it.
+GAMES2_PKGS := $(WA_SHIP)
+GAMES2360 := $(GAMES2_PKGS)
+GAMES2ARGS360 := $(GAMES2_PKGS) $(MEDIAFOLDER) $(APPDATAFOLDER)
+
+$(GAMES2IMG360): $(GAMES2360) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(GAMES2ARGS360)
 
 # --- util360 -----------------------------------------------------------------
 # THE UTILITIES' DISK (SPEC.md 24.3.1.7 and 24.6, the owner's of 2026-10-22):
@@ -19159,7 +19632,7 @@ N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PO
 # rides GAMES\ in the set below rather than a folder of its own.
 N1942PARTS = $(addprefix $(BUILD)/,1942V.GFX 1942VX.GFX 1942L.GFX 1942C.GFX 1942CX.GFX 1942.SFX $(N1942SCENES))
 N1942LIVE := $(BUILD)/1942.o88
-ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+ALLAPPSFILES := $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/MIDIRACK.BNK \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(CWORDDISK) \
@@ -19182,10 +19655,12 @@ ALLAPPS := $(ALLAPPSFILES) $(PX_SAMPLES_360) $(BUILD)/runcpm-src.stamp tools/get
 # volume's ASSOC.DAT (54.7.1). The LOOM=32 directory slots below are priced
 # by os88allapps.py like every other entry.
 
-ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
+ALLAPPSARGS := $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
+               $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
-               $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE)) \
+               $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE) \
+                                  $(WA_SHIP)) \
                $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) \
                $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(CWORDDISK)) \
@@ -19591,6 +20066,7 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+               $(BUILD)/byteoply.o88 $(TWOBROOT) $(TWOBDATA) \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
                $(WRDEMOWAVS) \
                $(PX_SAMPLES)
@@ -19598,6 +20074,8 @@ LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
 # the everything sets carry the 360KB selection, which $(ALLAPPSARGS) does not
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               $(addprefix BYTEOPLY:,$(BUILD)/byteoply.o88) \
+               $(TWOBLIVEARGS) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)
@@ -21508,11 +21986,17 @@ pentium-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
 # test ROMs tools/getgbtest.py fetches at pinned SHA-256s and the assembler
 # tools/gbclock.py builds from a pinned clone. Thrown away, the rgbds rows
 # would SKIP and the ROM rows fetch again. `clean-gb` is the escape hatch.
+#
+# ...and build/soak, which is not an artefact at all: a soak's RECORDS
+# (journal, log, the `finished` marker) and the SNAPSHOT it runs inside
+# (docs/plans/SOAK-PARALLEL.md 14.4). A `clean` while one runs would delete
+# the source tree the run executes from. `os88soak.py` prunes old snapshots
+# itself; `rm -rf build/soak` is the escape hatch when none is running.
 #> [Build] clean :: remove build/ (spares build/cc and fetched data)
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
 		! -name apple2-rom ! -name nasm3 ! -name gbtest ! -name rgbds \
-		! -name watcom \
+		! -name watcom ! -name soak \
 		-exec rm -rf {} + 2>/dev/null || true
 	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 
@@ -22497,6 +22981,78 @@ $(BUILD)/vbattle120.img: $(VBATTLEFILES) tools/os88disk.py
 $(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/os88disk.py
 	python3 tools/os88disk.py --size 360 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT
 
+# WireArena (docs/plans/MULTIPLAYER-FPS-PLAN.md): the text-mode arena
+# shooter's Wave 0 renderer spike. ON DEMAND, and on a disk of its own in
+# four geometries - on no shipped disk until it is a game. Its tables (sine,
+# arena, patrols, the pre-projected stick-figure keyframes) are built by
+# tools/arenagen.py into $(BUILD)/watab.inc. Two segments in one file
+# (docs/plans/completed/WIREARENA-PARTS-PLAN.md 7): wirearena.bin is the primary - the
+# game - and wrpart.bin the renderer, its part 0 (OP_SEG, OP_COMP|OP_ZFILL),
+# far-called with its own data; each assembles the watab.inc blocks it reads.
+#> [Applications] wirearena :: WIRERENA.O88, the text-mode arena shooter's renderer prototype (docs/plans/MULTIPLAYER-FPS-PLAN.md)
+#> [Knobs] WAMETER=1|2 :: WireArena starts with its meter row on - 1 the frame rate, 2 every number (F10 cycles it; off as shipped)
+# WAMETER: a BENCHMARK build's. The meter's row (fps, frame, render and present
+# ms, video writes) is off as shipped - nothing shown, nothing summed, one
+# clock read a frame - and F10 cycles it: the frame rate, every number, off
+# (MULTIPLAYER-FPS-PLAN 16.10). The B and P benches turn it on themselves.
+# Stamped, like every knob: `make wirearenadisk WAMETER=2` after a plain build
+# must rebuild the game, and a plain build after it must take it out again.
+#> [Knobs] WABENCH=1 :: WireArena with its B (spin) and P (play) benches - a TEST build's; the shipped game has neither key
+# WABENCH: the B and P benches (MULTIPLAYER-FPS-PLAN 16.7) are a test build's
+# since NET-PLAN 9.9 - the shipped game has neither key. The rows and tools
+# that press them (waarenas; waposes and the rows on it, wabench, waprof,
+# watrace) build a private tree with it (tools/os88build.py).
+WASTAMP := $(BUILD)/.wapkg$(if $(WAMETER),-m$(WAMETER))$(if $(WABENCH),-b)
+$(WASTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.wapkg*
+	@touch $@
+.PHONY: wirearena wirearenadisk
+wirearena: $(BUILD)/wirerena.o88
+$(BUILD)/watab.inc: tools/arenagen.py apps/wirearena/waconst.inc | $(BUILD)
+	python3 tools/arenagen.py $@
+$(BUILD)/wirearena.bin: apps/wirearena/wirearena.asm apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc apps/os88api.inc apps/os88pit.inc apps/os88parts.inc apps/os88partsbody.inc apps/wirearena/walink.inc apps/wirearena/wasetup.inc apps/wirearena/wactf.inc apps/os88cable.inc apps/os88raw.inc apps/os88udp.inc apps/os88ui.inc drivers/net/netpkg.inc $(WASTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error $(if $(WAMETER),-DWA_METER=$(WAMETER)) $(if $(WABENCH),-DWA_BENCH) -I apps/ -I apps/wirearena/ -I drivers/net/ -I $(BUILD)/ -l $(BUILD)/wirearena.lst -o $@ $<
+$(BUILD)/wrpart.bin: apps/wirearena/wrpart.asm apps/wirearena/wrender.inc apps/wirearena/wrlow.inc apps/wirearena/waconst.inc apps/wirearena/wasin.inc apps/wirearena/wrtab.inc apps/wirearena/wafb.inc $(BUILD)/watab.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -l $(BUILD)/wrpart.lst -o $@ $<
+# ...and each arena a part of its own (WIREARENA-PARTS-PLAN 7.5), in
+# arenagen's order: one row per arena in wirearena.asm's table (WA_NARENA).
+# Arena 2 is the heights demo, on the Game menu since wave 2
+# (docs/plans/completed/WIREARENA-HEIGHTS-PLAN.md 7.3); arenagen refuses an arena over
+# the visible budget, which tools/wamodel.py prices
+WAARENAS := $(BUILD)/waa0.bin $(BUILD)/waa1.bin $(BUILD)/waa2.bin \
+            $(BUILD)/waa3.bin $(BUILD)/waa4.bin $(BUILD)/waa5.bin \
+            $(BUILD)/waa6.bin $(BUILD)/waa7.bin
+$(BUILD)/waa%.asm: tools/arenagen.py tools/wamodel.py apps/wirearena/waconst.inc | $(BUILD)
+	python3 tools/arenagen.py --arena $* $@
+$(BUILD)/waa%.bin: $(BUILD)/waa%.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ $<
+$(BUILD)/wapose.bin: apps/wirearena/wapose.asm apps/wirearena/waconst.inc $(BUILD)/watab.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -o $@ $<
+# The keyframes ride the file CODED (tools/wadelta.py: the mirrored half of
+# the facings as zeros, the rows and keyframes as differences - a quarter of
+# their LZ size), and the primary's sine table as its second difference; the
+# game undoes both at entry (wa_rbind, wa_sinmk): each .bin is the image the
+# game then holds - what the tools that map a build read - and the .dlt only
+# what is packed
+$(BUILD)/wrpart.dlt: $(BUILD)/wrpart.bin tools/wadelta.py $(BUILD)/watab.inc
+	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --part $< $@
+$(BUILD)/wapose.dlt: $(BUILD)/wapose.bin tools/wadelta.py $(BUILD)/watab.inc
+	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --pose $< $@
+$(BUILD)/wirearena.dlt: $(BUILD)/wirearena.bin tools/wadelta.py $(BUILD)/watab.inc
+	python3 tools/wadelta.py --tab $(BUILD)/watab.inc --sin $< $@
+$(BUILD)/wirerena.o88: $(BUILD)/wirearena.dlt $(BUILD)/wrpart.dlt $(WAARENAS) $(BUILD)/wapose.dlt tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $< -o $@ --part $(BUILD)/wrpart.dlt --part $(BUILD)/wapose.dlt $(addprefix --part ,$(WAARENAS)) --part-compress $(PKGZBFMT)
+#> [Applications] wirearenadisk :: its own floppies, wirerena{,720,120,360}.img
+wirearenadisk: $(BUILD)/wirerena.img $(BUILD)/wirerena720.img $(BUILD)/wirerena120.img $(BUILD)/wirerena360.img
+$(BUILD)/wirerena.img: $(BUILD)/wirerena.o88 tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $<
+$(BUILD)/wirerena720.img: $(BUILD)/wirerena.o88 tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $<
+$(BUILD)/wirerena120.img: $(BUILD)/wirerena.o88 tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $<
+$(BUILD)/wirerena360.img: $(BUILD)/wirerena.o88 tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $<
+
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:
 	python3 tools/wireball-pair.py
@@ -22855,7 +23411,7 @@ $(PDW_OUT)/.host.stamp: apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/hosttest
                         apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
 	mkdir -p $(PDW_OUT)
 	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(PDW_OUT)/pdw_test \
-		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -lm
 	PDW_OUT=$(abspath $(PDW_OUT)) $(PDW_OUT)/pdw_test > $(PDW_OUT)/files.txt || { cat $(PDW_OUT)/files.txt; exit 1; }
 	python3 apps/pagedesk/hosttest/pdw_verify.py $(abspath $(PDW_OUT)) $(PDW_SHOTS)
 	touch $@
@@ -22872,7 +23428,7 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 	mkdir -p $(BUILD)/pdw-real
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
-	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -DPDW_ROOT='"$(CURDIR)"' -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
 		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
 	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
 	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
@@ -22890,7 +23446,7 @@ endif
 .PHONY: pdwrt-enc
 pdwrt-enc: | $(BUILD)
 	mkdir -p $(BUILD)/pdw-enc
-	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -DPDW_ROOT='"$(CURDIR)"' -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
 		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
 	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
 		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c

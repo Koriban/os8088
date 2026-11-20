@@ -12,7 +12,7 @@ THE MAIN ZIP IS LAID OUT BY DISK SIZE (approved for v1.0.20261026):
     1200K/            OS88-120 APPS-120 ALLn-120
     720K/             OS88-720 APPS-720 MORE-720
     720K/128K-RAM/    OS88-720 (small720.img)
-    360K/             OS88-360 APPS-360 MEDIA360 OFFIC360 NETWK360 GAMES360
+    360K/             OS88-360 APPS-360 MEDIA360 OFFIC360 NETWK360 GAMES360 GAMES2
                       EMU360 UTIL360
     360K/128K-RAM/    OS88-360 (small360.img)
     1440K/286-PLUS/   OS88-144 APPS-144 (mega.img, megaapps.img), and in
@@ -301,8 +301,16 @@ ITEMS = [
      "Ethernet card.",
      [("network360.img", "360KB", "")]),
     ("xt", "Games disk", True,
-     "Every game on one floppy.",
+     "Fifteen games on one floppy: WireBall, WireFleet, Gorillas, isoTron, "
+     "PIXELSTEIN 3D, DrMarco and the rest. Wire Arena is on the second games "
+     "disk.",
      [("games360.img", "360KB", "")]),
+    ("xt", "Games disk 2: Wire Arena", True,
+     "Wire Arena, a first-person arena shooter drawn in text: up to three "
+     "bots, or two to four players over a serial cable, a local network or "
+     "the internet. It needs the standard system disk; the 128KB machine's "
+     "small system disk refuses it.",
+     [("games2-360.img", "360KB", "")]),
     ("xt", "Emulators disk", True,
      "RealDMG, the Game Boy emulator, with the project's own demo cartridge "
      "in MEDIA, and WIN16, which runs Windows 3.x programs you put on a "
@@ -351,8 +359,9 @@ ITEMS = [
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
-     "cartridge, DrMarco and the demo video, and the REDLINE benchmark, "
-     "Telnet and CDRack, which the 720KB system disk has no room for. "
+     "cartridge, DrMarco and the demo video, Wire Arena, and the REDLINE "
+     "benchmark, Telnet and CDRack, which the 720KB system disk has no room "
+     "for. "
      "MIDIRack is on both software disks, so its songs open from either.",
      [("more720.img", "720KB", "")]),
 
@@ -484,6 +493,30 @@ ITEMS = [
      [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
       ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", ""),
       ("pagedesk360b.img", "360KB", "the samples")]),
+    ("progs", "Breadboard XT", False,
+     "A circuit workbench: place resistors, LEDs, switches, capacitors, "
+     "logic chips and a 555 timer on a breadboard, wire them up and run the "
+     "circuit, with a two-channel oscilloscope to watch it. Each disk "
+     "carries the program, eight example circuits to open and change, and "
+     "HELP.TXT. It runs on 256KB of memory; it is on the everything sets "
+     "and the live media too.",
+     [("breadxt.img", "1.44MB", ""), ("breadxt120.img", "1.2MB", ""),
+      ("breadxt720.img", "720KB", ""), ("breadxt360.img", "360KB", "")]),
+    ("progs", "Byteopoly", False,
+     "A board game about trading old computers, for two to four players: "
+     "buy the Commodore PET, the Apple II or the PC XT, collect a set and "
+     "charge rent. Play on one machine, sharing the keyboard, or on two "
+     "machines joined by a null-modem cable. The disk carries the program; "
+     "it is on the live media too.",
+     [("byteopoly.img", "1.44MB", ""), ("byteopoly120.img", "1.2MB", ""),
+      ("byteopoly720.img", "720KB", ""), ("byteopoly360.img", "360KB", "")]),
+    ("progs", "2BASIC", False,
+     "A BASIC interpreter that runs numbered programs in a window, with "
+     "graphics, sound, a form of buttons and fields, and 2BRES, an editor "
+     "for its sprite and data packs. Each disk carries both, three games, "
+     "five examples, the tests and HELP.TXT. It is on the live media too.",
+     [("2basic.img", "1.44MB", ""), ("2basic120.img", "1.2MB", ""),
+      ("2basic720.img", "720KB", ""), ("2basic360.img", "360KB", "")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -552,6 +585,7 @@ DEST = {
     "office360.img": "360K/OFFIC360.IMG",
     "network360.img": "360K/NETWK360.IMG",
     "games360.img": "360K/GAMES360.IMG",
+    "games2-360.img": "360K/GAMES2.IMG",
     "emu360.img": "360K/EMU360.IMG",
     "util360.img": "360K/UTIL360.IMG",
     "small360.img": "360K/128K-RAM/OS88-360.IMG",
@@ -600,6 +634,9 @@ PROGRAMS = {
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
     "PageDesk": ("PAGEDESK", "PDESK"),
+    "Breadboard XT": ("BREADXT", "BREAD"),
+    "Byteopoly": ("BYTEOPLY", "BYTE"),
+    "2BASIC": ("2BASIC", "2BAS"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),

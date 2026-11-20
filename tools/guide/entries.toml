@@ -295,6 +295,13 @@ summary = "Lets you use a USB mouse plugged into a Book8088's USB socket or a Pi
 short = "USB mouse on the Book8088"
 needs = "A Book8088 (CH375 USB) or a PicoMEM card"
 
+["PC1MOUSE.DRV"]
+title = "Olivetti PC1 mouse driver"
+kind = "driver"
+summary = "Adds support for the built-in mouse on an Olivetti Prodest PC1."
+short = "Built-in mouse on an Olivetti PC1"
+needs = "An Olivetti Prodest PC1"
+
 # --- programs: applications -------------------------------------------------
 
 ["CALC.O88"]
@@ -697,6 +704,13 @@ kind = "program"
 summary = "Pong full screen. Play another computer over a null modem cable, or practise against the computer."
 short = "Full-screen Pong, two players"
 needs = "A null modem cable and a second machine for two players"
+
+["WIRERENA.O88"]
+title = "Wire Arena"
+kind = "program"
+summary = "A first-person arena shooter drawn in text, fast enough for an IBM PC. Eight arenas, six weapons, bots, and free-for-all, team deathmatch, capture the flag and king of the hill, alone or with up to four players over a serial cable or a network."
+short = "Text-mode arena shooter"
+needs = "The standard system disk; a mouse to aim; a null modem cable or a network card to play others"
 
 ["WIREFLET.O88"]
 title = "WireFleet"

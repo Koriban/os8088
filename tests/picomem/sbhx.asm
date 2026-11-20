@@ -10,6 +10,7 @@ cpu 8086
 bits 16
 org 0x100
 %define PICOMEM
+%include "snddiag.inc"          ; the shipping no-op SDG_* hooks in a plain build
 %macro CLC_OR_STC 1
     db 0xA8
 %1: stc
@@ -50,6 +51,8 @@ entry_disc16:                   ; tests/sbirq5.py: an SB16-class DSP, whose
     mov [res_al], al
     hlt
 %include "picomem.inc"
+%include "snddiag.inc"            ; the debug disk's hooks (SPEC.md 127) the
+                                ; slice calls: nothing, as in the shipped build
 %include "sbslice.inc"
 
 ; --- stubs: any call here is the F2h probe running, which it must not ------

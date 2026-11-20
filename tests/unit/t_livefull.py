@@ -150,6 +150,11 @@ PKG_FILE = {
     "drmario": "DRMARCO.O88",      # SPEC.md 100: $(BUILD)/drmarco.o88 out of
                                    # apps/drmario/ - the package was renamed
                                    # and the source folder kept its name
+    "wirearena": "WIRERENA.O88",   # $(BUILD)/wirerena.o88 out of apps/wirearena/
+                                   # (the Makefile's WA_SHIP; docs/plans/
+                                   # MULTIPLAYER-FPS-PLAN.md 17.2)
+    "byteopoly": "BYTEOPLY.O88",   # SPEC.md 131: $(BUILD)/byteoply.o88 out of
+                                   # apps/byteopoly/ - the 8.3 stem the brief named
 }
 
 

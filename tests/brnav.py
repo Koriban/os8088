@@ -103,6 +103,34 @@ PAGE_FS = (b"<html><head><title>Frame Set</title></head>\r\n"
            b"<frame src=\"/f2.htm\"></frameset></html>\r\n")
 
 
+def fat12_root_file(img, name11):
+    """A file in a FAT12 floppy's ROOT, by hand off the BPB: its bytes, or None."""
+    bps = img[11] | (img[12] << 8)
+    spc, rsvd, nfat = img[13], img[14] | (img[15] << 8), img[16]
+    nroot = img[17] | (img[18] << 8)
+    spf = img[22] | (img[23] << 8)
+    root = (rsvd + nfat * spf) * bps
+    data = root + nroot * 32
+    fat = img[rsvd * bps:(rsvd + spf) * bps]
+    for i in range(nroot):
+        e = img[root + i * 32:root + i * 32 + 32]
+        if e[0] == 0:
+            break
+        if e[0] == 0xE5 or e[11] & 0x18 or e[:11] != name11:
+            continue
+        clus = e[26] | (e[27] << 8)
+        size = e[28] | (e[29] << 8) | (e[30] << 16) | (e[31] << 24)
+        out = b""
+        while 2 <= clus < 0xFF0 and len(out) < size:
+            off = data + (clus - 2) * spc * bps
+            out += img[off:off + spc * bps]
+            j = clus + (clus >> 1)
+            v = fat[j] | (fat[j + 1] << 8)
+            clus = (v >> 4) if clus & 1 else (v & 0xFFF)
+        return out[:size]
+    return None
+
+
 def _frame_page(title, marker, extra):
     body = b"<html><head><title>%s</title></head><body><h1>%s</h1>\r\n" \
         % (title, title)
@@ -303,7 +331,9 @@ def main():
     dispcp.open_named(m, Mouse(), S, settle, wx, wy, "BROWSER.O88")
     bw = dispcp.win_list(m, S)[-1]
     rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = u16(rec[22:24])
+    # W_SEG BY NAME (os88geom reads it off kernel/wm.inc): a literal 22 went
+    # stale when kernel size pass 19 moved it to 18, and read W_PREF instead
+    pseg = u16(rec[dispcp.W_SEG:dispcp.W_SEG + 2])
     print("browser at %04X" % pseg)
     sys.stdout.flush()
 
@@ -526,14 +556,13 @@ def main():
         fails.append("no History cell in the menu bar")
     else:
         before_h = len(srv.log)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "down",
-                        str(hx), "6"], check=True, capture_output=True)
-        os88qemu.pace(m, 0.5)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "to",
-                        str(hx), "26"], check=True, capture_output=True)
-        os88qemu.pace(m, 0.5)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
-                       check=True, capture_output=True)
+        # CLOSED LOOP (ethernet.Mouse.run: each edge and move confirmed off
+        # the kernel's words), each pause a ui_done capped at the old one
+        Mouse().run("down", hx, 6)
+        os88qemu.ui_done(m, S, cap=0.5)
+        Mouse().run("to", hx, 26)
+        os88qemu.ui_done(m, S, cap=0.5)
+        Mouse().run("up")
         wait_done("History > Page A")
         print("after History > item 0: histi=%d, +%d request(s), last %r"
               % (rw("br_histi"), len(srv.log) - before_h,
@@ -564,7 +593,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.7":
+    if line != "User-Agent: os8088 Browser 1.8":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -814,6 +843,10 @@ def main():
     fetch(URL_FS)
     st = wait_done("the frameset")
     doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    # the line count BEFORE the table's size: layout runs on after BN_DONE
+    # and grows the table before it writes a line, so this order is the one
+    # in which the two readings can be compared at all
+    nlines = rw("br_nlines")
     linekb = rw("br_linekb")
     ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
     print("after fs: state %d, msg %04X, doclen %d, lines %d/%d KB, title %r, "
@@ -829,9 +862,9 @@ def main():
     if len(doc) <= 16 * 1024:
         fails.append("the frameset output is only %d bytes; this fixture must "
                      "exercise aggregate output growth beyond 16 KB" % len(doc))
-    if linekb * 1024 < rw("br_nlines") * 10 or linekb > 62:
+    if linekb * 1024 < nlines * 10 or linekb > 62:
         fails.append("the frameset needs the full safe line table; got %d KB "
-                     "for %d lines" % (linekb, rw("br_nlines")))
+                     "for %d lines" % (linekb, nlines))
     for mark in (b"Hesperus", b"Phosphorus"):
         if mark not in doc:
             fails.append("the frameset's document lacks %r - the child that "
@@ -869,14 +902,11 @@ def main():
         # for this app it is 134, and 40 - the first version's guess - is the
         # CHIP menu.
         nwin = len(dispcp.win_list(m, S))
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "down", "134", "8"],
-                       check=True, capture_output=True)
-        os88qemu.pace(m, 0.4)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "to", "134", "62"],
-                       check=True, capture_output=True)
-        os88qemu.pace(m, 0.4)
-        subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
-                       check=True, capture_output=True)
+        Mouse().run("down", 134, 8)         # (closed loop, as History's)
+        os88qemu.ui_done(m, S, cap=0.4)
+        Mouse().run("to", 134, 62)
+        os88qemu.ui_done(m, S, cap=0.4)
+        Mouse().run("up")
         # the DIALOG is a window, so it is its own answer; and half a second
         # more of the machine before its field is typed into
         if os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) > nwin,
@@ -886,6 +916,12 @@ def main():
         print("windows after Save As: %r (was %d)" % (wins_now, nwin))
         if len(wins_now) <= nwin:
             fails.append("File > Save As... opened no dialog")
+        # the field opens holding the page's own name (SPEC.md 71.34.14):
+        # emptied first, twelve being the longest 8.3 name it can hold
+        subprocess.run(["python3", "tools/qmp.py", SOCK]
+                       + ["sendkey backspace", "sleep 0.05"] * 12,
+                       check=True, capture_output=True)
+        os88qemu.pace(m, 0.5)
         type_url(SAVED)
         os88qemu.pace(m, 1.0)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
@@ -925,16 +961,19 @@ def main():
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:
             fails.append("%s is not in the apps image's directory" % SAVED)
-    # ...the page CURRENTLY loaded, which is PAGE_A - where the 303 in step
-    # 7b landed - and not the FrogFind result or PAGE_B. Assert
-    # against whatever was last served, or this reads as a broken Save As
-    # every time a fetch is added ahead of it. And assert a string NO FIXTURE
-    # on the disk carries: "FrogFind!" is in FFHOME.HTM, which is on
-    # brtest360.img before the browser writes a byte, so that check was
-    # satisfied by a file that was there already. "Page Alpha" is in no file
-    # under tests/htm/, so only the saved page can supply it.
-    if b"Page Alpha" not in raw:
-        fails.append("the saved file does not hold the server's bytes")
+    # ...THE FILE ITSELF, read off the FAT, and not a search of the whole
+    # image: free clusters keep whatever an earlier write left there, so a
+    # string anywhere on the volume proves nothing about SAVED.HTM. The page
+    # loaded at the save is PAGE_A - step 9 fetches it after the frameset, to
+    # prove the gfx lock and the hand-over were released - so the file is
+    # PAGE_A's bytes, exactly. "Page Alpha" is in no file under tests/htm/,
+    # so only the saved page can supply it.
+    saved = fat12_root_file(raw, b"SAVED   HTM")
+    if saved is None:
+        fails.append("SAVED.HTM could not be read off the apps image")
+    elif saved != PAGE_A:
+        fails.append("the saved file does not hold the server's bytes "
+                     "(%d bytes, not PAGE_A's %d)" % (len(saved), len(PAGE_A)))
     else:
         print("the image holds the server's own bytes")
 

@@ -60,23 +60,18 @@ hd_cyl_up:
     mov si, dx                  ; below write DX
     mov ax, [di+HDD_HEADS]
     mul word [di+HDD_SPT]
-    mov cx, ax                  ; CX = sectors per cylinder (<= 16,065)
-    or cx, cx
-    jz .keep
-    mov ax, bx
-    mov dx, si
+    xchg cx, ax                 ; CX = sectors per cylinder (<= 16,065)
+    mov ax, bx                  ; ...and the LBA back, which is also the
+    mov dx, si                  ; answer for the two refusals below
+    jcxz .out
     cmp dx, cx
-    jae .keep                   ; the quotient would not fit a word: only a
+    jae .out                    ; the quotient would not fit a word: only a
     div cx                      ; corrupt table reaches this
     or dx, dx
     jz .exact
     inc ax
 .exact:
     mul cx                      ; DX:AX = the boundary at or above the LBA
-    jmp short .out
-.keep:
-    mov ax, bx
-    mov dx, si
 .out:
     pop si
     pop cx
@@ -340,9 +335,8 @@ hd_cyl_trim:
     call os88_ent
     mov ax, [di+HDD_HEADS]
     mul word [di+HDD_SPT]
-    mov cx, ax                  ; CX = sectors per cylinder (<= 16,065)
-    or cx, cx
-    jz .out                     ; a geometry with no cylinder: leave it alone
+    xchg cx, ax                 ; CX = sectors per cylinder (<= 16,065)
+    jcxz .out                   ; a geometry with no cylinder: leave it alone
     mov ax, [hd_fbase]          ; DX:AX = the extent's end, exclusive
     mov dx, [hd_fbase+2]
     add ax, [hd_fsecs]
@@ -500,8 +494,10 @@ hd_part_chs:
 ; -----------------------------------------------------------------------------
 ; hd_lba_chs - hd_chs against an LBA in registers (module internal)
 ; in:  DX:AX = the LBA, DI = the device row
-; out: [hd_cyl]/[hd_head]/[hd_sec]; a value past the geometry clamps to the
-;      1023/255/63 form rather than failing
+; out: [hd_cyl]/[hd_head]/[hd_sec], CF = 0; a value an entry cannot carry
+;      clamps to the 1023/254/63 form rather than failing, and says so with
+;      CF = 1 - past the geometry, or past cylinder 1,023, which an IDE row
+;      can address and an entry's ten bits cannot name (SPEC.md 52.1.5)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_lba_chs:
@@ -510,10 +506,15 @@ hd_lba_chs:
     mov [hd_lba], ax
     mov [hd_lba+2], dx
     call hd_chs
+    jc .clamp
+    cmp word [hd_cyl], 1024     ; CF = 1 below it: the entry can carry it
+    cmc
     jnc .out
+.clamp:
     mov word [hd_cyl], 1023
     mov word [hd_head], 254
     mov word [hd_sec], 63
+    stc
 .out:
     pop dx
     pop ax
@@ -526,19 +527,12 @@ hd_lba_chs:
 ; clobbers: AX (the output), flags
 ; -----------------------------------------------------------------------------
 hd_chs_pack:
-    push cx
-    mov cl, [hd_cyl+1]
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    and cl, 0xC0
-    or cl, [hd_sec]
-    mov al, cl
+    mov al, [hd_cyl+1]          ; cylinder bits 8..9 into bits 6..7: two
+    ror al, 1                   ; ROTATES and the mask, where six shifts
+    ror al, 1                   ; were (hd_chs_regs' idiom) - the same
+    and al, 0xC0                ; (cyl_hi & 3) << 6 for any byte
+    or al, [hd_sec]
     mov ah, [hd_cyl]
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------

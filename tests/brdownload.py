@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import brclick                                      # noqa: E402
 import dispcp                                       # noqa: E402
+import os88geom  # noqa: E402
 import ethernet                                     # noqa: E402
 import os88build                                    # noqa: E402
 import os88fixture                                  # noqa: E402
@@ -49,6 +50,9 @@ AUTO = "--automatic" in sys.argv
 CTYPE = "--content-type" in sys.argv
 AUTO = AUTO or CTYPE
 DLPATH = b"/get.cgi?id=7" if CTYPE else b"/download-test.zip"
+# ...and the name the Browser suggests for it: the header's, or the leaf
+# made 8.3 (SPEC.md 71.34.14). The seeded file and the read-back use it
+DLNAME = "DOWNLOAD.BIN" if CTYPE else "DOWNLOAD.ZIP"
 CANCEL_MODE = next((arg for arg in ("--cancel-active", "--close-active",
                                     "--close-complete")
                     if arg in sys.argv), None)
@@ -233,13 +237,13 @@ def main():
     dlimg = os.path.join(ethernet.os88qemu.RUNDIR, "brdownload360.img")
     seed = os.path.join(ethernet.os88qemu.RUNDIR, "brdlseed")
     os.makedirs(seed, exist_ok=True)
-    with open(os.path.join(seed, "DOWNLOAD.BIN"), "wb") as f:
+    with open(os.path.join(seed, DLNAME), "wb") as f:
         f.write(OLD)
     subprocess.run(["python3", "tools/os88disk.py", "-o",
                     dlimg, "--size", "360",
                     "--folder", "SYSTEM/APPDATA",
                     os88build.at("build/browser.o88"),
-                    os.path.join(seed, "DOWNLOAD.BIN")],
+                    os.path.join(seed, DLNAME)],
                    check=True, stdout=subprocess.DEVNULL)
     ethernet.os88qemu.make_test("ETHER=1", "TESTIMG=build/ether360.img",
                                 "TESTAPPS=" + dlimg)
@@ -282,8 +286,8 @@ def main():
                     continue
                 r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
                            dispcp.WIN_SIZE)
-                if r[22] | r[23] << 8:
-                    return slot, r[22] | r[23] << 8
+                if r[os88geom.W_SEG] | r[os88geom.W_SEG + 1] << 8:
+                    return slot, r[os88geom.W_SEG] | r[os88geom.W_SEG + 1] << 8
             return None
         # THE BROWSER'S WINDOW, waited for: open_named's QEMU path clicks and
         # settles, and a launch on kern_mega's 4M-instruction Bochs outlasts
@@ -370,9 +374,7 @@ def main():
                 px = word(m, pseg, sy["br_cx"]) + col * 8 + 3
                 py = word(m, pseg, sy["br_cy"]) + (line - word(m, pseg, sy["br_top"])) * 8 + 3
                 if AUTO:
-                    subprocess.run(["python3", "tools/mouse.py", ethernet.SOCK,
-                                    "click", str(px), str(py)], check=True,
-                                   stdout=subprocess.DEVNULL)
+                    ethernet.Mouse().run("click", px, py)   # closed loop
                     got_dialog = ethernet.os88qemu.acted(
                         m, lambda: m.readseg(
                             pseg, sy["br_dl_state"], 1)[0] == 1,
@@ -410,9 +412,7 @@ def main():
                                 "download action changed history size from %d to %d"
                                 % (page_history_count, history_count))
                 else:
-                    subprocess.run(["python3", "tools/mouse.py", ethernet.SOCK,
-                                    "rclick", str(px), str(py)], check=True,
-                                   stdout=subprocess.DEVNULL)
+                    ethernet.Mouse().rclick(px, py)         # closed loop
                     # the menu is OPENED by the Browser's click handler, so
                     # it is waited for rather than read the instant the
                     # tool returns, and painted before its row is clicked
@@ -484,7 +484,7 @@ def main():
                                             "DL_FAIL: states %s" % sorted(seen))
                         volume = os88flush.Volume(open(dlimg, "rb").read())
                         try:
-                            kept = volume.read("DOWNLOAD.BIN")
+                            kept = volume.read(DLNAME)
                         except os88flush.FlushError:
                             kept = None
                         if kept != OLD:
@@ -592,7 +592,7 @@ def main():
                         volume = os88flush.Volume(open(
                             dlimg, "rb").read())
                         try:
-                            kept = volume.read("DOWNLOAD.BIN")
+                            kept = volume.read(DLNAME)
                         except os88flush.FlushError:
                             kept = None
                         if kept != OLD:
@@ -688,7 +688,7 @@ def main():
                         m.quit()
                         volume = os88flush.Volume(open(
                             dlimg, "rb").read())
-                        if volume.read("DOWNLOAD.BIN") != PAYLOAD:
+                        if volume.read(DLNAME) != PAYLOAD:
                             failures.append("closing completed manager changed the downloaded file")
                         if failures:
                             raise RuntimeError("; ".join(failures))
@@ -844,7 +844,7 @@ def main():
     try:
         volume = os88flush.Volume(open(
             dlimg, "rb").read())
-        got = volume.read("DOWNLOAD.BIN")
+        got = volume.read(DLNAME)
         if got != PAYLOAD:
             first = next((i for i, (a, b) in enumerate(zip(got, PAYLOAD))
                           if a != b), min(len(got), len(PAYLOAD)))

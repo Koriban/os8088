@@ -890,8 +890,20 @@ lg_entry:
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
-    mov ax, LG_CLAIM_CELLS_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, LG_CLAIM_CELLS_KB * 64                 ; KB -> PARAGRAPHS (50.3.7)
+                                      ; THE KB DOORS WERE WITHDRAWN at the
+                                      ; flag day (kernel size pass 19, SPEC.md
+                                      ; 20.3.1): OSAPI_MEM_CLAIM and its five
+                                      ; relatives are gone and their names with
+                                      ; them, so a source still calling one does
+                                      ; not assemble. ONE cell takes their place
+                                      ; - OSAPI_MEM_P, verb in BL, counted in
+                                      ; PARAGRAPHS (SPEC.md 50.3.7), which is
+                                      ; KB * 64. MEMP_CPU is deliberately NOT
+                                      ; set: it says no int 13h lands in the
+                                      ; claim, and these stage file I/O
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [lg_cellseg], dx
     mov ax, lg_reloc                     ; ...and MOVABLE (SPEC.md 66.2). SHEET
@@ -899,18 +911,21 @@ lg_entry:
                                       ; passes these on I_TASK = 0xFF
                                       ; alone and no park is involved
     call OSAPI_MEM_MOVABLE
-    mov ax, LG_CLAIM_TXT_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, LG_CLAIM_TXT_KB * 64                 ; KB -> PARAGRAPHS (50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [lg_txtseg], dx
     mov ax, lg_reloc
     call OSAPI_MEM_MOVABLE
-    mov ax, LG_CLAIM_STG_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, LG_CLAIM_STG_KB * 64                 ; KB -> PARAGRAPHS (50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [lg_stgseg], dx
-    mov ax, LG_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
-    call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
+    mov ax, LG_CLAIM_UNDO_KB * 64           ; Undo's, last and optional (81.57): a
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P               ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
     mov [lg_undoseg], dx
     mov ax, lg_reloc

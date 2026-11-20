@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "6f1c3f426",
-  "strings": "55b6220eb09d2d45",
-  "why": "Browser 1.7 review fixes (PR 358): the page already describes 1.7's pictures, Save Image As and image maps; the fixes add two rare refusal lines (Busy decoding an image, No image during download) below the page's level of detail. Restamped because c1055377 was the contributor's pre-rebase commit and is not in main's history"
+  "stamped": "60b0d6f0c",
+  "strings": "511e2c056170a587",
+  "why": "restamp at #389's squash; the branch stamp 80235ef47 is not in main's history. Strings unchanged."
  },
  "C64": {
   "sources": [],
@@ -210,9 +210,9 @@
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "dda3902c",
-  "strings": "c3a141853e1e7543",
-  "why": "Which system disks carry it: the 360KB one leaves it out (SPEC.md 119.6.7)"
+  "stamped": "805fccbe",
+  "strings": "f49184823d03297f",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "CHARTER_F88": {
   "sources": [],
@@ -398,9 +398,9 @@
   "sources": [
    "drivers/ether"
   ],
-  "stamped": "fed38237",
-  "strings": "dbf67e1a466a7b16",
-  "why": "kernel size pass 18: eth_name and eth_cpname became one 'Ethernet' string, so the string list lost a duplicate; every string a user reads is unchanged"
+  "stamped": "8daadd34",
+  "strings": "417c6be5594b43d5",
+  "why": "Checked: SLEEP/WAKE across hibernate, unknown-verb refusals, the MAC check and INIT-REBOOT lease reuse are below the page's level; the page's 'switched off/on around hibernate' and 'asks the network for an address' still hold; size still about 34K"
  },
  "EXTD_DRV": {
   "sources": [
@@ -561,17 +561,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "98a487a2",
-  "strings": "e6fb502f9e95b17d",
-  "why": "Format window rows use the install engine's State words (SPEC.md 52.2.2.1); page updated"
+  "stamped": "6f9f8a73d",
+  "strings": "12ae53aede3434e9",
+  "why": "Mount takes the logical drives in an extended partition (SPEC 52.4.1) - said in the Mount bullet; Format's unmount-first and the installer's Past BIOS Reach are below the page's detail (the reasons are examples, INSTALL says each greyed line says why)"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "98a487a2",
-  "strings": "e6fb502f9e95b17d",
-  "why": "HDDTOOL.DRV-side change only; nothing the page describes"
+  "stamped": "6f9f8a73d",
+  "strings": "12ae53aede3434e9",
+  "why": "logical drives in an extended partition now mount, after the primaries, up to six: said in the opening paragraph (SPEC 52.4.1); LBA/packet-call reach is below the page's detail"
  },
  "HELLO_O88": {
   "sources": [
@@ -591,9 +591,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "38069791",
-  "strings": "f80029845cffca5e",
-  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
+  "stamped": "8daadd34",
+  "strings": "7215ec1d579de451",
+  "why": "Resuming rewritten for the dialog-less resume: the boot resumes before the desktop, autostart stands down, Shift at startup deletes the file and toasts 'Hibernation skipped' (kernel/hiber.inc hb_probe_x); the off screen's key now resumes at once"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -605,17 +605,17 @@
   "sources": [
    "drivers/httpfs"
   ],
-  "stamped": "cbabc048",
-  "strings": "3c04230d6d85ba66",
-  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+  "stamped": "805fccbe",
+  "strings": "abf0c15953e0eb90",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "HTTPPAGE_DRV": {
   "sources": [
    "drivers/httpfs"
   ],
-  "stamped": "cbabc048",
-  "strings": "3c04230d6d85ba66",
-  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+  "stamped": "805fccbe",
+  "strings": "abf0c15953e0eb90",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "INCONSOL_F88": {
   "sources": [],
@@ -627,9 +627,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "4d890b53e",
-  "strings": "ee941270c35eb108",
-  "why": "apps/install changed only in OS88VER.TXT (release 20261112's date and what-is-new lines); the page quotes neither, so it stands unchanged"
+  "stamped": "adbf66f33",
+  "strings": "f1565744de501e24",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261118's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -771,9 +771,9 @@
   "sources": [
    "drivers/net"
   ],
-  "stamped": "9deeee7d",
-  "strings": "9bf50a723a7a10f7",
-  "why": "checked: only OS88NET.COM's /? help column moved (the /N line's indent); nothing the NET.DRV page says"
+  "stamped": "805fccbe",
+  "strings": "1540787f65a7f214",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "NOTEPAD_O88": {
   "sources": [
@@ -819,9 +819,9 @@
   "sources": [
    "drivers/net/os88net.asm"
   ],
-  "stamped": "9deeee7d",
-  "strings": "ea878454d744fb04",
-  "why": "checked: the /N line of the /? text gained the space that lines its description up with the others; the page's option table is unchanged"
+  "stamped": "805fccbe",
+  "strings": "c0be4d0f1d521357",
+  "why": "driver size pass 1: byte-size rewrites with behaviour held identical (harness-checked); CDROM's subfolder listings no longer repeat the root's TRACKnn.CDA files and OS88NET reports DOS error 39 as disk full - both below the pages' level of detail, which already describe the fixed behaviour"
  },
  "PACCMAN": {
   "sources": [],
@@ -858,6 +858,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PC1MOUSE_DRV": {
+  "sources": [
+   "drivers/pc1mouse/pc1mouse.asm"
+  ],
+  "stamped": "29e9848e7",
+  "strings": "075d3ddf5a3a826e",
+  "why": "row title PC1 Mouse, every system disk carries it, the session-long button codes"
  },
  "PCIETHER_DRV": {
   "sources": [
@@ -1453,6 +1461,15 @@
   "stamped": "18b1ddbe",
   "strings": "7567de0a93fbbb38",
   "why": "f9ed8cc4/9217a5c5 change wflink.inc's refusal handling and three status messages (a port the BIOS does not list, a UART the OS did not find, retry on an older SERIAL.DRV); the page quotes no message and describes the Link menu and the automatic search at a level these do not change - rare-case messages, no words needed"
+ },
+ "WIRERENA_O88": {
+  "sources": [
+   "apps/wirearena",
+   "tools/arenagen.py"
+  ],
+  "stamped": "c5c88829c",
+  "strings": "6136f95b083a4c1c",
+  "why": "Detail drop-down in the setup (the slot right of Play, the address field's under Internet); Very High the 286 default with vsync"
  },
  "WORD": {
   "sources": [],

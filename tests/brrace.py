@@ -48,7 +48,9 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
+import os88deadline                                    # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
@@ -74,26 +76,17 @@ PAGE = (b"<html><head><title>Race</title></head><body>\r\n"
 
 
 def codeoff(name):
-    """A browser code label's offset, by assembling the source with a `dw`
-    just before OS88_IMAGE_END - which moves nothing above it."""
-    import subprocess
-    import tempfile
-    src = open(os.path.join(_OS88_ROOT, "apps/browser/browser.asm")).read()
-    probe = src.replace("    OS88_IMAGE_END",
-                        "    dw %s\n    OS88_IMAGE_END" % name, 1)
-    with tempfile.TemporaryDirectory() as td:
-        asm, binf = os.path.join(td, "p.asm"), os.path.join(td, "p.bin")
-        open(asm, "w").write(probe)
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                        "-I", "apps/browser/", "-I", "drivers/net/", "-o",
-                        binf, asm], cwd=_OS88_ROOT, check=True)
-        d = open(binf, "rb").read()
-    img = open(os88build.at("build/browser.bin"), "rb").read()
-    n = len(img)
-    if len(d) != n + 2:                 # the bss names move by the 2 bytes,
-        sys.exit("brrace: build/browser.bin is not what the source assembles "
-                 "to - `make browsertest` first")   # so the LENGTH is the test
-    return d[n] | (d[n + 1] << 8)
+    """A browser code label's offset, out of build/browser.map (written with
+    build/browser.bin, org 0). It used to assemble the source again with a
+    `dw` before OS88_IMAGE_END, which needs two spare bytes under
+    APP_MAX_SIZE - and 1.8 left the Browser one (SPEC.md 71.34.14)."""
+    with open(os88build.at("build/browser.map"), encoding="ascii") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[-1] == name:
+                return int(fields[0], 16)
+    sys.exit("brrace: %s missing from build/browser.map - `make` first"
+             % name)
 
 
 def say(*a):
@@ -189,7 +182,7 @@ def main():
         # and every bss read below returns a stale copy.
         def ps():
             r = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-            return r[22] | (r[23] << 8)
+            return r[os88geom.W_SEG] | (r[os88geom.W_SEG + 1] << 8)
         say("browser at %04X" % ps())
 
         # THE BROWSER'S OWN STATE, at bss offsets derived from the image
@@ -269,8 +262,10 @@ def main():
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text("\b" * 12 + url)
-        os88marty.settle(m)
+        # Typed PAUSED (text_taken), as brfetch: a socket-speed burst into a
+        # running guest overruns the 15-entry BIOS ring (SPEC.md 9.8) and the
+        # host's speed decides which keys survive.
+        os88marty.text_taken(m, "\b" * 12 + url)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)
         if typed is None:
@@ -380,8 +375,10 @@ def main():
         m.breakpoints([{"type": "execseg", "seg": ps(),
                         "off": codeoff("br_abort")}])
         m.run()
-        t0, at = time.time(), None
-        while time.time() - t0 < 60:
+        # the window is the GUEST's (os88deadline): 60 host s was ~270 guest
+        # s alone and a fifth of that in a loaded soak
+        at, gd = None, os88deadline.Guest(m, 60)
+        while gd:
             if m.stopped():
                 at = (bss_b(BR_NSTATE), bss_b(BR_FIN), bss_w(BR_NLINES))
                 break

@@ -11,12 +11,16 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
 import dispcp
+import os88geom  # noqa: E402
 import os88marty
 import os88mouse
 import os88sym
 from brclick import browser_syms, MACHINE
 
 S = os88sym.linear
+
+
+GRID = {0x80: "-", 0x81: "|", 0x82: "+"}
 
 
 def main():
@@ -42,7 +46,7 @@ def main():
             sys.exit("br14: TORTURE.HTM did not open")
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        seg = rec[22] | (rec[23] << 8)
+        seg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         rb = lambda n: m.readseg(seg, sy[n], 1)[0]
         rw = lambda n: m.readseg(seg, sy[n], 2)[0] | (m.readseg(seg, sy[n], 2)[1] << 8)
         os88marty.until(m, lambda _m: rw("br_nlines") > 0,
@@ -73,8 +77,13 @@ def main():
                 if b == 14:
                     j += 4
                     continue
+                if b == 24:                 # D_CMETA and its payload byte
+                    j += 2                  # (1.8: BR_SNAP opens a cell)
+                    continue
                 j += 1
-                if b >= 0x20:
+                if b in GRID:               # 1.8's solid grid (brdocmarks.inc
+                    line.append(GRID[b])    # BR_BH/BV/BX), read as the old
+                elif b >= 0x20:             # '-', '|' and '+'
                     line.append(" " if b == 0x7f else chr(b))
             rendered.append("".join(line))
         malformed_next = next((i for i, line in enumerate(rendered)

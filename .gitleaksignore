@@ -1,0 +1,18 @@
+# gitleaks FALSE POSITIVES, by fingerprint (.githooks/pre-commit runs
+# `gitleaks git --staged` with the default rules and reads this file).
+#
+# The entry below is a tuple of TEST ROW NAMES in tests/suite.py - four video
+# full-screen-key rows, upstream's own data, arriving with the 2026-11-19
+# merge. The generic-api-key rule matched one of them on ENTROPY alone (3.55);
+# there is no credential in it. Owner-approved 2026-11-19.
+#
+# THE NAME IS DELIBERATELY NOT QUOTED HERE: writing it into this comment made
+# this file a finding of its own and blocked the commit a second time. A note
+# about a false positive must not reproduce the string that caused it.
+#
+# A fingerprint is pinned to a LINE, so this goes stale the moment suite.py
+# moves - harmless, because the line is only in the staged diff of the commit
+# that introduces it. Delete the entry when it stops matching rather than
+# renumbering it. The same finding also carries a `gitleaks:allow` at the line
+# itself, so either defence alone is enough.
+tests/suite.py:generic-api-key:24487

@@ -159,18 +159,22 @@ bas_entry:
 %endif
     mov si, bas_menus
     call OSAPI_MENU_SET
-    mov si, bas_about
-    call OSAPI_ABOUT_SET
 
     ; --- the wake handler (SPEC.md 74.1, 150.36) -----------------------------
     ; THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK, which is exactly why
     ; the event loop is built on it: a program that returns out of its
     ; AM_ONCMD handler at ON MENU is resumed from here, and here may take the
-    ; lock for a stated burst. Installed from the entry proc after
-    ; OSAPI_WM_CREATE, which is this slot's own instruction.
-    mov [bas_wn], bx                ; ...and the window is kept, because
-    mov ax, bas_onwake              ; OSAPI_WM_WAKE wants it in BX and
-    call OSAPI_WM_ONWAKE            ; bas_exec has no spare register to carry
+    ; lock for a stated burst.
+    ;
+    ; IT IS DECLARED IN THE CLASS NOW, not installed from here. The
+    ; 2026-11-19 upstream merge retired OSAPI_WM_ONWAKE and OSAPI_ABOUT_SET
+    ; with the other handler setters (kernel size pass 19): a window's
+    ; handlers are WC_* slots of its class (SPEC.md 11.104), and the template
+    ; carries one WT_CLASS pointer where it used to carry a word per handler.
+    ; See bas_cls beside bas_tpl.
+    mov [bas_wn], bx                ; ...and the window is still kept here,
+                                    ; because OSAPI_WM_WAKE wants it in BX and
+                                    ; bas_exec has no spare register to carry
                                     ; a window in
 
     ; --- the editor (SPEC.md 83) ---------------------------------------------
@@ -569,7 +573,8 @@ bas_onclick:
     ret
 
 ; -----------------------------------------------------------------------------
-; bas_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; bas_about - the class's WC_ABOUT handler (SPEC.md 11.104; it was
+; OSAPI_ABOUT_SET's until the 2026-11-19 merge retired that slot)
 ; in:  SI = our window ptr; UI task, gfx lock HELD
 ; out: nothing; clobbers BX/SI, which any window callback may
 ; -----------------------------------------------------------------------------
@@ -707,7 +712,20 @@ bas_onwake:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
 bas_tpl:
     dw 80, 40, BAS_W, BAS_H
-    dw bas_ttl, bas_paint, bas_onkey, bas_onclick
+    dw bas_ttl, bas_cls             ; WT_CLASS - one pointer where the three
+                                    ; handler words used to be (SPEC.md
+                                    ; 11.104, the 2026-11-19 merge)
+
+; --- the window class (SPEC.md 11.104) ------------------------------------
+; FIVE HANDLERS AND NO STYLE BITS, which is what this package had before the
+; handler setters were retired: paint, keys and clicks came from the
+; template's own words, and About and the wake arrived through
+; OSAPI_ABOUT_SET and OSAPI_WM_ONWAKE. All five are class slots now and the
+; two calls are gone from bas_entry. The style is 0 because this window is
+; born with no W_FLAGS of its own - it asks for movability separately, with
+; OS88_REGION_MOVABLE, which is a claim and not a window flag.
+    OS88_CLASS bas_cls, 0, PAINT, bas_paint, ONKEY, bas_onkey, \
+               ONCLICK, bas_onclick, ABOUT, bas_about, ONWAKE, bas_onwake
 
 ; --- the app menu set (SPEC.md 12.2) -----------------------------------------
 ; TWO menus of MENU_APPMAX's five. OS88_MENUSET_END asserts the cap, which is

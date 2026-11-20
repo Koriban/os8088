@@ -194,6 +194,12 @@ X apps/syscheck/disk.inc sc_fseg         # FSCHECK.DRV, KERNEL CODE the kernel f
 C apps/notepad/notepad.asm np_stgseg     # the save's CR/LF staging, held only
                                          # across the OSAPI_FILE_WRITE it is the
                                          # ES:BX of
+C apps/2basic/2basic.asm bas_io_seg       # 2BASIC's whole-file staging (SPEC.md 132.2):
+                                          # claimed and freed inside one HELP, LOAD,
+                                          # SAVE or LOADBMP command (bas_free_io)
+C apps/2basic/2basic.asm bas_res_stage    # LOADRES's 8KB stage, held only until the
+                                          # pack validates and is copied resident,
+                                          # freed before the command returns
 C apps/word/word.asm wd_stgseg           # the load/save staging, claimed and freed
                                          # inside one command, a transfer's buffer
                                          # throughout (SPEC.md 68.3.2)
@@ -308,6 +314,10 @@ X apps/os88pself.inc @op_self           # op_self hands its claim to the CALLER
                                          # the page is up
 C apps/wirefleet/wfsound.inc op:WF_P_SFX # the samples part, fetched and dropped
                                          # inside wf_pcm_open's one call
+C apps/wirearena/wirearena.asm @wa_loadarena # an arena part, fetched, read
+                                         # into both halves and dropped inside
+                                         # wa_loadarena's one call (the Game
+                                         # menu's command, before the bracket)
 C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
                                          # inside one wake (Paste's queue in the
                                          # same function declares)
@@ -469,12 +479,6 @@ C apps/xtmp3/x3pars.inc x3p_pseg         # the front end's probe scratch,
 D apps/xtmp3/x3eng.inc x3_xseg           # the external ring a DSP 3.00+ plays
                                          # by auto-init DMA (OSAPI_MEM_CLAIM_DMA_HI,
                                          # SPEC.md 121.6), freed at the play's stop
-X drivers/ramdisk/rdstore.inc @rd_claimp # rd_claim's OSAPI_MEM_P twin (SPEC.md
-                                         # 50.3.7): it JUMPS into rd_claim's tail,
-                                         # which stores DX at [bx] and declares it
-                                         # with rd_reloc at once - a jmp into
-                                         # another routine's label this scan does
-                                         # not follow
 X apps/browser/browser.asm @br_claimp    # br_claim's twin on OSAPI_MEM_P (SPEC.md
                                          # 50.3.7) and for br_claim's reason below:
                                          # it unpins the page claims after the call,
@@ -564,24 +568,22 @@ N apps/pixelstein/pxstein.asm op:PX_PART_LEV  # the 10KB levels, behind the same
                                          # fence (6.5)
 N apps/pixelstein/pxstein.asm pxl_sseg   # the 60KB sprite set, behind the same
                                          # fence (6.5)
-N apps/browser/brimage.inc op:1  # the image part (SPEC.md 71.26): its code
-                                         # is banked in br_im_vec and far-called
-                                         # by the WORKER mid-decode, and it hosts
-                                         # the decoder parts (71.30), which hold
-                                         # its segments. Dropped at IE_END
-N apps/browser/brimage.inc @br_im_rs_pxload  # a decoder part (71.30, 71.31),
-                                         # far-called by the worker with part 1's
-                                         # segments in its header; dropped with
-                                         # part 1
-N apps/browser/brdownload.inc op:0  # the Download Manager's lazy part
-                                         # (SPEC.md 71.20.5): its code is banked
-                                         # in br_dl_vec and far-called - by the
-                                         # WORKER too, mid-transfer - and its
-                                         # data in br_dl_partdseg; Copy Selection
-                                         # and the Save dialog's answer claim
-                                         # under that far call, so op_movable's
-                                         # rule (SPEC.md 20.12.12) refuses it.
-                                         # Held while br_dl_after keeps it
+N apps/browser/browser.asm @br_fetch  # every Browser part is fetched through
+                                         # this one wrapper (SPEC.md 71.34.14).
+                                         # Part 0, the Download Manager (SPEC.md
+                                         # 71.20.5): banked in br_dl_vec and
+                                         # far-called - by the WORKER too, mid-
+                                         # transfer - with claims made under
+                                         # that call, so op_movable's rule
+                                         # (SPEC.md 20.12.12) refuses it. Part 1,
+                                         # images (71.26): banked in br_im_vec,
+                                         # far-called by the worker mid-decode,
+                                         # and it hosts the decoder parts 2-6
+                                         # (71.30, 71.31), which hold its
+                                         # segments; dropped at IE_END. Part 7,
+                                         # colours, fonts and the table composer
+                                         # (71.34): far-called by layout with
+                                         # claims made under that call
 N apps/waverack/waverack.asm wr_bseg   # WaveRack's composing band (10KB),
                                          # claimed at entry and held for the
                                          # window's life; UI-only, so a relocation

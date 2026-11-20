@@ -1,5 +1,5 @@
-20261112
-* Browser shows GIF, PNG and JPEG
-* Animated GIFs and image maps
-* Save Image As from the page
-* Browser is now a Wire download
+20261118
+* Byteopoly: trade old computers on a
+  board, locally or over a cable
+* 2BASIC: a BASIC and resource editor
+* Browser 1.8: tables, frames, colour

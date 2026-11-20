@@ -123,7 +123,10 @@ HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
                                 ; important thing about that slot and the row
                                 ; is where a user looks for it
 
-hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, hd_tw_key, hd_tw_click
+hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hd_tcls, WF_KEEPH, PAINT, hd_tw_paint, ONKEY, hd_tw_key, \
+               ONCLICK, hd_tw_click, ONMOUSEUP, hd_tw_up, ONDRAG, hd_tw_drag
 hd_s_ttitle: db 'Format', 0
 
 ; -----------------------------------------------------------------------------
@@ -159,15 +162,6 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
-    mov al, 1                   ; a FIXED layout (SPEC.md 11.93): on CGA the
-    call OSAPI_WM_KEEPH         ; 178 rows hang over the dock whole, rather
-                                ; than the frame being cut at it with the
-                                ; buttons drawn on through it and a press on
-                                ; them falling to the dock (52.2.8)
-    mov ax, hd_tw_up            ; SPEC.md 13.7/13.8.1: not template words, so
-    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
-    mov ax, hd_tw_drag
-    call OSAPI_WM_ONDRAG
     mov byte [hd_tdown], 0
 .show:
     call OSAPI_WM_SHOW
@@ -214,6 +208,15 @@ hd_tw_geomok:
                                 ; the other
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
+    jnc .cmp                    ; ...past what an entry's CHS can name, the
+    cmp byte [si+HP_SCYL], 0xFF ; entry must SAY so - cylinder 1,023, the
+    jne .bad                    ; marker every tool writes there, with its
+    mov al, [si+HP_SSEC]        ; own head and sector, so only the cylinder
+    and al, 0xC0                ; is compared; the LBA is the whole of the
+    cmp al, 0xC0                ; address (SPEC.md 52.1.5)
+    jne .bad
+    jmp short .ok
+.cmp:
     call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
     cmp al, [si+HP_SSEC]
     jne .bad
@@ -854,6 +857,13 @@ hd_tw_format:
     call hd_fmt_plan            ; -> the cluster size and the FAT type
     jc .nofit
 
+    mov al, [hd_tsel]           ; THE VOLUME GOES BEFORE THE FORMAT, Delete's
+    mov ah, [hd_tdev]           ; own rule (SPEC.md 52.2.3): a volume left
+    call hd_tw_unmount_slot     ; mounted goes on caching a FAT and a root the
+    cmp byte [hd_tdrop], 0      ; format is about to rewrite - and on an
+    je .unmounted               ; Extended row it is every logical drive
+    call hd_cfg_mark            ; inside it (52.4.1). Staged, like Delete's
+.unmounted:
     mov word [hd_tmsg], hd_s_tdoing
     call hd_tw_repaint          ; say so BEFORE the writes: a 32MB format is
                                 ; hundreds of sectors and the user should not
@@ -1004,13 +1014,19 @@ hd_tw_nomb:
 hd_tw_delok:
     push ax
     push bx
+    mov ah, HTS_FREE            ; Delete's OTHER refusal: an empty slot
+hd_tw_okbody:                   ; hd_tw_fmtok's too: AH = the state that
+                                ; refuses besides HTS_LIVE, which both do -
+                                ; taking the boot partition's entry away is
+                                ; the same act as formatting it, one
+                                ; indirection (driver size pass 1: one body)
     mov bl, [hd_tsel]
     xor bh, bh
     mov al, [bx+hd_tstate]
-    cmp al, HTS_FREE
+    cmp al, ah
     je .no
-    cmp al, HTS_LIVE            ; taking the boot partition's entry away is the
-    je .no                      ; same act as formatting it, one indirection
+    cmp al, HTS_LIVE
+    je .no
     CLC_OR_STC .no
     pop bx
     pop ax
@@ -1031,20 +1047,12 @@ hd_tw_delok:
 hd_tw_fmtok:
     push ax
     push bx
-    mov bl, [hd_tsel]
-    xor bh, bh
-    cmp byte [bx+hd_tstate], HTS_LIVE
-    je .no
-    cmp byte [bx+hd_tstate], HTS_GEOM
-    je .no                      ; the one state where the ROW ABOVE THE BUTTON
+    mov ah, HTS_GEOM            ; the one state where the ROW ABOVE THE BUTTON
                                 ; is false: there is a volume here and this
                                 ; driver cannot see it, so 'Erase slot N?' is
                                 ; a fair question asked of a user who has just
                                 ; been shown a wrong picture (SPEC.md 52.2.6)
-    CLC_OR_STC .no
-    pop bx
-    pop ax
-    ret
+    jmp short hd_tw_okbody      ; ...and HTS_LIVE, hd_tw_delok's body's own
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_confirm - the ask-again gate both destructive buttons share (internal)
