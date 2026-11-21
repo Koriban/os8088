@@ -2042,6 +2042,9 @@ bas_c_sfact:
     mov si, bas_kw_string
     call bas_wordis
     je .b_string
+    mov si, bas_kw_inkey            ; node [167]: no arguments, no parens
+    call bas_wordis
+    je .b_inkey
     ; a `$` ARRAY's element reads as text, and the same OP_ALOAD serves:
     ; an element is eight bytes and a string value is the first four of
     ; them, so the copy onto the stack is already right (SPEC.md 150.31)
@@ -2171,6 +2174,14 @@ bas_c_sfact:
     ret
 
 ; --- TRIM$(a$) and UPPER$(a$) - one string in, one out ------------------
+; INKEY$ TAKES NOTHING AND IS NOT CALLED, so there is no bas_bopen here and
+; no argument list - the word itself is the whole expression (node [167]).
+; bas_restype is set by bas_c_sfact's caller, as it is for every other text
+; result, so this emits one byte and returns.
+.b_inkey:
+    mov al, OP_SINKEY
+    jmp bas_emit
+
 .b_trim:
     mov al, OP_STRIM
     jmp short .b_s1

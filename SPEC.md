@@ -261269,6 +261269,71 @@ the editor's own `TX_MAX` follows it, both because the declared total is
 DERIVED from the chain rather than written down (§150.39's trap 4) - raising
 the literal was the whole change.
 
+### 150.49 `INKEY$`, where the two authorities disagree about the HOST
+
+```basic
+DO
+  ON MENU                          ' ...and this line is the difference
+  t$ = INKEY$
+  IF t$ <> ""
+    IF LEN(t$) = 1
+      PRINT "Character: "; t$, "ASCII code: "; ASC(t$)
+    ELSE
+      PRINT "Scan code: "; ASC(RIGHT$(t$, 1))
+    ENDIF
+  ENDIF
+LOOP
+```
+
+**Status: BUILT** - `OP_SINKEY`, `bas_kpush`/`bas_kpop`, row `basickey`.
+
+**THE OTHER AUTHORITY REFUSES THIS ONE**, and that is why it is worth a
+section. `basicnw`'s `library.md` lists `INKEY$` as absent because *"there is
+no way to poll a key without blocking the pane"* - and `notes/REFUSAL-AUDIT.md`
+already calls that **the clearest case in the audit: a browser constraint
+wearing a design rationale**. The rule the audit states is *what is absent is
+hardware, the host, or a device - never the language*, and a browser pane is
+exactly a host. So the Compendium wins, as it did over `^`'s hierarchy in
+§150.45, and for a sharper reason: the refusal is true where it was written
+and false here.
+
+**KEYS ARRIVE AS EVENTS, SO THERE IS A RING.** §150.36's interpreter does not
+spin at a yield, it **RETURNS** - and while a program waits at its `ON MENU`
+the UI task delivers keystrokes to `bas_onkey` like any other event. They have
+to go somewhere until the statement that asks for one runs, so eight pairs of
+(ascii, scan) sit in bss. The ninth key before a poll is **dropped silently**,
+which is what a keyboard does; raising a refusal from an EVENT would end a
+program at a line that did nothing wrong.
+
+**AND THAT MAKES NODE [167]'S OWN EXAMPLE NOT RUN VERBATIM**, which is stated
+here rather than discovered later. The Atari's `INKEY$` reads the hardware, so
+`DO: t$=INKEY$ :LOOP` works there; here a loop that never yields never lets an
+event in, and `INKEY$` would answer `""` forever. **`ON MENU` is what fills the
+ring**, and §150.8 already made the yield a statement the programmer writes -
+this is that rule's first real consequence rather than a new one. The example
+above is the node's with one line added.
+
+**A RUNNING PROGRAM OWNS THE KEYBOARD.** While `bas_susp` is set the keys go to
+the ring and NOT to `os88text_key` - which is a fix as much as a feature,
+because before this they went to the editor and **lettered the program text
+underneath the running program**. The menu bar is clicks, not keys, so a
+program with no way out of its own loop is still reachable.
+
+**A RUN STARTS WITH AN EMPTY RING**, because keys left over from the previous
+program are not this one's input - a program that ends with its queue
+undrained would otherwise hand what it ignored to whatever runs next.
+
+**THE TWO-CHARACTER FORM IS THE NODE'S OWN RULE**: a key with no ASCII code
+answers `CHR$(0)` followed by the scan code, so `LEN(t$)` is how a program
+tells a function key from a letter. `INKEY$` takes no arguments and no
+parentheses - the word is the whole expression - and allocates from §150.28's
+temporary arena, which refuses by name itself when it is full (§150.46's
+lesson: no second message).
+
+**What is NOT here.** `INPUT` and `LINE INPUT` (nodes [168], [169]) BLOCK, so
+they need §150.36's re-entrant seam the way `ALERT` does, and they are a
+separate piece of work. `INKEY$` needs none of it, which is why it is first.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

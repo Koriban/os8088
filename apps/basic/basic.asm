@@ -443,6 +443,13 @@ bas_oncmd:
     jnz .stop                       ; item 1 = Stop
     push si                         ; item 0 = Run: compile and run the text
     mov byte [bas_bad], 0           ; in the editor, for real
+    ; A RUN STARTS WITH AN EMPTY RING (SPEC.md 150.49). Keys left over from
+    ; the PREVIOUS program are not this one's input - a program that ends
+    ; with its queue undrained would otherwise hand what it ignored to
+    ; whatever runs next, which is the kind of state that makes one test
+    ; depend on the one before it.
+    mov word [bas_khead], 0
+    mov word [bas_ktail], 0
 %ifdef BAS_OVERLAY
     call far [bas_v_run]            ; the module COMPILES and returns
 %else
@@ -489,8 +496,19 @@ bas_onkey:
     ; something else repaints. One key puts the card away and does nothing
     ; else; os88ui_abdismiss repaints, so the editor is drawn by that.
     cmp byte [bas_abon], 0
-    je .edit
+    je .live
     call bas_abdismiss              ; SI = the window, as it wants
+    jmp .out
+.live:
+    ; **A RUNNING PROGRAM OWNS THE KEYBOARD** (SPEC.md 150.49). While one
+    ; waits at its ON MENU the UI task still delivers keys here, and before
+    ; INKEY$ existed they went to os88text_key - which EDITED THE PROGRAM
+    ; TEXT UNDER THE RUNNING PROGRAM. They go to the ring instead, and the
+    ; editor sees them again the moment the program ends. The menu bar is
+    ; still clicks, so a program with no way out is still reachable.
+    cmp word [bas_susp], 0
+    je .edit
+    call bas_kpush
     jmp .out
 .edit:
     cmp ax, BAS_KEY_RUN             ; **F5 RUNS IT**, which is QuickBASIC's
@@ -976,6 +994,17 @@ BAS_B_bas_wn     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_bas_susp   equ BAS_B_bas_wn + 2
 BAS_B_bas_scur   equ BAS_B_bas_susp + 2
 BAS_B_bas_sdi    equ BAS_B_bas_scur + 2
+; --- INKEY$'s ring (SPEC.md 150.49) --------------------------------------
+; KEYS ARRIVE AS EVENTS AND INKEY$ DRAINS THEM, because this interpreter
+; RETURNS at a yield rather than spinning (150.36): the keystrokes a program
+; wants are delivered to bas_onkey by the UI task while that program is
+; suspended at its ON MENU, and there has to be somewhere to put them until
+; the statement that asks runs. Eight is a loop's worth of fast typing; the
+; ninth key before a poll is DROPPED, which is what a keyboard does.
+BAS_KEY_RING     equ 8
+BAS_B_bas_kring  equ BAS_B_bas_sdi + 2
+BAS_B_bas_khead  equ BAS_B_bas_kring + BAS_KEY_RING*2
+BAS_B_bas_ktail  equ BAS_B_bas_khead + 2
 ; --- MENU m$()'s bar (SPEC.md 150.38) ------------------------------------
 ; THE TEXT IS COPIED, NOT POINTED AT. A menu set is a table of pointers to
 ; NUL strings and a BASIC string lives in 150.28's arena, which COMPACTS -
@@ -986,7 +1015,7 @@ BAS_MEN_MAX   equ MENU_APPMAX - 2   ; the program's menus: the bar also holds
                                     ; does not become unreachable
 BAS_MEN_ITEMS equ 10                ; items in one of them
 BAS_MEN_TEXT  equ 256               ; and the bytes for every title and item
-BAS_B_bas_mset   equ BAS_B_bas_sdi + 2
+BAS_B_bas_mset   equ BAS_B_bas_ktail + 2
 BAS_B_bas_mitems equ BAS_B_bas_mset + 6 + MENU_APPMAX*AMENU_ENTSZ
 BAS_B_bas_midx   equ BAS_B_bas_mitems + BAS_MEN_MAX*BAS_MEN_ITEMS*2
 BAS_B_bas_mtext  equ BAS_B_bas_midx + BAS_MEN_MAX*BAS_MEN_ITEMS*2
@@ -1305,6 +1334,13 @@ bas_scur        equ os88_image_end + BAS_B_bas_scur  ; word: the op cursor,
                                     ; return (150.23) - the same convention,
                                     ; for the same reason
 bas_sdi         equ os88_image_end + BAS_B_bas_sdi   ; word: the value stack
+bas_kring       equ os88_image_end + BAS_B_bas_kring  ; BAS_KEY_RING pairs:
+                                    ; the ascii byte and the scan byte, as
+                                    ; W_ONKEY hands them over (SPEC.md 150.49)
+bas_khead       equ os88_image_end + BAS_B_bas_khead  ; word: where INKEY$
+                                    ; reads next
+bas_ktail       equ os88_image_end + BAS_B_bas_ktail  ; word: where bas_onkey
+                                    ; writes next; equal means empty
 bas_alpend      equ os88_image_end + BAS_B_bas_alpend ; word: an ALERT answer
                                     ; is waiting, so OP_ALERT's re-entry
                                     ; stores it instead of raising again

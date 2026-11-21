@@ -210,7 +210,9 @@ OP_SINSTR   equ 67                  ; + a flags byte: INSTR/RINSTR, both of
 SI_BACK     equ 1                   ; ...search right to left: RINSTR
 SI_XFIRST   equ 2                   ; ...the start came FIRST, so it is the
                                     ; BOTTOM slot and not the top
-OP_N        equ 68                  ; how many there are, table included
+OP_SINKEY   equ 68                  ; INKEY$ - no arguments, no parens
+                                    ; (SPEC.md 150.49)
+OP_N        equ 69                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1176,6 +1178,60 @@ bas_f_frac:
     call fp_swap_ab                 ; A = x, B = TRUNC(x)
     call fp_sub                     ; A = x - TRUNC(x)
     clc
+    ret
+
+; --- bas_kpush - a keystroke into the ring (SPEC.md 150.49) -------------
+; in:  AL = ascii, AH = scan, as W_ONKEY hands them over. Every register
+;      preserved: this is called from bas_onkey's own path.
+;
+; A FULL RING DROPS THE KEY, and silently, because that is what a keyboard
+; does and the alternative is worse: a program that polls once a pass cannot
+; be made to notice a refusal, and raising one from an EVENT would end a
+; program at a line that did nothing wrong.
+bas_kpush:
+    push ax
+    push bx
+    push cx
+    mov bx, [bas_ktail]
+    mov cx, bx
+    inc cx
+    cmp cx, BAS_KEY_RING
+    jb .kpwrap
+    xor cx, cx
+.kpwrap:
+    cmp cx, [bas_khead]
+    je .kpfull                      ; the next write would BE the read point
+    shl bx, 1
+    mov [bas_kring + bx], ax
+    mov [bas_ktail], cx
+.kpfull:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- bas_kpop - the oldest keystroke, or CF=1 ---------------------------
+; out: AL = ascii, AH = scan, CF=0; or CF=1 and nothing waiting.
+bas_kpop:
+    push bx
+    mov bx, [bas_khead]
+    cmp bx, [bas_ktail]
+    je .kpnone
+    shl bx, 1
+    mov ax, [bas_kring + bx]
+    mov bx, [bas_khead]
+    inc bx
+    cmp bx, BAS_KEY_RING
+    jb .kpset
+    xor bx, bx
+.kpset:
+    mov [bas_khead], bx
+    pop bx
+    clc
+    ret
+.kpnone:
+    pop bx
+    stc
     ret
 
 ; --- bas_sxarg - the slot at SI as a count, WITHOUT popping -------------
@@ -2950,6 +3006,67 @@ bas_exec:
     pop ax
     jmp .done
 
+; --- OP_SINKEY - INKEY$ (SPEC.md 150.49, node [167]) --------------------
+; NO ARGUMENTS AND NO WAITING. Node [167]: INKEY$ "does not wait for a key to
+; be pressed, but scans the keyboard to check whether a key has been pressed
+; since the last scan", answering "" when none has. Here the scanning is
+; bas_onkey's and the ring is what "since the last scan" means.
+;
+; A KEY WITH NO ASCII CODE COMES BACK AS TWO CHARACTERS, CHR$(0) then the
+; scan code, which is the node's own rule and the reason LEN(t$) is how a
+; program tells a function key from a letter.
+.sinkey:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push ax
+    push bx
+    push cx
+    call bas_kpop                   ; AL = ascii, AH = scan, CF=1 if none
+    jc .sinknone
+    mov cx, 1
+    or al, al
+    jnz .sinkgot
+    mov cx, 2                       ; no ascii: CHR$(0) and the scan code
+.sinkgot:
+    push ax
+    call bas_stmpalloc              ; CX bytes -> AX, and it REFUSES BY NAME
+    pop bx                          ; itself, so CF here just unwinds
+    jc .sinkbad
+    ; **SI IS THE OP CURSOR AND MUST NOT BE THE WRITE POINTER.** Only
+    ; BX, SI, DI and BP can index memory on an 8086, so reaching for SI to
+    ; address two bytes is the natural slip and it loses the interpreter's
+    ; place (150.36's rule: the machine at an op boundary IS the cursor and
+    ; DI). BX carries the arena offset instead.
+    mov [di], ax                    ; the bytes...
+    mov [di + 2], cx                ; ...and how many
+    xchg ax, bx                     ; AX = the key, BX = where it goes
+    mov [bx], al                    ; the ascii - 0 for a special key...
+    cmp cx, 2
+    jne .sinkpush
+    mov [bx + 1], ah                ; ...and then the scan code
+.sinkpush:
+    pop cx
+    pop bx
+    pop ax
+    add di, BAS_SLOT
+    jmp .next
+.sinknone:
+    xor ax, ax                      ; NOTHING PRESSED IS THE EMPTY STRING,
+    mov [di], ax                    ; which is a length of 0 and an offset
+    mov [di + 2], ax                ; nothing reads
+    pop cx
+    pop bx
+    pop ax
+    add di, BAS_SLOT
+    jmp .next
+.sinkbad:
+    pop cx
+    pop bx
+    pop ax
+    jmp .done                       ; bas_stmpalloc has already said why -
+                                    ; a second bas_err would print twice and
+                                    ; shift every answer after it (150.46)
+
 ; --- OP_SINSTR - INSTR and RINSTR (SPEC.md 150.47, nodes [160], [161]) --
 ; + a flags byte: SI_BACK searches right to left, SI_XFIRST says the start
 ; position was spelled FIRST. Three slots always - a call with no start gets
@@ -4075,6 +4192,7 @@ bas_optab:
     dw bas_exec.supper              ; OP_SUPPER
     dw bas_exec.srep                ; OP_SREP
     dw bas_exec.sinstr              ; OP_SINSTR
+    dw bas_exec.sinkey              ; OP_SINKEY
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4399,6 +4517,7 @@ bas_fn1names:
     db 'EXP', 0
     db 'LOG', 0
     db 0                            ; an empty name ends the walk
+bas_kw_inkey:   db 'INKEY$', 0
 bas_kw_instr:   db 'INSTR', 0
 bas_kw_rinstr:  db 'RINSTR', 0
 bas_kw_trim:    db 'TRIM$', 0

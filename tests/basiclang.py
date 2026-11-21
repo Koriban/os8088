@@ -2237,6 +2237,69 @@ CALC5 = ([("CLS", None), ("PRINT 31415", "31415")]
             ("#pick Keys", "7"),      # Add, folding nothing
             ("#pick Math", ["7", "14"])])
 
+# --- INKEY$ (SPEC.md 150.49, node [167]) --------------------------------
+# THE KEYS ARE SENT WITH `#after`, which is the only way to reach a program
+# that is already running - and it is also what makes these rows an end-to-
+# end test of 150.36's whole yield: the key is delivered to bas_onkey by the
+# UI task while the program sits at its ON MENU, parked in the ring, and
+# popped by the statement on the next pass.
+#
+# THE LOOP TERMINATING IS ITSELF AN ASSERTION. If keys reached the EDITOR
+# instead of the ring - which is where they went before this existed, and
+# they lettered the program text while it ran - INKEY$ would answer "" for
+# ever and the part would time out rather than fail.
+KEY1 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("n = 0",                            None),
+    ("DO",                               None),
+    ("  ON MENU",                        None),
+    ("  t$ = INKEY$",                    None),
+    ('  IF t$ <> "" THEN',               None),
+    ("    PRINT t$",                     ["a", "b", "c"]),
+    ("    n = n + 1",                    None),
+    ("  ENDIF",                          None),
+    ("LOOP UNTIL n >= 3",                None),
+    ("PRINT 77",                         "77"),
+    ("END",                              None),
+    ("#after a",                         None),
+    ("#after b",                         None),
+    ("#after c",                         None),
+]
+
+# A KEY WITH NO ASCII CODE IS TWO CHARACTERS, CHR$(0) then the scan code,
+# which is node [167]'s own rule and the reason LEN(t$) is how a program
+# tells a function key from a letter. F1 is free here; F5 is Run.
+KEY2 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("DO",                               None),
+    ("  ON MENU",                        None),
+    ("  t$ = INKEY$",                    None),
+    ('LOOP UNTIL t$ <> ""',              None),
+    ("PRINT LEN(t$)",                    "2"),
+    ("PRINT ASC(t$)",                    "0"),      # ...the CHR$(0) itself
+    ("END",                              None),
+    ("#after f1",                        None),
+]
+
+# NOTHING PRESSED IS THE EMPTY STRING, not a wait - which is the half of
+# node [167] that makes it usable in a loop at all. This part sends NO key,
+# so a yield and a poll must answer 0 and carry straight on; an INKEY$ that
+# blocked would hang here instead.
+#
+# IT ALSO PROVES THE RING IS EMPTIED BY RUN: KEY2's f1 is drained, but a
+# part that ignored a key would otherwise leave it for this one to find.
+KEY3 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("ON MENU",                          None),
+    ("t$ = INKEY$",                      None),
+    ("PRINT LEN(t$)",                    "0"),
+    ("PRINT 77",                         "77"),
+    ("END",                              None),
+]
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2254,6 +2317,7 @@ MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
         PART87, PART88, PART89, PART90, PART91,
         PART92, PART93, PART94, PART95, PART96)
 CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
+KEYS = (KEY1, KEY2, KEY3)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2270,6 +2334,8 @@ elif "--math" in sys.argv:
     PARTS = MATH
 elif "--calc" in sys.argv:
     PARTS = CALC
+elif "--keys" in sys.argv:
+    PARTS = KEYS
 
 FAILED = []
 
