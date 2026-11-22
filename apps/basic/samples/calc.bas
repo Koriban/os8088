@@ -45,6 +45,7 @@ cur = 0                         ' the number on the display
 pend = 0                        ' the operation waiting for its second
 ent = 0                         ' 1 while cur is being typed
 mem = 0                         ' the memory register
+t$ = ""                         ' whatever INKEY$ last handed over
 err = 0                         ' 1 when the display says E
 done = 0                        ' Quit sets this
 
@@ -123,6 +124,10 @@ ON MENU GOSUB pressed
 PRINT 0
 DO
   ON MENU
+  t$ = INKEY$
+  IF t$ <> "" THEN
+    typed(t$)
+  ENDIF
 LOOP UNTIL done > 0
 END
 
@@ -137,6 +142,50 @@ PROCEDURE pressed
       press(kd(i))
     ENDIF
   ENDIF
+RETURN
+
+' --- a keystroke becomes a key press -----------------------------------
+' THE KEYBOARD IS A SECOND SOURCE OF THE SAME KEY CODES, which is the whole
+' return on press(k) not knowing what a menu is: the bar and the keys both
+' arrive here as a number between 0 and 22, and the calculator cannot tell
+' which one was used.
+'
+' ON MENU IS WHAT LETS A KEY IN (SPEC.md 150.49). This interpreter RETURNS
+' at a yield rather than spinning, so the keystroke is delivered while the
+' program waits at the ON MENU above and INKEY$ finds it on the next pass.
+' A loop without that line would poll an empty ring for ever.
+'
+' WHAT THE KEYBOARD DOES NOT CARRY: Sqrt, Recip, Negate and the memory keys
+' have no key of their own on this machine, exactly as they have no key on a
+' PC keypad, so they stay on the bar. Inventing letters for them would be a
+' worse answer than the menu that is already there.
+PROCEDURE typed(t$)
+  LOCAL c
+  ' A SPECIAL KEY IS TWO CHARACTERS, CHR$(0) and a scan code, so ASC() reads
+  ' 0 and matches nothing below - which is the behaviour wanted and not an
+  ' accident worth hiding.
+  c = ASC(t$)
+  IF c >= 48 THEN
+    IF c <= 57 THEN
+      press(c - 48)
+    ENDIF
+  ENDIF
+  SELECT c
+  CASE 43
+    press(12)
+  CASE 45
+    press(13)
+  CASE 42
+    press(14)
+  CASE 47
+    press(15)
+  CASE 61,13
+    press(10)
+  CASE 27,67,99
+    press(11)
+  CASE 37
+    press(17)
+  ENDSELECT
 RETURN
 
 ' == ENGINE ==

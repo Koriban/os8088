@@ -2232,10 +2232,22 @@ CALC5 = ([("CLS", None), ("PRINT 31415", "31415")]
          + [(l, None) for l in CALC_GLUE]
          + [(l, None) for l in CALC_ENG]
          + [("#bar Keys", None), ("#bar Math", None), ("#bar Calc", None),
-            ("#pick Keys", "0"),      # the display the program opens with
-            ("#pick Math", "7"),      # ...then 7 from the pick above
-            ("#pick Keys", "7"),      # Add, folding nothing
-            ("#pick Math", ["7", "14"])])
+            # --- TYPED FIRST, THEN CLICKED, and the point is that the tape
+            # cannot tell which was which: both reach the same press(k).
+            # 7 + 7 = 14 off the keyboard, then 7 + 7 again off the bar.
+            ("#after 7", None),
+            ("#after shift-equal", None),     # ...which is '+'
+            ("#after 7", None),
+            ("#after ret", None),             # Return is Equals
+            ("#pick Keys", None),
+            ("#pick Math", None),
+            ("#pick Keys", None),
+            # THE WHOLE TAPE IN ONE PLACE, since these events print in the
+            # order they happen and splitting it across the lines above only
+            # makes each one look like it owns the answer before it.
+            ("#pick Math", ["0",
+                            "7", "7", "7", "14",      # keyed in
+                            "7", "7", "7", "14"])])   # clicked in
 
 # --- INKEY$ (SPEC.md 150.49, node [167]) --------------------------------
 # THE KEYS ARE SENT WITH `#after`, which is the only way to reach a program
@@ -2825,6 +2837,19 @@ def main():
                  len(part) - len(after) - len(wantbar) - len(pick),
                  time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
+        if after:
+            # **WAIT FOR THE PROGRAM, NOT FOR A CLOCK.** A fixed two seconds
+            # was enough while every part here was a dozen lines; CALC.BAS is
+            # 178 and must COMPILE first (150.19 compiles the whole program
+            # before running any of it), and a key that arrives before the
+            # run has started is not merely early - bas_susp is still 0, so
+            # it goes to the EDITOR and the program never sees it (150.49).
+            # Both kinds of part print the sentinel BEFORE they need a key,
+            # so the sentinel is the evidence that the program is live.
+            for _ in range(20):
+                if console_lines(m) is not None:
+                    break
+                os88qemu.pace(m, 1.0)
         for k in after:
             os88qemu.pace(m, 2.0)               # ...let the dialog come up
             os88qemu.sendkey(m.path, k)

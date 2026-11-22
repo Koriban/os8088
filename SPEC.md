@@ -261207,6 +261207,21 @@ only reach a menu's FIRST item, so the arithmetic could not be asserted
 through the bar at all. The row calls `press()` directly for all eight
 functions and clicks the bar only to prove the wiring.
 
+**AND IT IS WHAT LET THE KEYBOARD BE ADDED IN TWENTY LINES.** §150.49's
+`INKEY$` made a second source of the same key codes possible, and `typed(t$)`
+is the whole of it: digits, `+ - * /`, `=` and Return for Equals, Escape and
+`C` for Clear, `%` for percent. The engine did not change by a line, and the
+tape cannot tell a keyed 7 from a clicked one - which is what CALC5 asserts
+by doing 7 + 7 = 14 twice, once each way, and expecting the same four
+numbers. Sqrt, Recip, Negate and the memory keys stay on the bar because a PC
+keypad has no key for them either; inventing letters would be a worse answer
+than the menu already there.
+
+**`ON MENU` IS STILL WHAT LETS A KEY IN.** The loop polls `INKEY$` after the
+yield, because a loop without the yield polls an empty ring for ever
+(§150.49) - the clearest demonstration there is that this interpreter's
+`ON MENU` is not decoration.
+
 **`E` AND A LOCK, NOT A DIALOG, and this one is a requirement rather than a
 style.** Divide by zero and `SQR` of a negative are **fatal refusals** in this
 language - they end the program by name - so an interactive program must never
