@@ -261349,6 +261349,125 @@ lesson: no second message).
 they need §150.36's re-entrant seam the way `ALERT` does, and they are a
 separate piece of work. `INKEY$` needs none of it, which is why it is first.
 
+### 150.50 `MID$` as a command: the first string LVALUE
+
+```basic
+a$ = "GFA SYSTEMTECHNIK"
+MID$(a$, 5) = "BASIC "              ' GFA BASIC TECHNIK      node [156]
+b$ = "Testword"
+MID$(b$, 6, 10) = "are you serious?"  ' Testware - and ten of them do not fit
+```
+
+**Status: CONTRACT WRITTEN.**
+
+Node [156] gives `MID$(a$,x[,y])=b$` with **`a$` an *svar***, not an sexp -
+the only place in this chapter where a function name stands on the LEFT of an
+`=`. It replaces characters of `a$` from position `x` with those of `b$`, `y`
+of them when given and as many as fit when not.
+
+**THE LENGTH OF `a$` NEVER CHANGES**, which is the node's own sentence and the
+whole reason this is cheap: *"no characters will be written beyond the end of
+a$"*. So it ALLOCATES NOTHING and cannot compact the arena - the bytes are
+written where they already are, exactly as §150.35's `LSET` and `RSET` write
+theirs, and it joins that family rather than the one that calls
+`bas_stmpalloc`. Node [156]'s second example is the case that proves it:
+`MID$(b$,6,10)` is given ten characters and a string with three positions
+left, and the answer is `Testware` - eight characters, as it began.
+
+**THE MISSING `y` IS 32767 THE COMPILER PUSHES**, which is what the `MID$`
+FUNCTION already does for its missing length (§150.29) - one opcode, not two,
+and the op clamps it to what is actually there.
+
+**OUT OF RANGE IS A NO-OP, NOT A REFUSAL**, following §150.29's rule for the
+whole family: counting starts at 1 and the ends are CLAMPED. An `x` past the
+end of `a$` writes nothing, an `x` below 1 starts at 1, and a `y` of zero or
+less writes nothing. Nothing here can be a programming error the compiler
+could have caught, and refusing would make a loop that walks a string off its
+end a crash rather than a stop.
+
+### 150.51 `PRED` and `SUCC`, and a name with no `$` that returns text
+
+```basic
+PRINT PRED(6), SUCC(2), PRED(3 * 6)    ' 5  3  17            node [146]
+PRINT PRED(2.1)                        ' 1 - NOT 2
+c$ = "blue moon"
+PRINT PRED(c$); SUCC(PRED(c$)); SUCC(c$)   ' abc             node [158]
+```
+
+**Status: CONTRACT WRITTEN.**
+
+**THEY ARE DEFINED TWICE, IN TWO CHAPTERS**, and each node points at the
+other: node [146] under Integer Arithmetic takes an `iexp`, node [158] under
+String Manipulation takes an `sexp`. Same two names, result following the
+argument - the same cross-chapter filing that hid `TRIM$` inside `LEN`'s node
+(§150.46).
+
+**`PRED(2.1)` IS 1 AND NOT 2**, which node [146] states outright and is the
+only surprising thing in either: these *"operate on integer expressions, so
+any decimal places are ignored"*, so the argument is truncated FIRST and the
+step taken after. The reading that gives 2 - "the next number below 2.1" - is
+the natural one and the wrong one.
+
+**AND THE STRING FORM BREAKS THE RULE THE PARSER IS BUILT ON.** Every other
+name in this language declares its kind in its spelling: `bas_isstrname` says
+TEXT if and only if the word ends in `$`, which is how `bas_c_rel` chooses a
+parser before it has read anything else (§150.28). `PRED` has no `$` and
+node [158] returns text from it anyway. So **`PRED` and `SUCC` are
+TRANSPARENT to the lookahead**: their kind is their ARGUMENT's kind, and
+`bas_isstrahead` steps over the name and its `(` and asks again. That is
+bounded - it is the same question one level in, so `PRED(SUCC(a$))` resolves
+by looping, not by parsing the expression twice - and it is the only
+construct in the chapter that needs it, which is why the rule is written here
+rather than made general.
+
+**THE STRING FORM IS NODE [158]'S OWN DEFINITION**, `CHR$(ASC(a$)-1)` and
+`CHR$(ASC(a$)+1)`: the FIRST character of the argument, stepped, returned as
+a string of one. Its edges are therefore `ASC`'s and `CHR$`'s edges and not
+new ones - `PRED("")` refuses because `ASC("")` does, and `SUCC(CHR$(255))`
+refuses because `CHR$(256)` does (§150.29). **The numeric form's edge is its
+own**: the conversion is 16-bit, so `SUCC(32767)` and `PRED(-32768)` are
+refused by the same CF the other one-argument functions report with
+(§150.44), rather than wrapping quietly.
+
+### 150.52 `SPC`, and what chapter 5's own index still lists
+
+```basic
+a$ = "GFA "
+b$ = SPACE$(5)
+PRINT b$; STRING$(3, a$); SPC(4); STRING$(5, 65)
+'      GFA GFA GFA     AAAAA                              node [162]
+```
+
+**Status: BUILT** - `SPC` compiles to `SPACE$`'s own body, row `basicch5`.
+
+**IT IS THE THIRD FUNCTION HIDDEN IN NODE [162]'S TITLE**, which reads
+`STRING$` and defines `SPACE$` and `SPC` as well - the same misfiling that put
+`TRIM$` inside `LEN`'s node (§150.46) and `CLR` and `ERASE` inside node [94]
+(§150.33). That is now three times this chapter has been caught by a
+function that is not where its name says it is, which is why the chapter's
+INDEX (node [154]) is read as the list of surfaces and the node titles are
+not.
+
+**AND IT IS `SPACE$` UNDER ANOTHER NAME HERE.** Node [162] distinguishes them
+by purpose rather than result - `SPC()` *"inserts x spaces in a PRINT
+statement without the need to create a string variable"* - and on this system
+the distinction has nothing to attach to: `PRINT` takes a string expression
+either way, so `SPC(4)` and `SPACE$(4)` produce the same bytes by the same
+opcode. Naming it as an alias rather than giving it an opcode of its own is
+the honest encoding of a difference that is about where you would write it,
+not about what it does. A BASIC where `SPC` were valid ONLY inside `PRINT`
+would be making a distinction this one does not have.
+
+**WHAT CHAPTER 5 STILL LISTS AND THIS CHAPTER HAS NOT BUILT: `MIN` and
+`MAX`.** Node [154]'s closing line is *"MIN() and MAX() also work on string
+expressions"*, and they are absent entirely - the functions themselves belong
+to node [135] under Integer Arithmetic, so the string form is a
+cross-reference into chapter 4 rather than a surface of this one. They are
+also **VARIADIC** - `MIN(x[,y,z,...])` over any number of arguments, in both
+kinds - which is machinery no built-in here has yet. Recorded as the one
+thing node [154] names that nothing implements, so that "chapter 5 is
+finished" means the ten surfaces it lists and not that sentence.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

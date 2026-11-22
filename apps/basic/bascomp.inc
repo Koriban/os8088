@@ -300,6 +300,9 @@ bas_c_stmt:
     mov si, bas_kw_swap
     call bas_wordis
     je .swap
+    mov si, bas_kw_mid              ; node [156]: the ONLY function name that
+    call bas_wordis                 ; may stand left of an '=' (150.50)
+    je .midst
     mov si, bas_kw_lset             ; node [164], and its one sentence: "the
     call bas_wordis                 ; actual content of a$ is irrelevant:
     je .lset                        ; only its length is significant"
@@ -1732,6 +1735,79 @@ bas_c_stmt:
 ; --- LSET / RSET a$ = b$ (SPEC.md 150.35) -------------------------------
 ; ONE BODY, and which opcode it ends in is decided before the parse starts,
 ; because that is the only thing the two spellings differ in.
+; --- MID$(a$,x[,y]) = b$, node [156] (SPEC.md 150.50) -------------------
+; THE TARGET IS AN svar AND NOT AN sexp, which is what makes this the first
+; string LVALUE in the chapter - and the reason it is parsed here, at
+; statement position, rather than by the expression parser that compiles the
+; MID$ FUNCTION. The variable's INDEX is the opcode's operand, exactly as
+; LSET's is below; x, y and the text go on the stack.
+;
+; A MISSING y IS 32767 THE COMPILER PUSHES, which is the MID$ function's own
+; trick for its missing length (150.29) - one opcode, not two - and the op
+; clamps it to the room actually left.
+.midst:
+    call bas_bopen
+    jc .midstx
+    call bas_skipsp
+    call bas_word
+    jc .midstnotstr
+    call bas_isstrname              ; CF=0 when the name ends in '$'
+    jc .midstnotstr
+    call bas_varfind                ; AX = its index
+    jc .midstx
+    push ax                         ; the variable, through the whole parse
+    call bas_bcomma
+    jc .midstpop
+    call bas_c_rel                  ; x
+    cmp byte [bas_bad], 0
+    jne .midstpop
+    call bas_wantnum
+    jc .midstpop
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ','
+    je .midst3
+    mov ax, 32767                   ; ...as many as fit
+    call bas_emitnum
+    cmp byte [bas_bad], 0
+    jne .midstpop
+    jmp short .midstend
+.midst3:
+    inc word [bas_src]
+    call bas_c_rel                  ; y
+    cmp byte [bas_bad], 0
+    jne .midstpop
+    call bas_wantnum
+    jc .midstpop
+.midstend:
+    call bas_bclose
+    jc .midstpop
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '='
+    jne .midstnoeq
+    inc word [bas_src]
+    call bas_c_str                  ; the text to write in
+    cmp byte [bas_bad], 0
+    jne .midstpop
+    mov al, OP_SMIDST
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .midstpop
+    pop ax
+    jmp bas_emit                    ; ...and which variable
+.midstpop:
+    pop ax
+.midstx:
+    ret
+.midstnotstr:
+    mov si, bas_e_lsetstr
+    SHOUTR bas_err
+.midstnoeq:
+    pop ax
+    mov si, bas_e_midsteq
+    SHOUTR bas_err
+
 .lset:
     mov al, OP_LSET
     jmp short .lsetgo
@@ -2045,6 +2121,15 @@ bas_c_sfact:
     mov si, bas_kw_inkey            ; node [167]: no arguments, no parens
     call bas_wordis
     je .b_inkey
+    mov si, bas_kw_spc              ; node [162]'s third, hidden in its title
+    call bas_wordis                 ; exactly as TRIM$ hides in LEN's
+    je .b_space                     ; ...and it IS SPACE$: see 150.52
+    mov si, bas_kw_pred             ; node [158] - the TEXT half of a pair
+    call bas_wordis                 ; node [146] defines twice over
+    je .b_pred
+    mov si, bas_kw_succ
+    call bas_wordis
+    je .b_succ
     ; a `$` ARRAY's element reads as text, and the same OP_ALOAD serves:
     ; an element is eight bytes and a string value is the first four of
     ; them, so the copy onto the stack is already right (SPEC.md 150.31)
@@ -2181,6 +2266,34 @@ bas_c_sfact:
 .b_inkey:
     mov al, OP_SINKEY
     jmp bas_emit
+
+; PRED$ / SUCC$ OF TEXT: node [158]'s CHR$(ASC(a$)-1) and CHR$(ASC(a$)+1),
+; one opcode and a direction byte. The numeric half of the same two names is
+; an FN1 in bas_c_fact; which one a program gets is decided by the ARGUMENT,
+; through bas_isstrahead above (SPEC.md 150.51).
+.b_pred:
+    xor al, al
+    jmp short .b_step
+.b_succ:
+    mov al, 1
+.b_step:
+    push ax
+    call bas_bopen
+    jc .b_stepx
+    call bas_c_str
+    cmp byte [bas_bad], 0
+    jne .b_stepx
+    call bas_bclose
+    jc .b_stepx
+    mov al, OP_SSTEP
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .b_stepx
+    pop ax
+    jmp bas_emit                    ; ...and which way
+.b_stepx:
+    pop ax
+    ret
 
 .b_trim:
     mov al, OP_STRIM
@@ -2434,10 +2547,40 @@ bas_isstrahead:
     mov si, [bas_src]
     cmp byte [si], '"'
     je .ayes
+.ascan:
     call bas_word
     jc .ano
     call bas_isstrname
-    jc .ano
+    jnc .ayes
+    ; **PRED AND SUCC ARE TRANSPARENT TO THIS QUESTION** (SPEC.md 150.51).
+    ; Every other name declares its kind in its spelling - a trailing '$' -
+    ; which is how a parser is chosen before anything else is read. Node
+    ; [158] returns TEXT from a name that has no '$', so the only thing that
+    ; can answer is the ARGUMENT: step over the name and its '(' and ask the
+    ; same question one level in. Looping rather than recursing is what
+    ; makes PRED(SUCC(a$)) cost nothing extra, and the cursor is restored
+    ; either way because this routine always restores it.
+    push si
+    mov si, bas_kw_pred
+    call bas_wordis
+    je .astep
+    mov si, bas_kw_succ
+    call bas_wordis
+    je .astep
+    pop si
+    jmp short .ano
+.astep:
+    pop si
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    jne .ano
+    inc word [bas_src]
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '"'
+    je .ayes
+    jmp short .ascan
 .ayes:
     pop ax
     mov [bas_src], ax
@@ -2754,6 +2897,12 @@ bas_c_fact:
     call bas_wordis
     je .fnword
     ; --- the built-ins that answer a NUMBER (SPEC.md 150.29) -----------
+    mov si, bas_kw_pred             ; node [146]'s half of the pair: the
+    call bas_wordis                 ; argument decides which (SPEC.md 150.51)
+    je .b_npred
+    mov si, bas_kw_succ
+    call bas_wordis
+    je .b_nsucc
     mov si, bas_kw_instr            ; node [160] - and RINSTR, node [161],
     call bas_wordis                 ; which is the same search backwards
     je .b_instr
@@ -2997,6 +3146,36 @@ bas_c_fact:
 ; compiles. The two reach ONE opcode through a flags byte rather than two
 ; opcodes, and a call with no start gets a 1 from bas_emitnum exactly as
 ; MID$ above gets its 32767.
+; THE NUMERIC HALF, which is an ordinary one-argument function and reaches
+; the same bas_fn1tab as ABS and SQR. Node [146]'s rule - "any decimal places
+; are ignored", so PRED(2.1) is 1 and not 2 - lives in bas_f_pred, where the
+; 16-bit conversion IS the truncation.
+.b_npred:
+    mov al, FN1_PRED
+    jmp short .b_nstep
+.b_nsucc:
+    mov al, FN1_SUCC
+.b_nstep:
+    push ax
+    call bas_bopen
+    jc .b_nstepx
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .b_nstepx
+    call bas_wantnum
+    jc .b_nstepx
+    call bas_bclose
+    jc .b_nstepx
+    mov al, OP_FN1
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .b_nstepx
+    pop ax
+    jmp bas_emit
+.b_nstepx:
+    pop ax
+    ret
+
 .b_instr:
     xor al, al                      ; forward
     jmp short .b_in

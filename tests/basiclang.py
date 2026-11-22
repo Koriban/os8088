@@ -2312,6 +2312,125 @@ KEY3 = [
     ("END",                              None),
 ]
 
+# --- MID$ as a command (SPEC.md 150.50, node [156]) ---------------------
+# BOTH OF THE NODE'S EXAMPLES, and the second is the one that matters: ten
+# characters are offered to a string with three positions left and the
+# answer is eight characters long, as it began. Spaces are BRACKETED because
+# a console line comes out of a space-padded cell buffer.
+CH5A = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('a$ = "GFA SYSTEMTECHNIK"',         None),
+    ('MID$(a$, 5) = "BASIC "',           None),
+    ('PRINT "<" + a$ + ">"',             "<GFA BASIC TECHNIK>"),
+    ("PRINT LEN(a$)",                    "17"),     # ...unchanged
+    ('b$ = "Testword"',                  None),
+    ('MID$(b$, 6, 10) = "are you serious?"', None),
+    ('PRINT "<" + b$ + ">"',             "<Testware>"),
+    ("PRINT LEN(b$)",                    "8"),
+]
+
+# THE EDGES, which 150.29's rule makes no-ops rather than refusals: counting
+# starts at 1 and the ends are CLAMPED. A loop that walks a string off its
+# end should stop, not crash.
+CH5B = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('c$ = "abcde"',                     None),
+    ('MID$(c$, 99) = "zz"',              None),     # past the end: nothing
+    ('PRINT "<" + c$ + ">"',             "<abcde>"),
+    ('MID$(c$, 4) = "wxyz"',             None),     # only two positions left
+    ('PRINT "<" + c$ + ">"',             "<abcwx>"),
+    ('MID$(c$, 2, 0) = "QQ"',            None),     # a y of nought
+    ('PRINT "<" + c$ + ">"',             "<abcwx>"),
+    ('MID$(c$, 1, 2) = "ZZZZZ"',         None),     # y clamps the text too
+    ('PRINT "<" + c$ + ">"',             "<ZZcwx>"),
+    ("PRINT LEN(c$)",                    "5"),      # ...never changes
+]
+
+# --- PRED and SUCC (SPEC.md 150.51, nodes [146] and [158]) --------------
+# NODE [146]'S OWN LINE: i% = 6, and PRINT PRED(i%), SUCC(2), PRED(3*i%)
+# gives 5, 3 and 17. PRED(2.1) IS 1 AND NOT 2 is the node's own surprise -
+# these operate on integers, so the argument is truncated FIRST and stepped
+# after, and the reading that gives 2 is the natural one and wrong.
+CH5C = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("i = 6",                            None),
+    ("PRINT PRED(i)",                    "5"),
+    ("PRINT SUCC(2)",                    "3"),
+    ("PRINT PRED(3 * i)",                "17"),
+    ("PRINT PRED(2.1)",                  "1"),      # ...not 2
+    ("PRINT SUCC(2.9)",                  "3"),      # truncate, then step
+    ("PRINT PRED(0)",                    "-1"),
+    ("PRINT SUCC(-1)",                   "0"),
+]
+
+# THE TEXT HALF, node [158], and its example prints abc from one string:
+# PRED("blue moon") is 'a', SUCC of that is 'b', SUCC("blue moon") is 'c'.
+# THE NAME HAS NO `$` AND RETURNS TEXT, which is the whole reason 150.51
+# exists - every other name in this language declares its kind in its
+# spelling, so these two had to be made transparent to the lookahead.
+CH5D = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('c$ = "blue moon"',                 None),
+    ('p$ = PRED(c$)',                    None),
+    ('s$ = SUCC(c$)',                    None),
+    ('PRINT p$ + SUCC(p$) + s$',         "abc"),    # node [158]'s own
+    ("PRINT LEN(p$)",                    "1"),      # one character, always
+    ('PRINT PRED("B")',                  "A"),
+    ('PRINT SUCC("y")',                  "z"),
+    # ...and NESTING is what proves the lookahead LOOPS rather than peeks
+    # once. The first is the inverse identity - one down, one up, back where
+    # it started - and the second is one down and TWO up, so it lands a
+    # letter PAST the start and not on it.
+    ('PRINT SUCC(PRED("b"))',            "b"),
+    ('PRINT SUCC(SUCC(PRED("b")))',      "c"),
+]
+
+# THE EDGES ARE ASC'S AND CHR$'S, not new ones - node [158] DEFINES these as
+# CHR$(ASC(a$)-1) and CHR$(ASC(a$)+1), so the empty string and the ends of
+# 0..255 refuse with the sentences 150.29 already wrote. One part each,
+# because a refusal ends the program.
+# NODE [162]'S OWN LINE, which is where SPC hides - its node is titled
+# STRING$ and defines three functions (SPEC.md 150.52). The expected text is
+# the manual's own: five spaces, GFA three times, four spaces, AAAAA.
+CH5SPC = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('a$ = "GFA "',                      None),
+    ('b$ = SPACE$(5)',                   None),
+    ('PRINT "<" + b$ + STRING$(3, a$) + SPC(4) + STRING$(5, 65) + ">"',
+     "<     GFA GFA GFA     AAAAA>"),
+    # ...and SPC IS SPACE$ here, which is the claim 150.52 makes
+    ('PRINT "<" + SPC(3) + ">"',         "<   >"),
+    ('PRINT LEN(SPC(7))',                "7"),
+]
+
+CH5E = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('PRINT PRED("")',
+     "Error at line 3: ASC wants text with at least one character in it"),
+]
+
+CH5F = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ('PRINT SUCC(CHR$(255))',
+     "Error at line 3: CHR$ takes a code from 0 to 255"),
+]
+
+# ...and the NUMERIC edge is its own: the conversion is 16-bit, so these two
+# are refused rather than wrapped to the far end of the range.
+CH5G = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("PRINT SUCC(32767)",
+     "Error at line 3: that number is outside what the function accepts"),
+]
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2330,6 +2449,7 @@ MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
         PART92, PART93, PART94, PART95, PART96)
 CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
 KEYS = (KEY1, KEY2, KEY3)
+CH5 = (CH5A, CH5B, CH5C, CH5D, CH5SPC, CH5E, CH5F, CH5G)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2348,6 +2468,8 @@ elif "--calc" in sys.argv:
     PARTS = CALC
 elif "--keys" in sys.argv:
     PARTS = KEYS
+elif "--ch5" in sys.argv:
+    PARTS = CH5
 
 FAILED = []
 

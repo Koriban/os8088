@@ -212,7 +212,11 @@ SI_XFIRST   equ 2                   ; ...the start came FIRST, so it is the
                                     ; BOTTOM slot and not the top
 OP_SINKEY   equ 68                  ; INKEY$ - no arguments, no parens
                                     ; (SPEC.md 150.49)
-OP_N        equ 69                  ; how many there are, table included
+OP_SSTEP    equ 69                  ; PRED$/SUCC$ of text + a direction byte
+                                    ; (SPEC.md 150.51, node [158])
+OP_SMIDST   equ 70                  ; MID$(a$,x,y) = b$ + the variable's index
+                                    ; (SPEC.md 150.50, node [156])
+OP_N        equ 71                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1089,6 +1093,8 @@ FN1_TAN   equ 10
 FN1_ATN   equ 11
 FN1_EXP   equ 12
 FN1_LOG   equ 13
+FN1_PRED  equ 14                 ; node [146] - and node [158] for text
+FN1_SUCC  equ 15
 ; WHICH ONES ACTUALLY REPORT A DOMAIN ERROR, because CF from the others is
 ; NOISE: fp_exp's header says it "never fails", clamping instead - but it
 ; does not CLEAR carry either, so `call / jc` read whatever its last
@@ -1109,9 +1115,11 @@ bas_fn1cf:
     db 0                            ; FN1_ATN - always in (-pi/2, pi/2)
     db 0                            ; FN1_EXP - clamps, never reports
     db 1                            ; FN1_LOG - CF=1 if A <= 0
+    db 1                            ; FN1_PRED - the 16-bit edge
+    db 1                            ; FN1_SUCC
 BAS_FN1CF_N equ $ - bas_fn1cf
-    times BAS_FN1CF_N - (FN1_LOG + 1) db 0
-    times (FN1_LOG + 1) - BAS_FN1CF_N db 0
+    times BAS_FN1CF_N - (FN1_SUCC + 1) db 0
+    times (FN1_SUCC + 1) - BAS_FN1CF_N db 0
 
 bas_fn1tab:
     dw bas_f_abs                    ; FN1_ABS
@@ -1128,12 +1136,14 @@ bas_fn1tab:
     dw fp_atan                      ; FN1_ATN
     dw fp_exp                       ; FN1_EXP
     dw fp_ln                        ; FN1_LOG
+    dw bas_f_pred                   ; FN1_PRED  - CF on the 16-bit edge
+    dw bas_f_succ                   ; FN1_SUCC
 BAS_FN1_N equ ($ - bas_fn1tab) / 2
     ; ...and the table's length IS the index range the compiler may emit, so
     ; a name added to one and not the other is a build error rather than an
     ; indirect call into whatever follows.
-    times BAS_FN1_N - (FN1_LOG + 1) db 0
-    times (FN1_LOG + 1) - BAS_FN1_N db 0
+    times BAS_FN1_N - (FN1_SUCC + 1) db 0
+    times (FN1_SUCC + 1) - BAS_FN1_N db 0
 
 ; --- bas_f_abs - A = |A| ------------------------------------------------
 ; The sign is a BYTE of its own in this library's accumulator, so this is
@@ -1172,6 +1182,41 @@ bas_f_sgn:
 ; always true that x=TRUNC(x)+FRAC(x), but INT(x)+FRAC(x) is not equal to x
 ; for negative values." So it is built on fp_trunc and NOT on fp_floor -
 ; which would satisfy the first half of that sentence and fail the second.
+; --- PRED and SUCC, the numeric form (SPEC.md 150.51, node [146]) -------
+; **THE ARGUMENT IS TRUNCATED FIRST AND STEPPED AFTER**, which is the node's
+; own surprising case: these "operate on integer expressions, so any decimal
+; places are ignored", so PRED(2.1) is 1 and not 2. Doing it through the
+; 16-bit conversion IS that rule rather than an implementation of it.
+;
+; AND THE EDGE IS REFUSED RATHER THAN WRAPPED. fp_a2i already reports a value
+; too wide in CF; the two ends of the range need the same answer, because
+; SUCC(32767) wrapping to -32768 is a wrong number and not a large one.
+bas_f_pred:
+    call fp_a2i
+    jc .predx
+    cmp ax, 0x8000                  ; ...no predecessor inside 16 bits
+    je .predx
+    dec ax
+    call fp_i2a
+    clc
+    ret
+.predx:
+    stc
+    ret
+
+bas_f_succ:
+    call fp_a2i
+    jc .succx
+    cmp ax, 0x7FFF
+    je .succx
+    inc ax
+    call fp_i2a
+    clc
+    ret
+.succx:
+    stc
+    ret
+
 bas_f_frac:
     call fp_a_to_b                  ; B = x
     call fp_trunc                   ; A = TRUNC(x)
@@ -3006,6 +3051,155 @@ bas_exec:
     pop ax
     jmp .done
 
+; --- OP_SSTEP - PRED and SUCC of text (SPEC.md 150.51, node [158]) ------
+; + a direction byte: 0 steps down, 1 steps up. Node [158] DEFINES these as
+; CHR$(ASC(a$)-1) and CHR$(ASC(a$)+1), so the edges are ASC's and CHR$'s and
+; not new ones - the empty string and the two ends of 0..255 are refused for
+; the reasons 150.29 already gives, by the same sentences.
+.sstep:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    mov bl, [si]                    ; which way
+    inc si
+    mov cx, [di - BAS_SLOT + 2]     ; how long the argument is
+    jcxz .stepempty                 ; ...ASC's own refusal, not a new one
+    mov bx, [di - BAS_SLOT]
+    mov al, [bx]                    ; its FIRST character
+    mov bl, [si - 1]
+    or bl, bl
+    jz .stepdown
+    inc al
+    jz .stepwide                    ; 255 stepped up is CHR$(256)
+    jmp short .stepgot
+.stepdown:
+    or al, al
+    jz .stepwide                    ; 0 stepped down is CHR$(-1)
+    dec al
+.stepgot:
+    push ax
+    mov cx, 1
+    call bas_stmpalloc              ; ...which refuses by name itself
+    pop bx
+    jc .stepbad
+    mov [di - BAS_SLOT], ax
+    mov word [di - BAS_SLOT + 2], 1
+    xchg ax, bx
+    mov [bx], al
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+.stepempty:
+    mov si, bas_e_ascempty
+    jmp .stepsay
+.stepwide:
+    mov si, bas_e_chrrange
+.stepsay:
+    pop cx
+    pop bx
+    pop ax
+    jmp bas_err
+.stepbad:
+    pop cx
+    pop bx
+    pop ax
+    jmp .done
+
+; --- OP_SMIDST - MID$(a$,x[,y]) = b$ (SPEC.md 150.50, node [156]) --------
+; + the variable's index. The stack holds x, then y, then the text.
+;
+; **IT ALLOCATES NOTHING AND THE LENGTH NEVER CHANGES**, which is node
+; [156]'s own sentence - "no characters will be written beyond the end of
+; a$" - and puts this in 150.35's family with LSET and RSET rather than the
+; one that calls bas_stmpalloc. Nothing here can move the arena, so nothing
+; here can invalidate a pointer into it.
+;
+; OUT OF RANGE IS A NO-OP (150.29's rule for the whole family: the ends are
+; CLAMPED, not refused), which is also node [156]'s second example - ten
+; characters offered to a string with three positions left writes three.
+.smidst:
+    cmp di, bas_stk + 3*BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    push dx
+    ; THE CURSOR IS BANKED ONCE, AND ONLY PAST ITS OPERAND - the same shape
+    ; that made OP_SINSTR execute its own flags byte as an opcode. There it
+    ; balanced and no gate could see it; here the extra push did not, and
+    ; stkbalance named the path before it ever ran.
+    mov bl, [si]                    ; the variable
+    inc si
+    push si                         ; the cursor, PAST its operand
+    xor bh, bh
+    mov cl, BAS_VAR_SZ
+    mov ax, bx
+    mul cl
+    mov bx, ax
+    mov dx, [bas_vars + bx + BAS_VAR_SOFF]  ; where its bytes are...
+    mov cx, [bas_vars + bx + BAS_VAR_SLEN]  ; ...and how many
+    mov si, di
+    sub si, 3*BAS_SLOT              ; SI = x's slot, then y, then the text
+    push cx
+    push dx
+    call bas_sxarg                  ; AX = x, 0 if it was below 1
+    pop dx
+    pop cx
+    mov bx, ax
+    or bx, bx
+    jnz .smhavex
+    inc bx                          ; ...below the front starts at the front
+.smhavex:
+    cmp bx, cx
+    ja .smnone                      ; x past the end: nothing to write
+    push bx
+    push cx
+    push dx
+    add si, BAS_SLOT
+    call bas_sxarg                  ; AX = y, how many of b$ to use
+    pop dx
+    pop cx
+    pop bx
+    or ax, ax
+    jle .smnone                     ; a y of nought writes nothing
+    ; --- how many actually fit --------------------------------------
+    sub cx, bx
+    inc cx                          ; CX = positions left in a$ from x
+    cmp ax, cx
+    jb .smhave
+    mov ax, cx                      ; ...y clamped to what is there
+.smhave:
+    mov cx, [si + BAS_SLOT + 2]     ; and to how much text there is
+    cmp ax, cx
+    jb .smgo
+    mov ax, cx
+.smgo:
+    or ax, ax
+    jz .smnone
+    mov cx, ax                      ; CX = the count, settled
+    mov si, [si + BAS_SLOT]         ; the text's bytes
+    add dx, bx
+    dec dx                          ; DX = a$'s bytes at x, 1-based
+    mov bx, dx
+.smcopy:
+    mov al, [si]
+    mov [bx], al                    ; ES is the KERNEL's: a byte at a time
+    inc si
+    inc bx
+    dec cx
+    jnz .smcopy
+.smnone:
+    pop si                          ; the cursor
+    sub di, 3*BAS_SLOT              ; x, y and the text, all consumed
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+
 ; --- OP_SINKEY - INKEY$ (SPEC.md 150.49, node [167]) --------------------
 ; NO ARGUMENTS AND NO WAITING. Node [167]: INKEY$ "does not wait for a key to
 ; be pressed, but scans the keyboard to check whether a key has been pressed
@@ -4193,6 +4387,8 @@ bas_optab:
     dw bas_exec.srep                ; OP_SREP
     dw bas_exec.sinstr              ; OP_SINSTR
     dw bas_exec.sinkey              ; OP_SINKEY
+    dw bas_exec.sstep               ; OP_SSTEP
+    dw bas_exec.smidst              ; OP_SMIDST
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4516,8 +4712,13 @@ bas_fn1names:
     db 'ATN', 0
     db 'EXP', 0
     db 'LOG', 0
+    db 'PRED', 0
+    db 'SUCC', 0
     db 0                            ; an empty name ends the walk
 bas_kw_inkey:   db 'INKEY$', 0
+bas_kw_spc:     db 'SPC', 0
+bas_kw_pred:    db 'PRED', 0
+bas_kw_succ:    db 'SUCC', 0
 bas_kw_instr:   db 'INSTR', 0
 bas_kw_rinstr:  db 'RINSTR', 0
 bas_kw_trim:    db 'TRIM$', 0
@@ -4625,6 +4826,7 @@ bas_e_strquote: db 'a piece of text wants a closing quotation mark', 0
 bas_e_strtype:  db 'that mixes text and numbers', 0
 bas_e_strlong:  db 'one piece of text is longer than the arena', 0
 bas_e_comma:    db 'this wants a comma and another value', 0
+bas_e_midsteq:  db 'MID$ as a command wants = and then the text', 0
 bas_e_ascempty: db 'ASC wants text with at least one character in it', 0
 bas_e_chrrange: db 'CHR$ takes a code from 0 to 255', 0
 bas_e_negcount: db 'that many characters is a negative number', 0
