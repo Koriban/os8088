@@ -261185,8 +261185,8 @@ writing it rather than by testing it.
 mouse click on something a program DREW.** `ON MENU` and `ALERT` are the only
 two event sources that exist (§150.36, §150.37), so a clickable key has to be
 a menu item or a dialog button. Drawing a keypad is *already* possible through
-§150.8's tier C - every kernel slot is reachable - and learning that one of
-its keys was pressed is not. That asymmetry, not the absence of the drawing
+§150.8's tier C - §150.54 measures it working - and the keys it draws are
+hit-tested by §150.53's pointer. That asymmetry, not the absence of the drawing
 verbs, is what stands between this language and a conventional GUI
 application, and it is one statement rather than a wave.
 
@@ -261207,9 +261207,8 @@ only reach a menu's FIRST item, so the arithmetic could not be asserted
 through the bar at all. The row calls `press()` directly for all eight
 functions and clicks the bar only to prove the wiring.
 
-**(§150.54 CORRECTS A CLAIM MADE BELOW.** The drawing SLOTS are reachable
-through tier C; the drawing is not, because a program cannot arm its own
-clip. Read that finding before planning anything that draws.)**
+**(§150.54 QUALIFIES THIS.** Drawing works; what it needs is a REDRAW after
+every yield, because the repaint that follows one erases it.)**
 
 **AND IT IS WHAT LET THE KEYBOARD BE ADDED IN TWENTY LINES.** §150.49's
 `INKEY$` made a second source of the same key codes possible, and `typed(t$)`
@@ -261526,53 +261525,52 @@ RETURNS at a yield rather than being preempted (§150.36). Node [210]'s own
 examples are bare `REPEAT ... UNTIL` loops, and here they need the yield in
 them - the same divergence §150.49 records for `INKEY$`, from the same cause.
 
-### 150.54 A BASIC program cannot DRAW yet, and the reason is not the drawing
+### 150.54 A BASIC program CAN draw - and must redraw after every yield
 
-**Status: FINDING, recorded so it is not re-investigated from scratch.** Tier
-C reaches the graphics slots and they return without refusing; nothing
-appears on the glass.
+**Status: MEASURED, with the stock build and no code change.** A program
+calling `OSAPI 56, 150,100,250,160` (`OSAPI_GFX_FILL`) and
+`OSAPI 88, 300,120,400,180` (`OSAPI_GFX_XOR_FILL`) puts two rectangles on the
+glass exactly where it asked.
 
-**WHAT WAS TRIED.** A program calling `OSAPI 56, x1,y1,x2,y2`
-(`OSAPI_GFX_FILL`, whose registers are `AX,BX,CX,DX` in that order, so the
-positional form of BASIC-BINDINGS-PLAN §3 fits it exactly) runs to
-completion and draws nothing. Nor do `OSAPI_GFX_XOR_FILL`,
-`OSAPI_GFX_FILL_GRAY` or `OSAPI_GFX_FRAME`.
+**THE DRAWING IS ERASED BY THE REPAINT THAT FOLLOWS A YIELD**, and that is the
+whole of it. §150.36's interpreter RETURNS at `ON MENU` rather than spinning -
+the callback ends, the window is repainted, and anything the program drew into
+its pane goes with it. A program that draws and then sits in `DO: ON MENU
+:LOOP` shows nothing a second later; the SAME program with a tight loop that
+never yields shows both rectangles indefinitely. That pair is the measurement.
 
-**FOUR CAUSES ELIMINATED BY EVIDENCE, each of which looked right first:**
+**SO A PROGRAM THAT DRAWS MUST REDRAW**, once per pass of its own loop, which
+is what a GUI program with no paint hook has to do anywhere. It is not a
+defect and it needs no new verb: `W_PAINT` belongs to `bas_paint`, which draws
+the editor and the console, and a BASIC program is a guest inside that window
+rather than the owner of it.
 
-- **Not the end-of-run repaint.** `RUN` ends in `.redraw`, which repaints the
-  panes - but a program that draws and then sits in `DO: ON MENU :LOOP`,
-  photographed WHILE RUNNING, shows nothing either.
-- **Not the clip.** The program asks the kernel itself: `OSAPI_WM_CLIP_TEST`
-  on the same rectangle answers **CF=0**, "the whole rect is drawable".
-- **Not `PRINT`.** Moving every `PRINT` before the drawing, so no console
-  write follows it, changes nothing.
-- **Not the colour.** A white fill on the white editor pane would be
-  invisible, which is why `XOR_FILL` (inverts), `FILL_GRAY` (dithered) and
-  `FRAME` (an outline) were tried. None of them can be invisible on white.
+**THREE THINGS THIS SECTION SAID BEFORE, ALL WRONG**, kept because each looked
+well-founded and two had evidence behind them:
 
-**THE LEADING HYPOTHESIS IS THE ONE THING A PROGRAM CANNOT DO: arm its own
-clip.** `bas_onkey` calls `OSAPI_WM_CLIP_SET` before it draws the editor, and
-§12.2's note is that the gfx lock must be held and the window named - `BX =
-YOUR window ptr`. **No BASIC verb returns the program's own window**, and
-`OSAPI_WM_TOP`, which would answer it, is a DOOR rather than a numbered slot,
-so tier C cannot reach it either. That `WM_CLIP_TEST` reports "drawable" with
-no clip armed is consistent: an unarmed clip rejects nothing and an unarmed
-draw paints nowhere.
+- *"A BASIC program cannot draw."* It can. Every call tried works.
+- *"The gap is a handle, not a drawing verb"* - that a program cannot name its
+  own window to arm `OSAPI_WM_CLIP_SET`. **Refuted by experiment**: arming the
+  clip from inside the interpreter changes nothing, and removing the arm again
+  changes nothing. The clip was never involved.
+- *"Not the end-of-run repaint"*, offered as an elimination. It eliminated the
+  WRONG REPAINT. `RUN` does repaint on its way out, and that is real, but the
+  repaint that mattered is the one after EVERY YIELD - which the test designed
+  to rule repaints out (draw, then loop on `ON MENU`) was triggering on every
+  pass.
 
-**SO THE GAP IS A HANDLE, NOT A DRAWING VERB**, which also revises §150.48's
-claim that drawing "is already possible through tier C" - the SLOTS are
-reachable and the drawing is not. Two things would unblock it, and either is
-small next to wave 6: a verb that answers the program's own window (so
-`OSAPI_WM_CLIP_SET` becomes reachable), or the kernel arming the clip around
-the interpreter the way it does around `W_PAINT`.
+**AND TIER C'S SLOT NUMBERS ARE KERNEL OFFSETS, confirmed against something
+already known.** `OSAPI 160` (`OSAPI_MOUSE`) answers `REG(2)` = 164 while
+`MOUSEX` answers 84 for the same pointer at the same instant. The difference,
+80, is this window's content origin - so the gateway reaches the right entry
+AND §150.53's conversion is right, each checked by the other.
 
-**AND `@buf$` IS NOT BUILT EITHER.** §150.30 records the pin-and-pass
-operator as a design read out of the bindings plan; `@name` in this language
-is §150.23's PROCEDURE CALL, so `@b$` is refused as naming a procedure that
-does not exist. 34 of the API's 194 slots take a buffer, and until `@` is
-built none of them is reachable from BASIC - which is why a drawn keypad
-could not be LABELLED even once the boxes appear.
+**`@buf$` IS STILL NOT BUILT**, the one part of the earlier finding that
+stands. §150.30 records the pin-and-pass operator as a design read out of the
+bindings plan and it has no Status line; `@name` here is §150.23's PROCEDURE
+CALL, so `@b$` is refused as naming a procedure that does not exist. 34 of the
+API's 194 slots take a buffer and none is reachable from BASIC until that is
+built - so a drawn keypad can have boxes today and cannot have LABELS.
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
