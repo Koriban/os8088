@@ -261572,6 +261572,50 @@ CALL, so `@b$` is refused as naming a procedure that does not exist. 34 of the
 API's 194 slots take a buffer and none is reachable from BASIC until that is
 built - so a drawn keypad can have boxes today and cannot have LABELS.
 
+### 150.55 Three limits an application met, and one silent wrong answer
+
+Found by writing `KEYPAD.BAS` (§150.54) rather than by testing a feature,
+which is the fourth time this chapter has been taught that lesson.
+
+**A `VAR` PARAMETER MUST NOT SHARE ITS NAME WITH THE VARIABLE PASSED TO IT.
+This one answers WRONG rather than refusing**, which makes it the worst of
+the three:
+
+```basic
+h = 0
+hit(60, 70, h)              ' with PROCEDURE hit(mx, my, VAR h)
+PRINT h                     ' 0 - every time, for every position
+```
+
+The identical body declared `VAR o` and called the same way returns the key.
+The variable table is by NAME (§150.17), so a reference and the thing it
+refers to become one entry and the write goes nowhere. It cost three rounds
+of bisection to find because every PART of it works: `VAR` alone, `VAR`
+inside a `FOR`, `VAR` inside nested `IF`s, three parameters, three
+parameters with a `FOR` - all pass, and the body typed out under different
+names passes. Only the collision fails, and nothing refuses.
+
+**SIXTEEN NAMES, AND PROCEDURE NAMES ARE AMONG THEM.** `BAS_VAR_MAX` is 16
+and the seventeenth is refused by name. What is not obvious is the
+accounting: a procedure's name, its parameters and its `LOCAL`s all take
+entries from the same table the globals use, so three short procedures cost
+three slots before a single variable is declared. The flip side is that
+REUSING a name costs nothing - `hit(mx, my, ...)` whose parameters are
+spelled like the globals the caller passes shares their entries - and that
+is how this sample fits. It is also exactly what causes the `VAR` collision
+above, so the two rules pull against each other and the second one wins.
+
+**AND "EXPRESSION TOO DEEP" IS THE VALUE STACK, AT RUN TIME.** The message
+names the parser; `bas_e_deep` is raised by `bas_exec`'s `.over`, which is
+`BAS_STK_MAX` - SIXTEEN SLOTS - overflowing as an op pushes. So the limit is
+on how much is live at once while something evaluates, not on how an
+expression was written. `OSAPI 64, l, ty, m, by` - five values, every one a
+plain name - reaches it from inside a procedure inside the main loop, while
+the same call with five LITERALS compiles and runs. **Not understood yet:**
+whether that is depth per call or something accumulating across yields.
+`KEYPAD.BAS` is correct and its second row is held back rather than
+weakened until it passes.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

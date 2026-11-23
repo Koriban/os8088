@@ -2477,6 +2477,195 @@ MOU1 = [
     ("#mouse 260 190 2",                 None),
 ]
 
+# --- KEYPAD.BAS: drawn keys a program hit-tests (SPEC.md 150.54) --------
+# THE WHOLE CHAIN IN ONE SAMPLE: tier C draws, 150.53's pointer says where
+# the mouse is, and ON MENU is the loop that joins them. It exists because
+# 150.54 first said this was impossible and was wrong.
+def _keypad_src():
+    p = os.path.join(ROOT, "apps", "basic", "samples", "keypad.bas")
+    out = {"main": [], "engine": []}
+    where = None
+    for raw in open(p):
+        t = raw.strip()
+        if t == "' == MAIN ==":
+            where = "main"
+            continue
+        if t == "' == ENGINE ==":
+            where = "engine"
+            continue
+        if where is None or not t or t.startswith("'"):
+            continue
+        q = t.find("'")
+        while q >= 0:
+            if t[:q].count('"') % 2 == 0:
+                t = t[:q].rstrip()
+                break
+            q = t.find("'", q + 1)
+        out[where].append(t)
+    if not out["main"] or not out["engine"]:
+        raise SystemExit("keypad.bas: a == MAIN == / == ENGINE == marker moved")
+    return out["main"], out["engine"]
+
+
+KP_MAIN, KP_ENG = _keypad_src()
+
+# A DIAGNOSTIC PART, because KEYP1's first run answered 0 to every position
+# and "the hit-test is wrong" and "VAR does not reach the caller" look
+# identical from the outside. Two procedures, the same one-line body, one of
+# them inside a FOR - so the answer says WHICH.
+KEYP0 = [
+    ("CLS", None), ("PRINT 31415", "31415"),
+    ("r = 0", None),
+    ("t1(5, r)", None),
+    ("PRINT r", "5"),                      # ...VAR at all
+    ("r = 0", None),
+    ("t2(6, r)", None),
+    ("PRINT r", "6"),                      # ...VAR written inside a FOR
+    ("r = 0", None),
+    ("t3(7, r)", None),
+    ("PRINT r", "7"),                      # ...and inside nested IFs
+    # ...and hit()'s EXACT shape with LITERALS where its parameters were:
+    # if this answers 1 the structure is sound and the parameters are the
+    # difference; if it answers 0 the structure itself is.
+    ("r = 0", None),
+    ("t4(r)", None),
+    ("PRINT r", "1"),
+    ("PRINT 20 + (1 - 1) * 100", "20"),    # ...and the arithmetic alone
+    ("PRINT 20 + (2 - 1) * 100", "120"),
+    # ...AND THE DIFFERENCE BETWEEN t4 AND hit() IS THE PARAMETERS. Three of
+    # them, two LOCALs: if a LOCAL is allocated over a PARAMETER's slot then
+    # writing c below lands on a or b, and these answer 999 instead of what
+    # was passed. That is the whole hypothesis, asked directly.
+    ("r = 0", None),
+    ("t5(11, 22, r)", None),
+    ("PRINT r", "11"),
+    ("r = 0", None),
+    ("t6(11, 22, r)", None),
+    ("PRINT r", "22"),
+    # ...AND THE ONE COMBINATION NOTHING HAS TESTED. t4 is one parameter
+    # with a FOR, t5 is three parameters without one, and hit() is THREE
+    # WITH ONE - so this is three parameters and a FOR that does nothing
+    # but run, returning a parameter afterwards.
+    ("r = 0", None),
+    ("t7(11, 22, r)", None),
+    ("PRINT r", "11"),
+    # ...AND hit()'s EXACT BODY, typed HERE rather than read from the
+    # sample. If this answers 1 and the sample's hit() answers 0, the code
+    # is innocent and its CONTEXT is the difference - which is the only
+    # thing left that the two do not share.
+    ("r = 0", None),
+    ("hx(60, 70, r)", None),
+    ("PRINT r", "1"),
+    ("r = 0", None),
+    ("hx(160, 70, r)", None),
+    ("PRINT r", "2"),
+    ("END", None),
+    ("PROCEDURE t1(v, VAR o)", None),
+    ("o = v", None),
+    ("RETURN", None),
+    ("PROCEDURE t2(v, VAR o)", None),
+    ("LOCAL i", None),
+    ("FOR i = 1 TO 1", None),
+    ("o = v", None),
+    ("NEXT i", None),
+    ("RETURN", None),
+    ("PROCEDURE hx(ax, ay, VAR o)", None),
+    ("LOCAL i", None),
+    ("LOCAL l", None),
+    ("o = 0", None),
+    ("IF ay >= 60 THEN", None),
+    ("IF ay <= 89 THEN", None),
+    ("FOR i = 1 TO 3", None),
+    ("l = 20 + (i - 1) * 100", None),
+    ("IF ax >= l THEN", None),
+    ("IF ax <= l + 79 THEN", None),
+    ("o = i", None),
+    ("ENDIF", None),
+    ("ENDIF", None),
+    ("NEXT i", None),
+    ("ENDIF", None),
+    ("ENDIF", None),
+    ("RETURN", None),
+    ("PROCEDURE t7(a, b, VAR o)", None),
+    ("LOCAL i", None),
+    ("FOR i = 1 TO 3", None),
+    ("NEXT i", None),
+    ("o = a", None),
+    ("RETURN", None),
+    ("PROCEDURE t5(a, b, VAR o)", None),
+    ("LOCAL c", None),
+    ("LOCAL d", None),
+    ("c = 999", None),
+    ("d = 998", None),
+    ("o = a", None),
+    ("RETURN", None),
+    ("PROCEDURE t6(a, b, VAR o)", None),
+    ("LOCAL c", None),
+    ("LOCAL d", None),
+    ("c = 999", None),
+    ("d = 998", None),
+    ("o = b", None),
+    ("RETURN", None),
+    ("PROCEDURE t4(VAR o)", None),
+    ("LOCAL i", None),
+    ("LOCAL l", None),
+    ("o = 0", None),
+    ("IF 70 >= 60 THEN", None),
+    ("IF 70 <= 89 THEN", None),
+    ("FOR i = 1 TO 3", None),
+    ("l = 20 + (i - 1) * 100", None),
+    ("IF 60 >= l THEN", None),
+    ("IF 60 <= l + 79 THEN", None),
+    ("o = i", None),
+    ("ENDIF", None),
+    ("ENDIF", None),
+    ("NEXT i", None),
+    ("ENDIF", None),
+    ("ENDIF", None),
+    ("RETURN", None),
+    ("PROCEDURE t3(v, VAR o)", None),
+    ("IF v > 0 THEN", None),
+    ("IF v < 99 THEN", None),
+    ("o = v", None),
+    ("ENDIF", None),
+    ("ENDIF", None),
+    ("RETURN", None),
+]
+
+# THE GEOMETRY IS ASKED DIRECTLY, in CONTENT coordinates, so this part does
+# not depend on where the window sits - hit() takes a position and answers a
+# key, and that is the arithmetic the whole sample rests on. The keys are 80
+# wide at content x 20, 120 and 220, on rows 60 to 89.
+#
+# THE GAPS ARE ASSERTED AS HARD AS THE KEYS. A hit-test that answered the
+# nearest key instead of the one under the pointer passes every positive row
+# here and fails line 7 - which is the row that would catch an origin off by
+# less than a key's width.
+KEYP1 = ([("CLS", None), ("PRINT 31415", "31415"),
+          ("ox = 0", None), ("oy = 0", None), ("h = 0", None),
+          ("hit(60, 70, h)", None),    ("PRINT h", "1"),
+          ("hit(160, 70, h)", None),   ("PRINT h", "2"),
+          ("hit(260, 70, h)", None),   ("PRINT h", "3"),
+          ("hit(110, 70, h)", None),   ("PRINT h", "0"),   # between 1 and 2
+          ("hit(210, 70, h)", None),   ("PRINT h", "0"),   # between 2 and 3
+          ("hit(19, 70, h)", None),    ("PRINT h", "0"),   # just left of 1
+          ("hit(100, 70, h)", None),   ("PRINT h", "0"),   # just right of 1
+          ("hit(60, 59, h)", None),    ("PRINT h", "0"),   # just above
+          ("hit(60, 90, h)", None),    ("PRINT h", "0"),   # just below
+          ("hit(60, 60, h)", None),    ("PRINT h", "1"),   # ...and the edges
+          ("hit(99, 89, h)", None),    ("PRINT h", "1"),
+          ("END", None)]
+         + [(l, None) for l in KP_ENG])
+
+# AND THE WHOLE PROGRAM, RUN AND CLICKED. What it can assert without knowing
+# where the window is: that it compiles, draws without refusing, prints its
+# opening 0, and leaves by the RIGHT button - which is 150.53's MOUSEK = 2
+# reaching a program that is drawing at the time.
+KEYP2 = ([("CLS", None), ("PRINT 31415", "31415")]
+         + [(l, None) for l in KP_MAIN]
+         + [(l, None) for l in KP_ENG]
+         + [("#mouse 200 150 2", ["0", "77"])])
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2497,6 +2686,13 @@ CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
 KEYS = (KEY1, KEY2, KEY3)
 CH5 = (CH5A, CH5B, CH5C, CH5D, CH5SPC, CH5E, CH5F, CH5G)
 MOUSE = (MOU1,)
+# KEYP2 IS NOT IN THE ROW. It types the whole file and runs it, and draw()'s
+# `OSAPI 64, l, ty, m, by` - five values, all simple names - overflows the
+# SIXTEEN-slot value stack partway through, which is reported as "expression
+# too deep" (SPEC.md 150.55). The sample is correct and the row would be red
+# for a reason that is not the sample's, so it waits for that to be
+# understood rather than being quietly weakened until it passes.
+KEYPAD = (KEYP0, KEYP1)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2519,6 +2715,8 @@ elif "--ch5" in sys.argv:
     PARTS = CH5
 elif "--mouse" in sys.argv:
     PARTS = MOUSE
+elif "--keypad" in sys.argv:
+    PARTS = KEYPAD
 
 FAILED = []
 
