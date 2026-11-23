@@ -216,7 +216,11 @@ OP_SSTEP    equ 69                  ; PRED$/SUCC$ of text + a direction byte
                                     ; (SPEC.md 150.51, node [158])
 OP_SMIDST   equ 70                  ; MID$(a$,x,y) = b$ + the variable's index
                                     ; (SPEC.md 150.50, node [156])
-OP_N        equ 71                  ; how many there are, table included
+OP_MOUSE    equ 71                  ; + a selector: 0 x, 1 y, 2 buttons
+                                    ; (SPEC.md 150.53, node [210])
+OP_MOUSEST  equ 72                  ; MOUSE mx,my,mk + THREE variable indices:
+                                    ; one poll, three stores, one instant
+OP_N        equ 73                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -1223,6 +1227,57 @@ bas_f_frac:
     call fp_swap_ab                 ; A = x, B = TRUNC(x)
     call fp_sub                     ; A = x - TRUNC(x)
     clc
+    ret
+
+; --- bas_mpoll - the pointer, in THIS program's frame (SPEC.md 150.53) --
+; out: CX = x, DX = y, both CONTENT-relative; AX = the buttons, 0 to 3.
+;
+; **THE CONVERSION LIVES HERE AND NOWHERE ELSE.** W_ONCLICK delivers SCREEN
+; coordinates and 22's own history says why that matters - the Audio player
+; "armed nothing for a whole release" because its handler converted before
+; calling in - so there is exactly one place in this package that subtracts
+; the content origin, and anything that later delivers a CLICK to a BASIC
+; program (node [295]'s ON MENU BUTTON) must come through the same space.
+bas_mpoll:
+    push bx
+    call OSAPI_MOUSE                ; CX = x, DX = y, AL = the buttons
+    and al, 3                       ; node [210]: 0 none, 1 left, 2 right,
+    xor ah, ah                      ; 3 both - which is mouse_btn's own two
+    push ax                         ; bits, not a coincidence to rely on
+    push cx
+    push dx
+    mov bx, [bas_wn]
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov bx, ax
+    pop ax
+    sub ax, dx
+    mov dx, ax                      ; DX = y - top
+    pop ax
+    sub ax, bx
+    mov cx, ax                      ; CX = x - left
+    pop ax                          ; ...and the buttons back
+    pop bx
+    ret
+
+; --- bas_mstore - AX into the variable BL names -------------------------
+; in:  BL = an index byte as an opcode carries it, AX = a signed value.
+;      Everything preserved; DI is the VALUE STACK and must come back.
+bas_mstore:
+    push ax
+    push bx
+    push si
+    push di
+    call fp_i2a                     ; A = AX, before anything clobbers it
+    xor bh, bh
+    mov bl, [bas_alias + bx]        ; ...through the alias, as .vstore does
+    call bas_varat                  ; SI = the variable's record
+    add si, BAS_VAR_VAL
+    mov di, si
+    call fp_pack_a
+    pop di
+    pop si
+    pop bx
+    pop ax
     ret
 
 ; --- bas_kpush - a keystroke into the ring (SPEC.md 150.49) -------------
@@ -3051,6 +3106,84 @@ bas_exec:
     pop ax
     jmp .done
 
+; --- OP_MOUSE - MOUSEX / MOUSEY / MOUSEK (SPEC.md 150.53, node [210]) ---
+; + a selector byte: 0 the x, 1 the y, 2 the buttons.
+;
+; NO RING, UNLIKE INKEY$ (150.49), and the difference is in the thing and not
+; in the code: a keystroke is an EVENT and is lost if nobody keeps it, while
+; the pointer is a STATE that OSAPI_MOUSE answers whenever it is asked. There
+; is nothing to queue and nothing to drop.
+.mouse:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
+    jae .over
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bl, [si]                    ; which of the three
+    inc si
+    push si                         ; the cursor, PAST its operand
+    push bx
+    call bas_mpoll                  ; CX = x, DX = y, AX = buttons
+    pop bx
+    cmp bl, 1
+    je .mousey
+    ja .mousek
+    mov ax, cx                      ; ...the x
+    jmp short .mousegot
+.mousey:
+    mov ax, dx
+    jmp short .mousegot
+.mousek:
+    ; AX is already the buttons
+.mousegot:
+    call fp_i2a                     ; signed: the pointer may be left of or
+    call fp_pack_a                  ; above the content, and that is a fact
+    add di, BAS_SLOT
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+
+; --- OP_MOUSEST - MOUSE mx,my,mk (SPEC.md 150.53, node [210]) -----------
+; + THREE variable indices. **IT IS NOT THREE READS**, which is the whole
+; reason node [210] gives it a statement of its own: MOUSEX then MOUSEY is
+; two polls with a pointer that may move between them, so a program sampling
+; a drag gets a position that was never real. One poll, three stores.
+.mousest:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    add si, 3                       ; past all three indices, before banking
+    push si
+    push bx
+    call bas_mpoll                  ; CX = x, DX = y, AX = buttons
+    pop bx
+    push ax                         ; the buttons, over the two stores
+    mov ax, cx
+    push bx
+    mov bl, [bx]                    ; mx
+    call bas_mstore
+    pop bx
+    mov ax, dx
+    push bx
+    mov bl, [bx + 1]                ; my
+    call bas_mstore
+    pop bx
+    pop ax                          ; ...and the buttons
+    mov bl, [bx + 2]                ; mk
+    call bas_mstore
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+
 ; --- OP_SSTEP - PRED and SUCC of text (SPEC.md 150.51, node [158]) ------
 ; + a direction byte: 0 steps down, 1 steps up. Node [158] DEFINES these as
 ; CHR$(ASC(a$)-1) and CHR$(ASC(a$)+1), so the edges are ASC's and CHR$'s and
@@ -4389,6 +4522,8 @@ bas_optab:
     dw bas_exec.sinkey              ; OP_SINKEY
     dw bas_exec.sstep               ; OP_SSTEP
     dw bas_exec.smidst              ; OP_SMIDST
+    dw bas_exec.mouse               ; OP_MOUSE
+    dw bas_exec.mousest             ; OP_MOUSEST
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
@@ -4716,6 +4851,10 @@ bas_fn1names:
     db 'SUCC', 0
     db 0                            ; an empty name ends the walk
 bas_kw_inkey:   db 'INKEY$', 0
+bas_kw_mouse:   db 'MOUSE', 0
+bas_kw_mousex:  db 'MOUSEX', 0
+bas_kw_mousey:  db 'MOUSEY', 0
+bas_kw_mousek:  db 'MOUSEK', 0
 bas_kw_spc:     db 'SPC', 0
 bas_kw_pred:    db 'PRED', 0
 bas_kw_succ:    db 'SUCC', 0
@@ -4826,6 +4965,7 @@ bas_e_strquote: db 'a piece of text wants a closing quotation mark', 0
 bas_e_strtype:  db 'that mixes text and numbers', 0
 bas_e_strlong:  db 'one piece of text is longer than the arena', 0
 bas_e_comma:    db 'this wants a comma and another value', 0
+bas_e_mousevar: db 'MOUSE wants three number variables to fill', 0
 bas_e_midsteq:  db 'MID$ as a command wants = and then the text', 0
 bas_e_ascempty: db 'ASC wants text with at least one character in it', 0
 bas_e_chrrange: db 'CHR$ takes a code from 0 to 255', 0

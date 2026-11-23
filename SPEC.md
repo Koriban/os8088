@@ -261468,6 +261468,60 @@ kinds - which is machinery no built-in here has yet. Recorded as the one
 thing node [154] names that nothing implements, so that "chapter 5 is
 finished" means the ten surfaces it lists and not that sentence.
 
+### 150.53 `MOUSEX`, `MOUSEY`, `MOUSEK` and `MOUSE`: the pointer, in the program's own frame
+
+```basic
+DO
+  ON MENU                          ' ...the yield, as INKEY$ needs (150.49)
+  MOUSE x, y, k                    ' all three AT ONE INSTANT
+  IF k = 1 THEN PRINT x; " "; y
+LOOP UNTIL k = 2
+```
+
+**Status: CONTRACT WRITTEN** - node [210].
+
+**THIS NEEDS NO RING**, which is what makes it smaller than `INKEY$` rather
+than larger. A keystroke is an EVENT and is gone if nobody keeps it; the
+pointer is a STATE, and `OSAPI_MOUSE` (0x00A0) answers it on demand with
+`CX`, `DX` and `AL`. So there is nothing to queue and nothing to drop.
+
+**THE BUTTONS NEED NO MAPPING EITHER.** Node [210] gives `MOUSEK` as 0 none,
+1 left, 2 right, 3 both - and the kernel's `mouse_btn` is bit 0 left, bit 1
+right, which is the same four values by the same arithmetic. Worth stating
+because it looks like a coincidence to be relied on and is not: both are the
+obvious encoding of two buttons.
+
+**THE COORDINATES ARE CONTENT-RELATIVE, AND THAT IS A DECISION.** `W_ONCLICK`
+delivers SCREEN coordinates, and §22's own history says so emphatically - the
+Audio player "armed nothing for a whole release because its own handler had
+made `CX`/`DX` content-relative before calling in". But node [210] says these
+commands *"respect the current CLIP OFFSET"*, which on the Atari means the
+drawing origin, and a BASIC program here draws into ITS OWN WINDOW. Screen
+coordinates would be useless to it: it has no verb that returns its window's
+position, so it could not hit-test anything it drew. So `OSAPI_WM_CONTENT`'s
+origin is subtracted, ONCE, inside the opcode.
+
+**AND THAT FIXES THE SPACE FOR `ON MENU BUTTON` BEFORE IT IS BUILT** (node
+[295]). Whatever delivers a click to a BASIC program must deliver it in the
+SAME space these three report, or a program will hit-test a press against
+coordinates from a different origin - which is the Audio player's bug with
+the two halves swapped. The conversion belongs in one place and this section
+is where it is named.
+
+**`MOUSE mx,my,mk` IS NOT THREE READS, AND THAT IS WHY IT EXISTS.** Node
+[210] says it "allows the gathering of that information with one statement",
+and the reason is atomicity: `MOUSEX` then `MOUSEY` is two polls with a
+pointer that may move between them, so a program sampling a drag gets a
+position that was never real. The statement form takes ONE `OSAPI_MOUSE` and
+writes all three variables from it, so it is a different opcode and not a
+convenience spelling of the other three.
+
+**`ON MENU` IS STILL WHAT MAKES A LOOP WORK.** A poll inside a loop that
+never yields reads the same instant for ever, because this interpreter
+RETURNS at a yield rather than being preempted (§150.36). Node [210]'s own
+examples are bare `REPEAT ... UNTIL` loops, and here they need the yield in
+them - the same divergence §150.49 records for `INKEY$`, from the same cause.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

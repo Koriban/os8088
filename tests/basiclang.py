@@ -2431,6 +2431,52 @@ CH5G = [
      "Error at line 3: that number is outside what the function accepts"),
 ]
 
+# --- the pointer (SPEC.md 150.53, node [210]) ---------------------------
+# EVERY ASSERTION HERE IS A DIFFERENCE, and deliberately: the coordinates
+# are CONTENT-relative, so their absolute values depend on where the window
+# happens to sit and a row that pinned them would be asserting the window
+# manager's layout. A DELTA is the same number wherever the window is, and
+# it is also the thing that would break if the origin were subtracted twice
+# or not at all.
+#
+# THE POINTER IS PUT INSIDE THE EDITOR PANE on purpose. A press has to land
+# somewhere, and there it moves a text caret; on the menu bar it would open
+# a pull-down, and on the desktop it could raise another window.
+MOU1 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    ("DO",                               None),
+    ("  ON MENU",                        None),     # ...the yield: 150.53
+    ("  MOUSE x1, y1, k",                None),
+    ("LOOP UNTIL k = 1",                 None),     # the LEFT button
+    ("DO",                               None),
+    ("  ON MENU",                        None),
+    ("  MOUSE x2, y2, k",                None),
+    ("LOOP UNTIL k = 2",                 None),     # ...and then the RIGHT
+    ("PRINT x2 - x1",                    "60"),
+    ("PRINT y2 - y1",                    "40"),
+    # ...AND THE TWO SURFACES SHARE ONE FRAME. MOUSEX now must agree with
+    # the x the statement captured, the pointer not having moved since -
+    # which is the thing that breaks if either of them converts and the
+    # other does not (150.53).
+    ("PRINT MOUSEX - x2",                "0"),
+    ("PRINT MOUSEY - y2",                "0"),
+    ("PRINT MOUSEK",                     "2"),
+    # ...AND THE CONVERSION ITSELF, which the deltas above CANNOT see: a
+    # constant offset cancels in a difference, so those four lines pass
+    # whether the content origin is subtracted or not. The pointer is at
+    # SCREEN x 260, y 190 and the window's content starts well inside both,
+    # so a content-relative answer is smaller than the screen one and still
+    # positive. That is what fails if the subtraction is dropped.
+    ("PRINT MOUSEX < 260",               "-1"),
+    ("PRINT MOUSEY < 190",               "-1"),
+    ("PRINT MOUSEX > 0",                 "-1"),
+    ("PRINT MOUSEY > 0",                 "-1"),
+    ("END",                              None),
+    ("#mouse 200 150 1",                 None),
+    ("#mouse 260 190 2",                 None),
+]
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2450,6 +2496,7 @@ MATH = (PART74B, PART75, PART76, PART77, PART78, PART79, PART80, PART81,
 CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
 KEYS = (KEY1, KEY2, KEY3)
 CH5 = (CH5A, CH5B, CH5C, CH5D, CH5SPC, CH5E, CH5F, CH5G)
+MOUSE = (MOU1,)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2470,6 +2517,8 @@ elif "--keys" in sys.argv:
     PARTS = KEYS
 elif "--ch5" in sys.argv:
     PARTS = CH5
+elif "--mouse" in sys.argv:
+    PARTS = MOUSE
 
 FAILED = []
 
@@ -2621,6 +2670,10 @@ class Mouse:
                   "sleep 0.06", "mouse_button 1", "sleep 0.05",
                   "mouse_button 0", "gsleep 0.5")
 
+    def to(self, x, y):
+        self._mouse("to", str(x), str(y))
+    def button(self, mask):
+        self._hmp("mouse_button %d" % mask, "gsleep 0.4")
     def menu(self, px, py, ix, iy, settle=None, **kw):
         self._mouse("to", str(px), str(py))
         self._hmp("mouse_button 1", "gsleep 0.2")
@@ -2931,7 +2984,7 @@ def main():
             mo.menu(112, 8, 112, 30)
             os88qemu.pace(m, 2.0)
         t0 = time.time()
-        after, wantbar, pick = [], [], []
+        after, wantbar, pick, mact = [], [], [], []
         for line, _ in part:
             # `#after <key>` IS NOT TYPED: it is a keystroke for AFTER the
             # run begins, which is the only way to answer a statement that
@@ -2953,13 +3006,21 @@ def main():
             if line.startswith("#pick "):
                 pick.append(line.split(None, 1)[1])
                 continue
+            # `#mouse <x> <y> [<buttons>]` IS NOT TYPED: it puts the POINTER
+            # somewhere once the program is running, which is the only way to
+            # answer a program polling MOUSEX/MOUSEY/MOUSEK (SPEC.md 150.53).
+            # The buttons are node [210]'s own 0..3 mask.
+            if line.startswith("#mouse "):
+                mact.append(line.split()[1:])
+                continue
             typ(m, line + "\n")
         print("      part %d: %d lines in %.1fs"
               % (pn + 1,
-                 len(part) - len(after) - len(wantbar) - len(pick),
+                 len(part) - len(after) - len(wantbar) - len(pick)
+                 - len(mact),
                  time.time() - t0))
         os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
-        if after:
+        if after or mact:
             # **WAIT FOR THE PROGRAM, NOT FOR A CLOCK.** A fixed two seconds
             # was enough while every part here was a dozen lines; CALC.BAS is
             # 178 and must COMPILE first (150.19 compiles the whole program
@@ -2975,6 +3036,15 @@ def main():
         for k in after:
             os88qemu.pace(m, 2.0)               # ...let the dialog come up
             os88qemu.sendkey(m.path, k)
+        for a in mact:
+            # THE POINTER MOVES, THEN THE BUTTONS CHANGE, and the program is
+            # given a pass of its own loop to see each - it polls once per
+            # ON MENU, so a move and a press in the same instant would be
+            # one sample and not two.
+            mo.to(int(a[0]), int(a[1]))
+            os88qemu.pace(m, 1.5)
+            mo.button(int(a[2]) if len(a) > 2 else 0)
+            os88qemu.pace(m, 2.5)
         for t in pick:
             # THE BAR IS READ BEFORE IT IS CLICKED. The program has to have
             # installed its menus and the kernel to have drawn them, and

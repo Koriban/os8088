@@ -300,6 +300,9 @@ bas_c_stmt:
     mov si, bas_kw_swap
     call bas_wordis
     je .swap
+    mov si, bas_kw_mouse            ; node [210]: ONE poll into THREE avars,
+    call bas_wordis                 ; which is why it is not three reads
+    je .mousest
     mov si, bas_kw_mid              ; node [156]: the ONLY function name that
     call bas_wordis                 ; may stand left of an '=' (150.50)
     je .midst
@@ -1735,6 +1738,55 @@ bas_c_stmt:
 ; --- LSET / RSET a$ = b$ (SPEC.md 150.35) -------------------------------
 ; ONE BODY, and which opcode it ends in is decided before the parse starts,
 ; because that is the only thing the two spellings differ in.
+; --- MOUSE mx,my,mk, node [210] (SPEC.md 150.53) ------------------------
+; THREE avars - output VARIABLES, as ALERT's choice is - and the opcode
+; carries all three indices so that ONE poll fills them. Reading them with
+; MOUSEX, MOUSEY and MOUSEK instead is three polls, and a pointer that moves
+; between any two of them gives a position that was never real.
+.mousest:
+    ; THE OPCODE GOES OUT FIRST and each index follows it as that name is
+    ; parsed, which is why there is no juggling here: the stream wants
+    ; OP_MOUSEST, mx, my, mk in exactly the order they are read. A name that
+    ; refuses leaves a partial opcode behind and that is harmless, because a
+    ; refused compile never runs.
+    mov al, OP_MOUSEST
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .mousex0
+    mov cx, 3
+.mousenm:
+    push cx
+    call bas_skipsp
+    call bas_word
+    jc .mousenotv
+    call bas_isstrname              ; CF=0 when it ends in '$'...
+    jnc .mousenotv                  ; ...and a '$' name is not a number
+    call bas_varfind
+    jc .mousepopx
+    call bas_emit                   ; AL = the index, into the stream
+    cmp byte [bas_bad], 0
+    jne .mousepopx
+    pop cx
+    dec cx
+    jz .mousex0
+    ; THE LOOP MUST RE-ENTER AT THE DEPTH IT LEFT. Holding CX across the
+    ; comma on the stack and jumping back from there pushes a second one
+    ; every pass - stkbalance named this line before it ever ran. POP is
+    ; flagless, so the jc below still reads bas_bcomma's answer.
+    push cx
+    call bas_bcomma
+    pop cx
+    jc .mousex0
+    jmp short .mousenm
+.mousepopx:
+    pop cx
+.mousex0:
+    ret
+.mousenotv:
+    pop cx
+    mov si, bas_e_mousevar
+    SHOUTR bas_err
+
 ; --- MID$(a$,x[,y]) = b$, node [156] (SPEC.md 150.50) -------------------
 ; THE TARGET IS AN svar AND NOT AN sexp, which is what makes this the first
 ; string LVALUE in the chapter - and the reason it is parsed here, at
@@ -2897,6 +2949,15 @@ bas_c_fact:
     call bas_wordis
     je .fnword
     ; --- the built-ins that answer a NUMBER (SPEC.md 150.29) -----------
+    mov si, bas_kw_mousex           ; node [210] - the pointer is a STATE,
+    call bas_wordis                 ; so these take nothing and poll it
+    je .b_mousex
+    mov si, bas_kw_mousey
+    call bas_wordis
+    je .b_mousey
+    mov si, bas_kw_mousek
+    call bas_wordis
+    je .b_mousek
     mov si, bas_kw_pred             ; node [146]'s half of the pair: the
     call bas_wordis                 ; argument decides which (SPEC.md 150.51)
     je .b_npred
@@ -3146,6 +3207,27 @@ bas_c_fact:
 ; compiles. The two reach ONE opcode through a flags byte rather than two
 ; opcodes, and a call with no start gets a 1 from bas_emitnum exactly as
 ; MID$ above gets its 32767.
+; MOUSEX / MOUSEY / MOUSEK: no arguments and no parentheses, like INKEY$ and
+; for the same reason - the word IS the whole expression (node [210]).
+.b_mousex:
+    xor al, al
+    jmp short .b_mouse
+.b_mousey:
+    mov al, 1
+    jmp short .b_mouse
+.b_mousek:
+    mov al, 2
+.b_mouse:
+    push ax
+    mov al, OP_MOUSE
+    call bas_emit
+    pop ax
+    cmp byte [bas_bad], 0
+    jne .b_mousenone
+    jmp bas_emit                    ; ...and which of the three
+.b_mousenone:
+    ret
+
 ; THE NUMERIC HALF, which is an ordinary one-argument function and reaches
 ; the same bas_fn1tab as ABS and SQR. Node [146]'s rule - "any decimal places
 ; are ignored", so PRED(2.1) is 1 and not 2 - lives in bas_f_pred, where the
