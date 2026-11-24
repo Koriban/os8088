@@ -845,12 +845,22 @@ def build():
     specs = own_specs()
     for name, src, ships in packages():
         sec = ""
-        for num, title in sorted(head.items(), key=lambda kv: len(kv[0])):
-            if "." in num:
-                continue
-            if re.search(r"\b%s\b" % re.escape(name), title, re.I):
+        # A TITLE THAT STARTS WITH THE NAME WINS. Matching the name anywhere
+        # and taking the first chapter in file order sent BASIC to §132 -
+        # "2BASIC - a BASIC interpreter and its resource editor" contains
+        # "BASIC" as a word and comes first - while BASIC/8088 is §150. The
+        # cell was wrong rather than empty, which is the kind a reader
+        # believes.
+        hits = [num for num, title in sorted(head.items(),
+                                             key=lambda kv: len(kv[0]))
+                if "." not in num
+                and re.search(r"\b%s\b" % re.escape(name), title, re.I)]
+        for num in hits:
+            if head[num].lower().startswith(name.lower()):
                 sec = "§%s" % num
                 break
+        if not sec and hits:
+            sec = "§%s" % hits[0]
         if not sec:
             # ...then a SUBSECTION, which is where a package that shares a
             # section with its toolchain lives (CWORD is SPEC.md 73.12).
