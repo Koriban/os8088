@@ -1841,6 +1841,22 @@ FAST = [
         "by different people - the system-side size pass shrank RAMDISK.DRV "
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
+    Row("cpwdat", "fast", py("tests/unit/t_cpwdat.py"), 0.3,
+        "SPEC.md 135.6/135.7: every drv_tab row of every kernel has an entry "
+        "in drivers/catalog.toml and every entry names a row; names <= 25 and "
+        "description lines <= 46 characters; icon indices inside the sheet; "
+        "every sheet pixel a palette colour or the #FF00FF key; and "
+        "build/cpwide.dat is what tools/cpwdat.py writes NOW, read back by a "
+        "second reader against the sheets and the catalog. FAST as THE "
+        "BOUNDARY, drvmem's reason: a driver is added in kernel/driver.inc by "
+        "one person and its words live in a TOML file nobody opens, so the "
+        "wide Drivers page would show it as Unknown with no description and "
+        "every other check stays green",
+        needs=(), inputs=("tools/cpwdat.py", "drivers/catalog.toml",
+                          "kernel/cpwfmt.inc", "kernel/driver.inc",
+                          "kernel/cpwart/cp-icons-16.png",
+                          "kernel/cpwart/cp-icons-32.png",
+                          "tests/unit/t_cpwdat.py", "tests/unit/harness.py")),
     Row("installabi", "fast", py("tests/unit/t_install.py"), 0.2,
         "SPEC.md 117: INSTALL.O88 in the ROOT of every kern_big system disk "
         "and on no kern_small one; HD_ABI_VER the same in hddabi.inc and the "
@@ -1862,6 +1878,129 @@ FAST = [
     Row("ccmake", "soak", py("tests/unit/t_ccmake.py"), 2.1,
         "automatic compiler setup: missing/partial install, parallel dependents, "
         "warm reuse, setup failure propagation and fresh live-media dependencies", cpus=4),
+    Row("boratypehost", "soak", py("tests/boratype_host.py"), 3.4,
+        "SPEC.md 134: production uint16 scoring, PIT wrap/deadlines,24 lessons, "
+        "profiles/codec and independent arithmetic; four production mutations must fail",
+        needs=("cc",)),
+    Row("boratypefiles", "soak", py("tests/boratype_files.py"), 0.6,
+        "SPEC.md 134: production alternating-generation transport under35 "
+        "read/write/truncate/readback faults preserves last valid progress",
+        needs=("cc",)),
+    Row("boratypeanimpack", "soak", py("tests/boratype_animpack.py"), 1.9,
+        "SPEC.md 134: decode all 30 poses, compare each strip and its bank signature, "
+        "and reject malformed lengths and frame addresses"),
+    Row("boratypeface", "soak", py("tests/boratype_face.py"), 2.4,
+        "SPEC.md 134:24 color/mono geometries, full ASCII opposite Shift/finger map, "
+        "bounded dirty rendering, all actions and honest empty results; reversed Shift goes red",
+        needs=("cc",)),
+    Row("boratypemenus", "soak", py("tests/boratype_menus.py"), 2.4,
+        "SPEC.md 134: paging, actions, records and settings on native color/mono layouts; "
+        "the selected lesson stays visible and the menu paint leaves engine state intact", needs=("cc",)),
+    Row("boratypeaudiohost", "soak", py("tests/boratype_audio_host.py"), 1.3,
+        "SPEC.md 134: original music/effects and visual-reaction policy, cooldown, "
+        "recent-four exclusion, neutral empty results and unchanged scoring under sanitizers",
+        needs=("cc",)),
+    Row("boratypetarget", "soak", py("tests/boratype_target.py", "--scenario", "smoke",
+        "--evidence", "build/boratype-final/vga"), 144.6,
+        "SPEC.md 134: installed VGA strict/mixed lessons and independent counters, "
+        "four profile names, native windows/fullscreen/Help, single writer and all profiles after cold reboot",
+        needs=("marty", "nasm", "cc"), timeout=700,
+        wants=("build/boratype360.img",)),
+    Row("boratypedeadlines", "soak", py("tests/boratype_target.py", "--scenario", "challenges",
+        "--evidence", "build/boratype-final/deadlines"), 160.6,
+        "SPEC.md 134: real1/3/5minute no-input deadlines1093/3278/5462ticks, "
+        "neutral captions, no false record and ranked versus deliberately paused1minute tests",
+        needs=("marty", "nasm", "cc"), timeout=500,
+        wants=("build/boratype360.img",)),
+    Row("boratypestorage", "soak", py("tests/boratype_storage_target.py",
+        "--evidence", "build/boratype-final/storage"), 72.7,
+        "SPEC.md 134: real missing/corrupt/version-invalid/readonly/full FAT12 "
+        "volumes, actionable notices, live profile preservation and exported last valid save",
+        needs=("marty", "nasm", "cc"), timeout=360,
+        wants=("build/boratype.o88",)),
+    Row("boratypepractice", "soak", py("tests/boratype_practice_target.py",
+        "--evidence", "build/boratype-final/practice"), 36.9,
+        "SPEC.md 134: actual three-error/low-accuracy/comeback/poor-result "
+        "reactions, sampled F weakness, recommended drill and independently selected digits practice",
+        needs=("marty", "nasm", "cc"), timeout=360,
+        wants=("build/boratype360.img",)),
+    Row("boratypemotion", "soak", py("tests/boratype_motion.py"), 31.1,
+        "SPEC.md 134: three hardware mistakes must show six complete VGA reaction poses "
+        "in order on the 4.77 MHz XT, identified from actual scanout pixels",
+        needs=("marty", "nasm", "cc"), timeout=240,
+        wants=("build/boratype360.img", "build/os8088-360.img")),
+    Row("boratypeperformance", "soak", py("tests/boratype_performance.py",
+        "--evidence", "build/boratype-final/performance"), 19.3,
+        "SPEC.md 134: real4.77MHz input through30 hardware keys, completed "
+        "feedback within100ms,220 periodic callbacks, sound enabled and sampled shipping stack guard",
+        needs=("marty", "nasm", "cc"), timeout=300, alone=True,
+        wants=("build/boratype360.img", "build/boratype.bin")),
+    Row("boratyperelocation", "soak", py("tests/boratype_performance.py", "--relocation-only",
+        "--evidence", "build/boratype-final/relocation"), 31.8,
+        "SPEC.md 134: public HEAPFRAG compaction moves the app region, eager "
+        "art/music/overlay carve and band; immutable bytes, score and postmove native input survive",
+        needs=("marty", "nasm", "cc"), timeout=300,
+        wants=("build/boratype360.img", "build/boratype.bin", "build/chello.o88", "build/heapfrag.o88")),
+    Row("boratypepcm", "soak", py("tests/boratype_pcm.py"), 113.4,
+        "SPEC.md 134: captures two copies of the sampled music loop and matches "
+        "greeting, error and praise after real XT input; checks pause, mute and released grants",
+        needs=("marty", "nasm", "cc", "ffmpeg"), timeout=300,
+        wants=("build/boratype.o88", "build/mixer360.img")),
+    Row("boratypefm", "soak", py("tests/boratype_audio_target.py", "--route-probe",
+        "--evidence", "build/boratype-final/fm"), 36.6,
+        "SPEC.md 134: captured actual XT FM music/effects, master mute, phase "
+        "resume, real OS speaker route, SOUND detach/reattach and close cleanup; technical waveform evidence",
+        needs=("marty", "nasm", "cc", "numpy"), timeout=300,
+        wants=("build/boratype.o88", "build/mixer360.img")),
+    Row("boratypespeaker", "soak", py("tests/boratype_audio_target.py", "--backend", "speaker",
+        "--evidence", "build/boratype-final/speaker"), 19.5,
+        "SPEC.md 134: captured title/lesson/error/result speaker output without "
+        "SOUND.DRV, master mute and released tone/heap claims; technical evidence, not subjective audition",
+        needs=("marty", "nasm", "cc", "numpy"), timeout=240,
+        wants=("build/boratype.o88",)),
+    Row("boratypecgamono", "soak", py("tests/boratype_target.py", "--scenario", "smoke", "--adapter", "cga",
+        "--evidence", "build/boratype-final/cgamono"), 74.6,
+        "SPEC.md 134: complete native CGA640x200 mono strict/mixed lessons, "
+        "four profiles, minimum128px content, fullscreen, readonly writer and cold-reboot progress",
+        needs=("marty", "nasm", "cc"), timeout=700,
+        wants=("build/boratype360.img",)),
+    Row("boratypecgacolor", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "cga",
+        "--evidence", "build/boratype-final/cgacolor"), 21.1,
+        "SPEC.md 134: actual CGA640mono to320four-color FSX, strict full lesson, "
+        "first completed prompt cell/flush under100ms and restored native desktop",
+        needs=("marty", "nasm", "cc"), timeout=300,
+        wants=("build/boratype360.img",)),
+    Row("boratypeega", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "ega",
+        "--backend", "86box", "--evidence", "build/boratype-final/ega"), 26.6,
+        "SPEC.md 134: real EGA640x350 native installed wrong/correct typing "
+        "and fullscreen/restoration, asserting actual mode rather than a VGA screenshot label",
+        needs=("86box", "nasm", "cc"), timeout=300, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypeegareboot", "soak", py("tests/boratype_target.py", "--scenario", "reboot", "--adapter", "ega",
+        "--backend", "86box", "--evidence", "build/boratype-final/ega-reboot"), 80.3,
+        "SPEC.md 134: full beginner lesson/results on real EGA, actual save, "
+        "second-instance writer refusal, fullscreen-close cleanup and exported-disk cold reboot",
+        needs=("86box", "nasm", "cc"), timeout=500, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypevesa800", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vesa800",
+        "--evidence", "build/boratype-final/vesa800"), 12.3,
+        "SPEC.md 134: actual installed VESA.DRV800x600x8, native typing, "
+        "expanded layout and fullscreen/restoration through the OS, no private VBE path",
+        needs=("qemu", "nasm", "cc"), timeout=240, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypevesa1024", "soak", py("tests/boratype_target.py", "--scenario", "adapters", "--adapter", "vesa1024",
+        "--evidence", "build/boratype-final/vesa1024"), 14.9,
+        "SPEC.md 134: actual installed banked VESA.DRV1024x768x16, native "
+        "typing and fullscreen/restoration using live geometry",
+        needs=("qemu", "nasm", "cc"), timeout=240, serial=True,
+        wants=("build/boratype360.img",)),
+    Row("boratypemega286", "soak", ["env", "OS88_MEGA=1", "OS88_MEGA_EMU=86box"] +
+        py("tests/boratype_target.py", "--scenario", "smoke", "--adapter", "vga", "--backend", "86box",
+        "--app-build", "build", "--evidence", "build/boratype-final/mega286"), 98.5,
+        "SPEC.md 134: ordinary shipped package on actual protected-mode286 "
+        "Mega with actual high region/band; full lessons, profiles, fullscreen-close and cold reboot",
+        needs=("86box", "nasm", "cc"), timeout=700, serial=True,
+        wants=("build/boratype360.img", "build/mega.img")),
     Row("breadxtcore", "soak", py("tests/breadxt_core.py"), 12.1,
         "SPEC.md 130: shipping topology, editor history, staged BBX codec, "
         "DC/HC/RC/555 and scope against independent fixtures and randomized "
@@ -3263,6 +3402,18 @@ FULL = [
         "files already there",
         needs=("qemu",), serial=True, wants=("build/hello.o88", "build/mines.o88", "build/mseg.o88", "build/thewire360.img", "build/thewiredata.img"),
         locks=("port:8092",)),
+    Row("thewirexms", "soak", py("tests/thewire.py", "--xms"), 60.0,
+        "THE WIRE's version 2 archive RUN FROM AN XMS RAM DISK (SPEC.md "
+        "92.13.1): the thewire row on build/thewirexms.img, a 1.44MB system "
+        "disk carrying XMEM.DRV whose SYSTEM.CFG puts the RAM disk in XMS. "
+        "Assertion 10 loads BIGTREE - a 150,000-byte entry, past the 65,024 a "
+        "RAM disk file once stopped at (62.9.10) - so the store mounts above "
+        "1MB, the big entry lands as a write and two appends, and MSEG runs "
+        "from it by name and reads its seven parts back. The thewire row on "
+        "the 360KB disk, with no XMS, asserts the other arm: Load Program "
+        "greyed with `Needs an XMS RAM disk - use Add to Disk`",
+        needs=("qemu",), serial=True, wants=("build/hello.o88", "build/mines.o88", "build/mseg.o88", "build/thewirexms.img", "build/thewiredata.img"),
+        locks=("port:8092",)),
     Row("stk0water", "soak", py("tests/stk0water.py"), 20.0,
         "how deep TASK 0's stack has actually been (SPEC.md 15.1). That "
         "section says `redo the fill probe before lowering either` and the "
@@ -3806,6 +3957,35 @@ SOAK = [
         "disk WITHOUT HDF_XCYL (52.1.5's double-mount guard); ONE volume, "
         "and CALC.O88 launched off it",
         needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("fat32", "soak", py("tests/fat32.py"), 20.0,
+        "SPEC.md 19.12 (docs/plans/FAT32-MEGA-PLAN.md): kern_mega on QEMU "
+        "with a FAT32 partition (type 0Ch, mformat -F, one sector a "
+        "cluster) whose 40MB FILLER.BIN puts FAR/ at cluster 81,923 - past "
+        "65,535, so every high word is live. C: mounts, its root lists, FAR "
+        "opens and CALC.O88 launches out of it; HELLO.TXT is deleted and "
+        "New Folder makes NEWDIR there, and Ctrl+C / Ctrl+V copies the "
+        "root's CALC.O88 into it; the host then reads the volume back "
+        "through tests/instdeep.py's reader (FAT32 since this row), mtype, "
+        "mdir and fsck.fat -n where present - FAR without HELLO.TXT, "
+        "NEWDIR's . and .. right, the copy a chain past 65,535 holding the "
+        "package, FILLER.BIN byte-exact and FSInfo's count 0FFFFFFFFh. "
+        "Broken on purpose (the "
+        "Disk window's sync handing dsk_chdir the folder's HIGH word as its "
+        "low) the New Folder lands in FILLER.BIN's chain. Measured 17.7s on "
+        "2026-11-19. kern_mega's selectors decoded as tests/pciether.py's "
+        "MQemu does",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=300,
+        wants=("build/mega.img", "build/megaapps.img",
+               "build/megak/kernel.map", "build/hdd.bin",
+               "build/calc.o88")),
+    Row("fat32big", "soak", py("tests/fat32.py", "--big"), 5.0,
+        "SPEC.md 19.12.1: the fat32 row's disk under kern_big, which has no "
+        "FAT32 - HDD.DRV offers the 0Ch partition and the kernel's BPB "
+        "check refuses it, so no C: appears and nothing on it is written. "
+        "Measured 1.9s on 2026-11-19",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/hdd.bin",
                "build/calc.o88")),
     Row("hdtakeboot", "soak", py("tests/hdtake.py", "--boot"), 10.0,
@@ -7060,6 +7240,17 @@ SOAK = [
         "window double-clicked open. QEMU by name, vesa's reason",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
+    Row("cpwide", "soak", py("tests/cpwide.py"), 10.0,
+        "The wide Control Panel on a VGA desktop (SPEC.md 135): the panel "
+        "opens 618x408 on 640x480; the page list selects Drivers, Theme, "
+        "Display and Dock (each answered by cp_sel); the Drivers page drawn "
+        "after Theme and after Display is pixel for pixel the one drawn "
+        "first (QA-3, 135.5.1); the hosted Dock page puts the Dock on the "
+        "left and the next open is COMPACT, whose Dock page puts it back and "
+        "the next open is wide again (QA-1, 135.2 step 4). The one row that "
+        "drives the wide face - the compact rows are pinned (tests/cpface.py)",
+        needs=("qemu", "nasm"), timeout=180,
+        wants=("build/os8088.img", "build/apps.img")),
     Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
         "Choosing a VESA mode on the Display page (SPEC.md 120.6): on the "
         "1024x768x16 desktop, the Control Panel's Display page lists the "
@@ -7132,6 +7323,19 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
                "build/solitair.o88")),
+    Row("vesakbd", "soak", py("tests/vesakbd.py"), 7.0,
+        "CP850 text on the packed display (SPEC.md 6.7, 120.3.2): on "
+        "vesa.img's 1024x768x16 desktop the Control Panel's Keyboard page "
+        "picks Spanish (Spain) and `a` and the n-tilde key go into its typing "
+        "sample, a font_run and so VESA.DRV's VX_FONTRUN. Asserts the sample "
+        "bytes, font_last/font_span 255/223 (the sample's glyph hold), then "
+        "the glass: n-tilde's eight authored rows exact in cell 1, ink in "
+        "cell 0, none in the padding. As first shipped the driver bounded "
+        "the index by the constant 126 and every CP850 cell drew blank; "
+        "putting that bound back fails cell 1. 6.8s measured. QEMU by name, "
+        "vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vesagor", "soak", py("tests/vesagor.py"), 32.0,
         "Gorillas' field on the packed desktop (SPEC.md 120.5, the package "
         "rule for DH): build/vesafsx.img's autostart opens Gorillas on the "
@@ -8989,11 +9193,114 @@ SOAK = [
         "4 (an 8042); MartyPC's 8255 keeps the peek. 8s is 5.1 measured",
         needs=("qemu",), serial=True,
         wants=("build/os8088.img", "build/apps.img")),
+    Row("kbdlayouts", "soak", py("tests/kbdlayouts.py"), 3.0,
+        "SPEC.md 9.16: actual module bytes from all four kernels execute 375 "
+        "independent layout facts, dead keys, modifier/RAW/ring rules, bounded "
+        "stack, no-allocation worker QUERY and atomic module-slot publication. "
+        "Deliberate table/AltGr/CLI corruptions must be detected. 2.42s measured.",
+        needs=("unicorn",),
+        wants=("build/os8088.img", "build/small360.img", "build/emu.img", "build/mega.img")),
+    Row("kbdlayoutfont", "soak", py("tests/kbdlayoutfont.py"), 1.0,
+        "SPEC.md 6.7: actual provider/render-index source under Unicorn keeps "
+        "the original ASCII face, unsigned CP850 indexes, mutex ownership and "
+        "atomic legacy FONT_GLYPHS snapshots. Missing CLI and damaged enie "
+        "glyph are negative controls. 0.13s measured.",
+        needs=("nasm", "unicorn")),
+    Row("kbdlayouttransitions", "soak", py("tests/kbdlayouttransitions.py"), 2.0,
+        "SPEC.md 6.7, 9.16: actual HIBER/FSX source and module bytes preserve "
+        "layout/glyph-only holds across heap/ROM font repair, Mega owner stamps "
+        "and bracket-only ASCII borrowing. Missing suspend, missing DX save "
+        "and missing bounds clamp must fail. 1.23s measured.",
+        needs=("nasm", "unicorn"),
+        wants=("build/os8088.img", "build/mega.img")),
+    Row("kbdlayoutat", "soak", py("tests/kbdlayoutat.py"), 2.0,
+        "SPEC.md 9.16: QEMU's real 8042/INT15-4F path consumes French keys "
+        "exactly once, including batched make/break, AltGr and composition, "
+        "with physical key bits released. Removing saved-FLAGS carry clear "
+        "duplicates BIOS words. 1.49s measured.",
+        needs=("qemu",), serial=True,
+        wants=("build/os8088.img", "build/apps.img")),
+    Row("kbdlayoutabort", "soak", py("tests/kbdlayoutabort.py"), 8.0,
+        "SPEC.md 9.16: a real package HOLDs then refuses entry; ld_unreserve "
+        "must release its provider. Reusing the instance slot may reacquire, "
+        "repeat HOLD idempotently, RELEASE, reacquire and close. Removing "
+        "the cleanup call leaks the claim. 6.02s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/kbdlayoutabort.img", "build/kbdhold.bin")),
+    Row("kbdsettings", "soak", py("tests/kbdsettings.py"), 50.0,
+        "SPEC.md 31.16: all five Keyboard radios, physical sample/clear, clean "
+        "close, glyph-only lifetime, independent saved KL decode/reboot and "
+        "unrelated clock setting; malformed/missing KL and missing/mismatched "
+        "module refuse without disk changes; foreign-media save failure keeps the working layout and retry flag. Wrong saved layout is red. "
+        "34.86s measured on Hercules.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img")),
+    Row("kbdsettings-small", "soak", py("tests/kbdsettings.py", "--small"), 10.0,
+        "SPEC.md 31.16: the real 128KB CGA machine can select all five layouts "
+        "and exercise sample glyph holds, then returns to BIOS at restart "
+        "without writing session settings. 8.61s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img", "build/apps360.img")),
+    Row("kbdlayouttext-vga", "soak", py("tests/kbdlayouttext.py", "--profile"), 52.0,
+        "SPEC.md 6.7, 9.16, 83.7: physical ES/LA/FR typing, CP850 edit/find/"
+        "replace, two live instances, BIOS-default repaint, save/read by an "
+        "independent FAT reader, reopen/New/final drop. Trace the complete "
+        "XT KL_SCAN call/return, including unsupported dead-key composition; "
+        "removing RELEASE must leak. 45.62s measured including profiling; system media is swapped out for accented typing/repaint.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouttext-cga", "soak",
+        py("tests/kbdlayouttext.py", "--machine", "os8088_5150_cga"), 37.0,
+        "The complete CP850 text round trip and provider lifetime on CGA's "
+        "1bpp renderer. Independent file bytes and exact accented glyph "
+        "occupancy are checked, not inferred from VGA. 31.35s measured.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouttext-herc", "soak",
+        py("tests/kbdlayouttext.py", "--machine", "os8088_5150_herc_gla"), 37.0,
+        "The complete CP850 text round trip and provider lifetime on Hercules' "
+        "1bpp renderer, including stable accented pixels after choosing BIOS. "
+        "31.52s measured.",
+        needs=("marty", "nasm", "pil"), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img", "build/notepad.bin")),
+    Row("kbdlayouthiber", "soak", py("tests/kbdlayouthiber.py"), 38.0,
+        "SPEC.md 6.7: actual fixed-disk hibernate/resume with Spanish active "
+        "and BIOS plus a glyph-only Note Pad hold. Module header/code, glyph, "
+        "document/layout and a post-resume key survive; the original font "
+        "repair overwrote the module header and hung. 32.32s measured.",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088.img", "build/boothd.bin", "build/mbr.bin",
+               "build/keyboard.drv", "build/hiber.drv", "build/ctrl.drv",
+               "build/format.drv", "build/diskops.drv", "build/notepad.o88",
+               "build/notepad.bin")),
+    Row("kbdlayoutlegacy", "soak", py("tests/kbdlayoutlegacy.py"), 24.0,
+        "SPEC.md 9.16: actual DOS window/fullscreen and idle WIN16 entries "
+        "publish RAW on their real owner and retain BIOS q/a/w/z with French "
+        "selected. Renaming/focus changes retain the flag; returning native "
+        "focus produces French again. Clearing RAW must fail the byte vector. "
+        "No reference NE execution is claimed. 19.82s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/kbdlayoutlegacy.img")),
+    Row("kbdlayoutreal", "soak", ["env", "OS88_MEGA=1"] + py("tests/kbdlayoutreal.py"), 16.0,
+        "SPEC.md 6.7, 53: an actual high-memory package selects Spanish, borrows "
+        "legacy ASCII glyphs before/inside FSXF_REAL/after, proves CR0.PE and "
+        "real CS inside the bracket, then retains CP850 and native input. "
+        "12.13s measured under Bochs.",
+        needs=("bochs", "nasm"), serial=True,
+        wants=("build/mega.img", "build/kbdlayoutreal.img", "build/kbdreal.bin")),
+    Row("diskmut", "soak", py("tests/diskmut.py"), 25.0,
+        "SPEC.md 18.5.3: Rename/New Folder/empty removal/recursive removal "
+        "through actual public APIs on a B: subdirectory. Success, absent "
+        "and mismatched DISKOPS modules preserve registers, mount/CWD and "
+        "write gate; independent FAT fsck checks success, refusal must leave "
+        "both disk images byte-identical. 20.86s measured across twelve cases.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/diskmut.img", "build/diskmut.bin")),
     Row("keymap", "soak", py("tests/keymap.py"), 1.0,
         "OSAPI_KEY_MAP (0x0239) COPIES THE WHOLE KEY-STATE MAP (SPEC.md 9.7.3). "
         "Each built kernel's own bytes under Unicorn - the jump cell, kbd_track "
         "(the int 09h writer) and the kbd_down slot: the cell jumps to the body "
-        "and the table ends at 0x023C; with the map unarmed and poisoned one "
+        "and the table ends at 0x0244; with the map unarmed and poisoned one "
         "call ARMS it and answers 16 zero bytes; scancodes fed through "
         "kbd_track (makes, breaks, E0-prefixed grey keys on the keypad bits) "
         "copy out as bit s&7 of byte s>>3 into an odd offset of a foreign DS, "

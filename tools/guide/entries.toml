@@ -104,6 +104,18 @@ kind = "system"
 summary = "The Control Panel, loaded when you open it: display, theme, sound, clock, drivers and other settings."
 short = "Display, sound and settings"
 
+["CPWIDE.DRV"]
+title = "Wide Control Panel"
+kind = "system"
+summary = "The Control Panel's large layout for VGA and VESA screens, loaded beside it when there is room: grouped pages with icons, a driver library with categories, a display mode changer with Test, and a theme gallery. Without it the Control Panel opens in its compact layout."
+short = "Large Control Panel layout"
+
+["CPWIDE.DAT"]
+title = "Wide Control Panel data"
+kind = "system"
+summary = "The icons and the driver catalog the wide Control Panel shows: each driver's category, icon and description. Without it the Control Panel opens in its compact layout."
+short = "Icons and driver catalog"
+
 ["DESK.DRV"]
 title = "Desktop widgets"
 kind = "system"
@@ -113,7 +125,7 @@ short = "Support for desktop widgets"
 ["DISKOPS.DRV"]
 title = "Disk operations"
 kind = "system"
-summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back, and compresses or expands files."
+summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back; compresses or expands files; and creates, renames or removes folders."
 short = "Copy disks, compress files"
 
 ["DOCK.DRV"]
@@ -726,6 +738,12 @@ summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 b
 short = "High-resolution desktop on a VESA card"
 needs = "A VGA card with a VESA BIOS (VBE 1.2 or later), in a 286 or better"
 
+["KEYBOARD.DRV"]
+title = "Keyboard layouts"
+kind = "system"
+summary = "Optional US, Spanish (Spain), Latin American Spanish and French AZERTY input, selected in Control Panel. Supplies accented CP850 glyphs for native text and unloads when no longer needed."
+short = "Optional international keyboard layouts"
+
 ["SERIAL.DRV"]
 title = "Desktop serial service"
 kind = "system"
@@ -1158,6 +1176,24 @@ title = "ARCADE notes"
 kind = "document"
 summary = "How to add your ROM sets, the keys for each game, settings and sound. Double-click to read it in Note Pad."
 short = "Notes on ARCADE"
+
+["BORATYPE.O88"]
+title = "Borat Teaches Typing"
+kind = "program"
+summary = "A touch-typing course with Borat as the coach: 24 lessons, practice for your weakest keys, one-, three- and five-minute timed challenges, four profiles, records and achievements."
+short = "Typing tutor"
+
+["BORATYPE/"]
+title = "Borat Teaches Typing"
+kind = "folder"
+summary = "The Borat Teaches Typing program. Double-click BORATYPE.O88 to start it."
+short = "Borat Teaches Typing"
+
+["HELP.TXT"]
+title = "Borat Teaches Typing help"
+kind = "document"
+summary = "Borat Teaches Typing's help: lessons, practice, challenges, the keys, sound, display modes and saving. Double-click to read it in Note Pad."
+short = "Help for the typing tutor"
 
 ["CWORD.O88"]
 title = "Word, C edition"

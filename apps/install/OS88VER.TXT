@@ -1,5 +1,5 @@
-20261118
-* Byteopoly: trade old computers on a
-  board, locally or over a cable
-* 2BASIC: a BASIC and resource editor
-* Browser 1.8: tables, frames, colour
+20261123
+* Borat Teaches Typing, a typing tutor
+* Wide Control Panel on VGA and VESA
+* Display page lists every VESA mode
+* Drivers page with categories, details

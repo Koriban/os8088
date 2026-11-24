@@ -53,6 +53,7 @@ VBE_OK      equ 0x004F          ; the AX every one of them answers with
 ; the controller information block
 VI_SIG      equ 0               ; 'VESA'
 VI_VER      equ 4               ; dw: 0102h and up is what this image takes
+VI_MEM      equ 18              ; dw: total memory, 64KB units
 VI_MODES    equ 14              ; dd: far pointer to the mode list (0FFFFh ends)
 
 ; the mode information block
@@ -102,8 +103,10 @@ VM_SIZE     equ 16
 VX_NMODES   equ 16              ; the most this image offers
 VX_LISTMAX  equ 64              ; the most mode numbers it walks
 
-VX_XMAX     equ 1024            ; the geometry it accepts (SPEC.md 120.2.2)
-VX_YMAX     equ 768
+VX_XMAX     equ VXG_WMAX        ; the geometry it accepts (SPEC.md 120.2.2):
+VX_YMAX     equ VXG_HMAX        ; the widest is vxabi.inc's, because the
+                                ; kernel sizes for it (the menu bar's cells,
+                                ; the desktop grid's DESK_CMAX)
 VX_XMIN     equ 640
 VX_YMIN     equ 400
 VX_BPSLMAX  equ 4096
@@ -136,6 +139,8 @@ vx_entry:
     je vx_next_x
     cmp al, VXV_PM
     je vx_pm
+    cmp al, VXV_INFO
+    je vx_info
     cmp ax, (VX_ABI_VER << 8) | DRVV_ATTACH
     jne .no                     ; ATTACH from a kernel of this vintage (AH),
     cmp byte [vx_nmodes], 0     ; ONCE PER IMAGE: a successful attach leaves
@@ -280,29 +285,44 @@ vx_encode:
 ;           the 16 bit - which vx_encode's D16 already says, so a record
 ;           matches when its encoding is CL's set bits (bits 5 and 6 are no
 ;           field and vx_decode never read them). A record the byte cannot
-;           name matches no class
+;           name matches no class. WHEN TWO MATCH - a card offering 15 and 16
+;           bits at one geometry, as QEMU's does - THE DEEPER ANSWERS, ties to
+;           the first (SPEC.md 120.2.3, 135.9.1): the first answered before,
+;           so no class reached the 16bpp record and VXV_NEXT walked the
+;           pair as each other's successor for ever
 ; clobbers: ax, bx, cx, dx, si, di, flags
 vx_find:
     test cl, VXC_SET
     jz .none
     mov dl, cl
     and dl, VXC_SET | VXC_D16 | VXC_YMASK | VXC_XMASK
+    xor dh, dh                  ; DH = the deepest match's bpp (0 = none)
+    push bp
+    xor bp, bp                  ; BP = that record
     mov si, vx_modes
     mov di, [vx_nmodes_w]       ; (the count as a word: the byte and a 0)
 .n:
     or di, di
-    jz .none
+    jz .end
     call vx_encode              ; CL = the record's class
     jc .next
     cmp cl, dl
-    je .out                     ; (CF = 0 off the equal compare)
+    jne .next
+    cmp [si+VM_BPP], dh
+    jbe .next                   ; not deeper than the one held
+    mov dh, [si+VM_BPP]
+    mov bp, si
 .next:
     add si, VM_SIZE
     dec di
     jmp short .n
+.end:
+    mov si, bp
+    pop bp
+    cmp si, 1                   ; CF = 1 exactly when none matched (SI = 0)
+    ret
 .none:
     stc
-.out:
     ret
 
 ; vx_publish - [vx_cur] into vx_tab and the geometry this image draws by
@@ -594,6 +614,60 @@ vx_next:
     mov ch, cl
     pop ax
     mov cl, al                  ; CL = the class byte, CH = the depth
+    ret
+
+; -----------------------------------------------------------------------------
+; vx_info - VXV_INFO (SPEC.md 120.10): the card, or one offered record, in
+;           registers (the caller's BX is the driver row and ES is the
+;           kernel's, so there is no buffer to hand over). SI and DI are
+;           outputs; BX is kept
+; -----------------------------------------------------------------------------
+vx_info:
+    cmp cl, 0xFF
+    je .card
+    cmp cl, [vx_nmodes]
+    jae vx_init.stc             ; (CF = 1)
+    mov al, VM_SIZE
+    mul cl
+    add ax, vx_modes
+    xchg ax, si                 ; SI = record i
+    mov ax, [si+VM_BPSL]
+    mul word [si+VM_Y]          ; DX:AX = bytes
+    add ax, 1023
+    adc dx, 0
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx                   ; AX = KB, rounded up
+    push ax
+    call vx_encode              ; CL = the class byte
+    mov ch, [si+VM_BPP]
+    mov ax, [si+VM_X]
+    mov dx, [si+VM_Y]
+    mov di, [si+VM_MODE]
+    pop si
+    clc
+    ret
+.card:
+    push bx
+    push word [vx_cur]
+    call vx_choose              ; [vx_cur] = Auto's pick, put back below
+    mov ax, [vx_cur]
+    pop word [vx_cur]
+    sub ax, vx_modes
+    mov cl, 4
+    shr ax, cl
+    mov si, ax                  ; SI = the recommended index
+    mov ax, [vx_cur]
+    sub ax, vx_modes
+    shr ax, cl
+    mov ch, al                  ; CH = the running index
+    mov cl, [vx_nmodes]
+    mov ax, [vx_vver]
+    mov dx, [vx_vmem]
+    pop bx
+    clc
     ret
 
 ; =============================================================================
@@ -2195,7 +2269,9 @@ vxp_spans:
 ; VX_FONTRUN - font_run's planar arm, no region armed and not disabled: CX =
 ;              x, DX = y, ES:SI the ASCIIZ string, [font_rn_fg]/[font_rn_bg]
 ;              through VXB_FONTFG; the glyphs at [font_seg]:[font_base] +
-;              (c - 32) * 8, an unprintable cell painted blank. A cell off
+;              (c - 32) * 8 up to the LIVE [font_span] through VXB_FONTLIM
+;              (94, or 223 while the CP850 face is bound - SPEC.md 6.7),
+;              an unprintable cell painted blank. A cell off
 ;              the display's edges is skipped and the run goes on (SPEC.md
 ;              6.1); [gfx_color] is left at the foreground, the contract's
 ;              "pen spent"
@@ -2213,6 +2289,9 @@ vxp_fontrun:
     mov [vx_fseg], ax
     mov ax, [es:di+2]           ; font_base
     mov [vx_fbase], ax
+    mov di, [vx_p_fontlim]
+    mov al, [es:di+1]           ; font_span, read with the table it bounds
+    mov [vx_fspan], al
     pop es
     mov ax, [vx_y]
     sub ax, 8
@@ -2241,8 +2320,8 @@ vxp_fontrun:
     mov si, [cs:vx_bsrc]
     mov al, [si-1]              ; the character again
     pop ds
-    sub al, VX_FONT_FIRST
-    cmp al, VX_FONT_LAST - VX_FONT_FIRST
+    sub al, VX_FONT_FIRST       ; ONE unsigned test for both ends, as the
+    cmp al, [vx_fspan]          ; kernel's: a control wraps past the span
     jbe .glyph
     xor al, al                  ; unprintable: the blank cell, which is SPACE
 .glyph:
@@ -2370,6 +2449,10 @@ vx_attach:
     cmp word [si+VI_VER], 0x0102
     jb .nohw                    ; 1.0 and 1.1: no direct-colour fields, no
                                 ; reliable window attributes (SPEC.md 120.2.1)
+    mov ax, [si+VI_VER]         ; the card's facts for VXV_INFO outlive the
+    mov [vx_vver], ax           ; zeroed buffer
+    mov ax, [si+VI_MEM]
+    mov [vx_vmem], ax
 
     ; --- copy the mode list OUT before any 4F01h can overwrite it ------------
     ; (a 1.x BIOS may point it inside the very buffer just filled)
@@ -2551,6 +2634,7 @@ vx_p_fontfg dw 0
 vx_p_cfgve  dw 0
 vx_p_kret   dw 0                ; a kernel `ret`: where a tail hook goes back
 vx_p_null   dw 0                ; ...and the kernel's draw-nothing entry
+vx_p_fontlim dw 0               ; font_last, font_span: the LIVE glyph bounds
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif
@@ -2564,6 +2648,8 @@ vx_wsh      db 0                ; ...and the window shift          } vx_publish
 %endif
 vx_cur      dw 0                ; -> the chosen record
 vx_want     db 0                ; the class byte asked for (0 = Auto)
+vx_vver     dw 0                ; the VBE version word and total memory (64KB
+vx_vmem     dw 0                ; units), kept from 4F00h for VXV_INFO
 vx_nmodes_w:                    ; ...the count, as a word (the byte then a 0)
 vx_nmodes   db 0
             db 0
@@ -2603,7 +2689,7 @@ vx_bnb      dw 0
 vx_bmask    db 0
 vx_b1adp    db 0
 vx_b1hm     db 0
-            db 0
+vx_fspan    db 0                ; VX_FONTRUN's copy of [font_span]
 vx_sstep    dw 0
 vx_sdy      dw 0
 vx_fbase    dw 0

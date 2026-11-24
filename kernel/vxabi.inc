@@ -11,13 +11,24 @@
 ; Drivers-page line and not a wrong pixel.
 ; =============================================================================
 
-VX_ABI_VER  equ 5               ; bump on ANY change to the contract below
+VX_ABI_VER  equ 6               ; bump on ANY change to the contract below
                                 ; (2: the S2 block pointers and selectors;
                                 ;  3: the VE class at attach, PICK and NEXT;
                                 ;  4: VX_BLITD, the package's depth blit;
                                 ;  5: the hook is the far call itself - the
                                 ;     selector's address IS the far return,
-                                ;     VX_CONT, VXB_KRET and VXB_NULL)
+                                ;     VX_CONT, VXB_KRET and VXB_NULL;
+                                ;  6: VXB_FONTLIM, the live glyph bounds
+                                ;     the CP850 face moves, SPEC.md 6.7)
+
+; --- the widest primary VESA.DRV will choose (SPEC.md 120.2.2) ---------------
+; Here and not in the driver, because the KERNEL is sized for it: the menu
+; bar's MENU_BCMAX (menu.inc) and the desktop grid's DESK_FITS check against
+; DESK_CMAX (desk.inc, SPEC.md 26.9.1). Raising either is a kernel build that
+; checks it can hold the new screen - the 63-cell grid was a 1024x768
+; desktop whose icons could only be dropped in its right-hand 600 px.
+VXG_WMAX    equ 1024            ; VESA.DRV's VX_XMAX / VX_YMAX are these
+VXG_HMAX    equ 768
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
@@ -50,6 +61,18 @@ VXV_PM      equ 0x43            ; kern_mega's alone (KERN-MEGA-PLAN 14.115):
                                 ; ADDITIVE, so VX_ABI_VER stays: an image
                                 ; that predates it refuses the question and
                                 ; kern_mega keeps its VGA desktop
+VXV_INFO    equ 0x44            ; the wide Display page's read (SPEC.md
+                                ; 120.10): CL = 0FFh asks the CARD - out AX =
+                                ; the VBE version word, DX = video memory in
+                                ; 64KB units, CL = the offered count, CH = the
+                                ; running record's index, SI = the index Auto
+                                ; would pick; CL = i < count asks RECORD i -
+                                ; out AX = X, DX = Y, CL = its class byte (VXC_,
+                                ; the VE byte exactly), CH = its depth (8, 15
+                                ; or 16), SI = the KB its framebuffer needs,
+                                ; DI = the VBE mode number; CL >= count and not
+                                ; 0FFh: CF = 1. SI and DI are CLOBBERED.
+                                ; ADDITIVE like VXV_PM, so VX_ABI_VER stays
 
 ; --- a mode CLASS: the user's name for a mode, a card's number being the
 ; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer was boot
@@ -123,12 +146,16 @@ VXB_CFGVE   equ 52              ; -> drv_cfg + CFG_VE: the class byte the
 VXB_KRET    equ 54              ; = vx_kret: a kernel `ret`, where a hook whose
                                 ;    selector has VX_CONT clear goes back to
 VXB_NULL    equ 56              ; = vx_null: what the detach points vx_ep at
-VXB_SIZE    equ 58
+VXB_FONTLIM equ 58              ; -> font_last (db), font_span (db): the LIVE
+                                ;    glyph bounds - 126/94 on the ROM face,
+                                ;    255/223 while KEYBOARD.DRV's CP850 table
+                                ;    is bound (SPEC.md 6.7)
+VXB_SIZE    equ 60
 
-; font_char's glyph range, which the run body paints a blank cell for: the
-; kernel's FONT_FIRST/FONT_LAST, asserted equal in vidext.inc
+; font_char's first glyph, which the run body indexes from; the LAST one is
+; live, through VXB_FONTLIM. The kernel's FONT_FIRST, asserted equal in
+; vidext.inc
 VX_FONT_FIRST equ 32
-VX_FONT_LAST  equ 126
 
 VXA_BIT     equ 0x10            ; VID_A_VESA: 1 << VID_VESA, VID_VESA being 4
 

@@ -1776,8 +1776,10 @@ sector nothing: unset, the `%ifdef` is not assembled.
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
-`FORMAT.DRV`, the floppy formatter (§18.96), and `DISKOPS.DRV`, the disk cloner
-(§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
+`FORMAT.DRV`, the floppy formatter (§18.96), `DISKOPS.DRV`, the disk cloner
+and directory-mutation bodies (§18.99, §18.5.3), `SERIAL.DRV`, the serial
+service (§9.15), and `KEYBOARD.DRV`, optional input layouts and CP850 glyphs
+(§9.16). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
 desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
 chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
@@ -1798,10 +1800,9 @@ against 9,214, `HIBER.DRV` 4,814 against 5,489 and `FORMAT.DRV` 1,097 against
 four still give the 360KB disk five clusters. Every fetch decodes about 6KB,
 ~50 ms on the 8088, against the sectors it no longer reads.
 
-**A module's claim is its image rounded UP to whole KB** (`mem_bytes_kb_x`), and
-its own bss lives in that rounding's slack, asserted at assembly - so a byte
-moves the claim only where it crosses a KB, and that is the number a machine
-feels. The second size pass on the two biggest images took all four of their
+**A module's claim includes its image and BSS, rounded UP to512 bytes**
+(§50.2.1). A byte changes the allocation when it crosses that granule.
+The following whole-KB figures are historical: the second size pass on the two biggest images took all four of their
 claims down one: `CTRL.DRV` **12 → 11 KB** on `kern_big` (11,119 bytes and
 `cpc_buf`'s 131 of bss, against 11,649 with the buffer in the image) and
 **6 → 5 KB** on `kern_small` (4,363 against 5,347); `DISKOPS.DRV` **10 → 9 KB**
@@ -1883,13 +1884,14 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 12 on `kern_big` (ten images,
-  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 7 on `kern_small`. BIG has
+  and −38 on `kern_small`. `MOD_MAX` is 13 on `kern_big` (eleven images,
+  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 8 on `kern_small`. BIG has
   `MOD_HIBER` 3, `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7
   (`DKD_NENT` 4, §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12),
-  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_SETS` 10 and `MOD_KBM` 11
-  (`KBM_NENT` 3); SMALL has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5 and
-  `MOD_KBM` 6.
+  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_KEYBOARD` 10 (`KEYBOARD.DRV`,
+  `KL_NENT` 2, §9.16), `MOD_SETS` 11 and `MOD_KBM` 12 (`KBM_NENT` 3); SMALL
+  has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5, `MOD_KEYBOARD` 6 and
+  `MOD_KBM` 7.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -1910,7 +1912,8 @@ in the tree.
   of those zeros, and `MOD_H_IMG`, the module map and the directory size are
   all image + bss. `mod_need` claims the FILE through the paragraph door, to
   the granule (§50.2.1; the `MOD_MAX_KB` bound is taken on the bytes, before
-  the round-up), so the claim holds the bss with no figure of it in the
+  the round-up - 17KB since kern_mega's `CTRL.DRV` passed 16KB with
+  §26.8.6.1's `SX` writer, which moved the refusal and no claim), so the claim holds the bss with no figure of it in the
   kernel, and the read - or the ROM's copy (§2.10.5) - delivers it zeroed on
   every load. A packed module pays a handful of disk bytes for the zeros; a
   plain one (`kern_big`'s `CTRL.DRV`, §2.8.7) pays them in full. It replaced
@@ -2756,7 +2759,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,838 bytes, 6 sectors (with main's Color presets, at the `elendilon -> main` merge; kernel size pass 12 had it at 2,615, and 2,650 before) |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 12,502 in all (`MODC_SIZE`) |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 159 bytes): BSS, as zeros at the file's end (§2.8.1) | 159 |
+| `.modcb` | BSS, as zeros at the file's end (§2.8.1): the Keyboard page's sample and pending pick, `cp_key_state` (26 bytes, §31.16), the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 164 bytes with the `KL` key), and the scratch tail `cps_scr` .. `modcb_end` (22 bytes, §2.8.3) | `MODC_BSS` = 212 on `kern_big` |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -2829,8 +2832,8 @@ in all**.
 
 #### 2.8.8 A row adopted from memory: `KBMOUSE`, the keyboard mouse's pointer half
 
-**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 11 on
-kern_big, kern_emu and kern_mega, 6 on kern_small, so `MOD_MAX` is 12 and 7)
+**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 12 on
+kern_big, kern_emu and kern_mega, 7 on kern_small, so `MOD_MAX` is 13 and 8)
 is the keyboard mouse's pointer half (§9.6.7): the direction table, the key
 test, the button, the right button, the step and paint, keypad 5's spend and
 the end-of-pass service - what only a machine with **no** pointer runs. Its
@@ -5636,6 +5639,7 @@ VIEW_KB       equ 1          ; a listing claim's floor (2, fixed, on
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19); and `dsk_ncopy`, the **counted DS:SI→DS:DI byte copy the whole `.cold` segment shares** — `diskw.inc`, `filecp.inc`, `files.inc` and `fdlg.inc` all call it, and it lives here because `disk.inc` is the first `.cold` `%include`, so every site is a backward near reference. It was the same seventeen bytes in four files. (Its NUL string compare, `dsk_streq`, was down to one caller and is written at it since kernel size pass 14.) Not to be confused with a NUL-stopping bounded copy, which answers a different question |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/diskops.inc`  | the disk cloner (§18.99): the on-demand `DISKOPS.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
+| `kernel/diskmut.inc` | `DISKOPS.DRV` directory mutation bodies (§18.5.3): New Folder, Rename, empty-folder removal and recursive folder removal; prefix `dmo_`; shared FAT commit/rollback and load dispatch stay resident |
 | `kernel/hiber.inc`  | hibernate and resume (§87): the on-demand `HIBER.DRV` — the Hibernate window, the image write, the boot-time question, the extent walk, the stub that puts memory back from the text framebuffer and the wake — prefix `hbm_`/`hbs_`; the resident half is the template, the state block, the `.text` thunks a kernel window needs, and in **`.cold`** the boot probe, the greying predicate and the loading thunks (`hb_`/`hbf_`/`hbk_`) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21). **`.cold`** (§2.6) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22). **`.cold`** (§2.6), with its strings and dispatch tables toggled back to `.text` |
@@ -10363,6 +10367,10 @@ tenth sector moves where the image's runs split, and that boot's `int 13h`
 lost a revolution.
 
 **The resume re-asks** (`hbm_wake` step 4a, HIBER.DRV - no resident byte).
+When the optional CP850 provider is held, private SUSPEND/REARM commands
+bracket this repair. FONT_PICK sees the original font pointer throughout,
+not KEYBOARD.DRV's table; the provider is rebound only after the repaired
+cache or replacement ROM pointer is ready (§9.16.1).
 The image carries the pointer the writing machine's boot chose; the reading
 machine runs the same timed `FONT_PICK`, refills a heap copy in place (its
 claim came back with the image) or replaces a ROM pointer. It makes no
@@ -12299,6 +12307,51 @@ they met the rule at a merge rather than at a keystroke, and the ratchet did
 for them exactly what §6.6.3 says it does for a tree it arrives in: it took the
 count they had - 21 sites in two more files - and stopped it going up. Both
 lines are mixed, and both say which halves are cases and which are the pair.
+
+### 6.7 Optional CP850 extension (`kernel/keyfont.inc`)
+
+The native keyboard module (§9.16) can supply glyphs 128..255 in CP850
+without adding their bytes to the core kernel. Its `klf_enable` helper
+copies the current ASCII face (32..126) into a module-owned 32..255 table,
+clears DEL's cell and fills the extended rows from the generated,
+repository-authored glyph source. That cleared DEL cell, `FONT_BYTES` past
+glyph 32, is the blank an unprintable cell draws on a `BAKED_FONT` build
+(§6.2), as `font_zero` is beside the baked copy: `FONT_BLANK` and the run
+walkers address it from the live `[font_base]`, so it follows the table
+(the ROM arm draws the live table's SPACE). `klf_disable` restores the original
+`font_seg`/`font_base` and ASCII bounds before that module is dropped.
+The original slow-ROM-copy claim stays pinned and valid; on mega,
+activation must follow any boot-time relocation of that original face.
+A hibernate or DOS-return wake suspends this binding before FONT_PICK and
+its heap/ROM repair, so a nonzero-offset module table is never mistaken for
+a heap font at offset zero; it rearms after that original face is repaired.
+The module remains pinned by the same layout or glyph-only client holds.
+Activation/restoration reuse the caller's drawing-lock hold, or acquire
+and release that lock when called without one. This protects a worker
+paused between reading the font offset and reading its segment; an atomic
+pointer store alone cannot protect that caller.
+
+The core retains only the live last-code/span fields and the existing
+renderer routing. The live upper bound is 126 with the provider absent
+and 255 while held. A renderer outside the kernel reads the same two
+bytes, never a constant: VESA.DRV's one-pass run takes them through
+`VXB_FONTLIM` (§120.3.2). Every glyph index is zero-extended before multiplying
+by eight: `cbw` is incorrect for extended codes whose index exceeds 127.
+`OSAPI_FONT_GLYPHS` preserves its ASCII-only range 32..126 and returns
+its original stable face pointer even while native rendering uses the
+optional table. Existing clients that cache that pointer or allocate only
+95 glyph cells therefore need no new hold or larger buffer.
+Inside a kern_mega FSXF_REAL bracket this slot instead borrows the held
+conventional provider's ASCII facet until the bracket returns, as it already
+borrows a service-area copy for an original pool font. Live bounds are
+clamped to ASCII only for that bracket, avoiding a protected module-selector
+lookup in real mode, then restored before protected callers resume. The private
+seam cells still use their private guard and temporary table and are not exposed as alternate CP850 glyphs.
+
+The generated source reuses `tools/cp437font.py`'s authored shapes by
+character identity, rather than by code-page byte. New accented capitals
+and symbols are derived/authored in `tools/cp850font.py`. No font download
+or generation service is part of a guest load or a build.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -17553,7 +17606,11 @@ Five things hold it up.
   `8F00`, `9000` for `-`, `5`, `+`), and Pause (`E1 1D 45 E1 9D C5`) and
   Ctrl+Break (`E0 46`) are swallowed whole: the ROM's E1 flag (40:96 bit 0)
   and its pause bit (40:18 bit 3) take exactly the one byte each expects, so a
-  keyboard that sends no `45` loses no key. `tests/megakbcodes.py` is the row.
+  keyboard that sends no `45` loses no key. These are the scans the adapter
+  passes to `mega_k09`: on a machine whose real pointer has not spoken,
+  §9.6.4's keyboard mouse may claim keypad 5 first. `tests/megakbcodes.py`
+  establishes a real serial pointer before checking the ROM-code matrix;
+  the keyboard-mouse rows retain their separate mouseless coverage.
 
   **This replaced a `kbd_aeclaim` that decoded `AL` instead** (`AH = 1C` whose
   `AL` is neither `0Dh` typed-or-shifted nor `0Ah` with Ctrl), and the
@@ -19989,6 +20046,201 @@ greater than two mickeys in a sample, matching the DOS driver's default
 to field measurement; no emulator in this tree models the V6335D mouse. Record
 the result for horizontal and vertical sweeps, both buttons, simultaneous
 keyboard input, and detach/restart in `docs/plans/PC1-MOUSE-PLAN.md`.
+
+### 9.16 Optional international keyboard module (`KEYBOARD.DRV`)
+
+**Delivery contract, issue #385.** The story list is
+`docs/plans/INTERNATIONAL-KEYBOARD-PLAN.md`; checked stories and recorded
+verification, rather than this contract alone, establish shipped behavior.
+
+#### 9.16.1 Ownership and module control
+
+International input is a §2.8 internal module, `KEYBOARD.DRV`, built with
+the kernel and extracted by `tools/os88mod.py`. Its translation code,
+layout tables, composition data, mutable state and extended glyph storage
+are absent from the stripped core kernel. The default is BIOS input with
+no keyboard-module claim or module read. An explicit US, Spanish (Spain),
+Latin American Spanish or French legacy AZERTY selection loads the module
+in task context; a saved explicit selection may load it during boot.
+
+The narrow public control surface is `OSAPI_KEYBOARD`: AL = verb, AH =
+layout ID for SET; all registers except AX and flags are preserved. A
+successful call clears carry and returns AL = current layout, AH = 1 while
+an explicit layout or glyph client holds the module, otherwise zero.
+Failure sets carry and returns AX = an error; an absent module or failed
+load never disables usable BIOS input. QUERY with no module succeeds with
+AX = 0. No existing package's entry or slot moves. The cell is appended at
+0x023C, past the table v1.0.20261116 released at `PKG_FMT` 13, so a
+package that calls it needs Wire level 8 (§92.2's cell fence).
+
+QUERY and RAW are legal from every task. SET, HOLD, RELEASE and CANCEL
+require the UI task (task 0); a worker receives CF = 1, AX = 3 before any
+load or mutation. A worker's QUERY/RAW runs interrupt-masked from the
+controller's entry to its return, so the UI task's final RELEASE/SET cannot
+drop the module while the worker is inside its image. AX = 1 means an invalid verb, layout or owner, and AX = 2
+means unavailable module resources. QUERY and CANCEL never drop an
+activation still being established by another control call.
+
+| verb | value | effect |
+| --- | --- | --- |
+| QUERY | 0 | Return selection/hold state without loading anything. |
+| SET | 1 | AH = 0 BIOS default, 1 US QWERTY, 2 Spanish (Spain), 3 Latin American Spanish, 4 French legacy AZERTY. Validate and publish atomically; failure retains the prior selection. |
+| HOLD | 2 | Ensure the glyph provider exists and retain it for the calling instance. Repeated holds for that instance are idempotent. |
+| RELEASE | 3 | Release that instance's glyph hold; its teardown also releases it. |
+| CANCEL | 4 | Cancel pending composition without changing the layout. |
+| RAW | 5 | AH = 0 native / nonzero BIOS/guest input for the calling instance. Stores `IF_RAWKBD` in its existing flags byte and never loads the module. |
+
+HOLD/RELEASE are instance-scoped: the kernel supplies the caller's identity,
+as with the serial lease. An instance may keep its hold while its document
+or controls contain extended text; clearing/replacing that content releases
+it only after all of that instance's consumers have finished. Closing the
+last client with BIOS input selected disarms callbacks and drops the
+module. A stamped package entry may HOLD before its record is published;
+the loader abort sweep calls the same instance grant release before the
+reserved slot is reused. Final SET/RELEASE leaves every module frame before
+tail-transferring to the resident drop helper; its original FAR return is
+still the core controller's. A live IRQ entry is pinned and is never relocated or freed under
+its handler. Module data uses a writable alias on kern_mega; no protected
+code writes through CS or carries a selector into a real-mode bracket.
+
+The module has a raw-scan entry and a control entry. A raw scan is observed
+after existing physical-key tracking, with the original set-1 byte intact.
+The scan entry preserves registers: CF = 1 passes the scan, including the
+unloaded `mod_gone` refusal, and CF = 0 means consumed. Entry offset and
+segment are published together under the existing interrupt mask, so an IRQ
+cannot observe a torn FAR pointer while a new image is armed. The default slot
+therefore passes without an additional resident activation flag. The
+hardware adapter owns acknowledgement, BIOS chaining and the exact
+INT 15h return flags. The handler performs no file I/O, allocation, module
+load, rendering or arbitrary kernel/API calls. IRQ stack use is bounded
+and measured before delivery.
+
+Only the private KL_CMD module entry accepts SUSPEND (6) and REARM (7),
+used by HIBER.DRV around wake's existing font selection and repair. They
+never load or drop the module and never change layout/client holds.
+SUSPEND restores the original face, retaining a suspended state in the
+provider's existing active byte. REARM only rebinds a suspended provider:
+it refreshes its ASCII face from the repaired original pointer, cancels
+composition/prefix state and seeds modifiers from the current BIOS data
+area in the same interrupt-masked window. Neither verb is in the public
+SDK; OSAPI_KEYBOARD continues to refuse values above RAW.
+
+#### 9.16.2 Translation and physical keys
+
+There is one translator with separately reviewed definitions for US,
+Spanish (Spain), Latin American Spanish and French legacy AZERTY. Modifier
+state belongs to the arriving scan, not to the time a later INT 16h read
+drains the ring. E0/E1 handling distinguishes right Alt from left Alt and
+the ISO extra key at scan 56h. While the BIOS holds a Pause (BDA 40:18
+bit 3), a printable make passes untranslated and cancels a pending accent,
+so the ROM's own resume path ends the pause and discards the key. Each layout defines Shift/Caps behavior,
+AltGr/Ctrl+Alt, control-letter output and dead-key composition explicitly.
+
+`OSAPI_KEY_DOWN`, `OSAPI_KEY_MAP` and their make/break semantics remain
+physical. Printable output reaches the existing BIOS ring once, retaining
+its physical scan in AH; navigation and other BIOS special-key spellings
+remain compatible. Alt+Enter's existing edge latch, the keyboard mouse,
+function keys, Num Lock/keypad behavior and Ctrl+Alt+Del remain usable.
+
+A dead accent waits for the next key. A supported pair emits its single
+encoded character; accent plus Space emits the literal accent. An
+unsupported printable pair emits the literal accent then the character,
+reserving both ring slots before publishing either. The composition table
+is one run per accent, so a miss scans that accent's pairs only. Repeating
+an accent and cancellation are pinned by the layout vectors.
+Focus/ownership and layout changes cancel pending composition. A full ring
+obeys §9.8's overrun policy without publishing half a two-character result:
+a pair with no room for its second word is dropped whole and announced with
+§9.8's beep, under the same per-burst cap.
+
+The XT IRQ1, AT INT 15h AH=4Fh and mega native paths adapt the same module
+contract. They add no second port-60h read on the 8042 path. DOS, WIN16 and
+foreign guests have explicit conversion/bypass boundaries; a native
+CP850 byte must not be displayed silently with a CP437 meaning. Restoring
+the desktop restores its selection and callable module state.
+
+RAW uses bit 3 of the existing instance `I_FLAGS` byte (`IF_RAWKBD = 8`),
+with caller identity supplied by the kernel. The optional handler reads the
+front visible window's owning instance and bypasses translation while its
+bit is set, still tracking modifiers. This flag persists if the layout is
+activated after the foreign window opens; no module or extra instance byte
+is needed to register it. Instance teardown clears the flag with the record.
+
+#### 9.16.3 Optional glyphs and native text
+
+Native extended text uses CP850 byte positions for the supported Spanish
+and French characters. ASCII and control meanings are unchanged. The
+encoding is independent of the selected input layout. Euro/Unicode input
+and international filenames are outside this contract.
+
+The optional provider supplies extended glyphs to the existing opaque
+text renderers, preserving the original ASCII face. The glyph-copy slot
+retains its original stable ASCII pointer and range 32..126; it never
+exposes the optional table to legacy callers. The provider is acquired in
+task context before rendering extended content; paint routines never load it. A glyph client can hold it with BIOS input
+selected, so accented text survives a layout switch or a file reopen.
+The provider restores the original font state before its last drop, including ROM, baked and
+slow-ROM-copy paths. Private seam glyphs remain private.
+
+Shared text controls and Notepad accept and edit the supported bytes,
+including find/replace and raw-byte save/reopen. Fields with an ASCII-only
+domain retain that validation. Console codepages and proportional/PDF font
+formats keep their existing interpretation; no global reinterpretation of
+their high bytes is implied.
+
+#### 9.16.4 Selection and persistence
+
+Control Panel's Keyboard page offers BIOS default and the four explicit
+layouts with the existing controls and scrolling item list. Its UI and
+loading requests are in CTRL.DRV. The page includes a typing sample and
+does not grow the window beyond the supported adapter geometry.
+
+The page's five radio rows use full layout names. A changed pick is staged
+in the panel's own BSS; the outer mouse callback applies it only after the
+page procedure has returned. File loading follows the existing UI
+callback's graphics-lock discipline. The typing sample accepts printable
+characters, Backspace and Escape (clear). Its optional glyph hold uses the
+private built-in owner FFh and is released when no extended sample bytes
+remain or the panel closes; public callers cannot claim that owner.
+
+Big, emu and mega persist the ID in a versioned SYSTEM.CFG record through
+the existing shared parser/save discipline. Old, absent, invalid or unknown
+records use BIOS default without resetting other settings. Kern_small
+offers live selection for the session and says it lasts until restart;
+this feature does not add settings persistence to that kernel. Save failure
+retains the working in-memory selection and uses the panel's feedback.
+
+The record is `KL`, version 1, length 1, containing the layout ID above.
+The live selection is queried when settings are packed, so changing it
+outside the panel cannot leave a stale duplicate. CFG_KL is staging only.
+Boot validates it before activation; mega defers activation until its font
+and module pointers have reached their protected-mode form.
+
+#### 9.16.5 No core kernel growth
+
+For each of big, small, emu and mega, the stripped core image and default
+resident footprint must not increase against the implementation baseline,
+built with identical options/toolchain/metadata. Exact unrounded core
+code/data/BSS totals also must not increase: rung slack is not a saving.
+Hooks, entry cells, module rows, preference staging and glyph routing count
+in full and must be paid for by equal or larger savings in this change.
+Record the compressed shipped image size as well. All existing budget,
+near-window, boot-floor and small-heap guards remain unchanged.
+
+Report optional module file, image/BSS and enabled claims separately at
+§50.2.1's 512-byte granule. Adding another layout adds no core bytes.
+Selecting BIOS default and closing the last glyph client releases the
+active optional footprint; an unexplained pinned claim is a failure.
+
+#### 9.16.6 Delivery evidence
+
+The plan's final pass covers independent assembled-code vectors, all three
+international layouts, persistence/refusal, glyph-client teardown and the
+existing keyboard regressions. Check VGA/CGA/Hercules visually, XT cycle
+cost and stack use, the 8042 queued-byte case, and protected/real-mode
+transitions on mega. Publish four baseline/final size rows and screenshots
+of the tested head. Planned stories remain unchecked until their evidence
+exists.
 
 ## 10. events.inc
 
@@ -33893,8 +34145,14 @@ onkey. Kind behavior:
   `[sch_coop]`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
   "Hercules - 720x348 - mono", "CGA - 640x200 - mono" or, on kern_big,
-  "EGA - 640x350 - 16 colors" (a VESA desktop, kind 4, has no row yet:
-  §39.29.4). The geometry cannot
+  "EGA - 640x350 - 16 colors". **A VESA desktop (kind 4, §120) has no
+  row: its line is COMPOSED** from the mode VESA.DRV chose — the width and
+  height in `vid_vxrow` and the depth in `[vx_bpp]`, which the Display
+  page's label reads too (§120.6) — as "VESA - 1024x768 - 8-bit", staged in
+  `fm_hdrbuf` (borrowed: every painter of that buffer stages it afresh, and
+  this paint holds the gfx lock as they do). Until it was, the paint indexed
+  the four-row table with 4 and lettered whatever words followed it as a
+  string pointer: a garbled fourth line on every VESA machine. The geometry cannot
   be a constant in the third line any more, which is why it moved into a
   fourth; `app_about_center` re-measures every string, so unequal line
   lengths cost nothing. No onkey. Singleton (cap 1).
@@ -37483,6 +37741,53 @@ publisher, and the walker that already followed the chain. `kern_dos` refuses
 as before (`KD_BUILD`): its image is at `KD_IMG_KB`'s edge, and raising it is
 a layout decision (`kerndos/kdlayout.inc`).
 
+#### 18.5.3 Directory mutations in the on-demand disk module
+
+**Optional-keyboard integration (§9.16):** the private bodies
+for Rename, New Folder and folder removal live in the existing
+`DISKOPS.DRV` (§2.8). Their public register, CF, validation and disk-integrity
+contracts remain those in §18.4–§18.6. File reads, ordinary file writes,
+boot, module loading and the shared FAT/directory commit helpers remain
+available without loading this module. No operation in `mod_need`'s
+transitive cone may move into a module that it loads.
+
+A directory mutation loads the module on the UI task before making changes.
+The system disk must therefore be available when first invoking these
+commands. The loader preserves/restores the caller's mounted target volume;
+loading must not redirect a mutation to the system disk. **The mount gate is
+tested BEFORE the module is loaded**: `dskw_dircall` refuses `[dsk_mntok]` ≠
+1 with CF=1, AX = `FERR_NODISK` (§18.4's gate answer) and loads nothing,
+because a shut gate is exactly the state in which `mod_need`'s
+`drv_vol_bank` banks the BOOT volume's root (§51.5.2.1: a failed mount is
+not banked), so the load would open the gate there and the verb would run on the
+system disk. The module's own gate stays, for the state after a load. A
+missing or mismatched module refuses through the existing file-error path before any
+metadata is modified. It must never report success or partially rename,
+create or remove a directory on a load refusal.
+
+Module code reaches the shared resident helpers through documented private
+gates and preserves their segment/register contracts. No paint callback or
+IRQ loads it. The operation releases its module claim when finished, using
+the existing disk-module cache/drop policy; no new default boot claim or
+permanent scratch buffer is permitted. This split pays for the keyboard
+hooks with measured permanent-byte savings on every kernel. Allocation
+rounding alone is insufficient evidence for the no-growth requirement.
+
+**A folder paste (§22.3) takes the module's hold BEFORE its copy buffer.**
+`fcp_claim` sizes the buffer from the largest free run, up to 64KB, and
+counts every cache as free (§22.5), so a buffer claimed first can take the
+room the module needs and shed a kept image - on a 128KB machine every
+mkdir of the walk would then refuse `FERR_IO`. So `fcp_step`, when the entry
+is a folder, asks `mod_live` and `clo_need`s the image before `fcp_claim`,
+recording in `fcp_dhold` whether the hold is its own (the image was not
+LIVE). It is held across the overwrite question, like the buffer, and
+`fcp_stop` - every end of the operation, the stop a closed window's
+`.pastegone` sends included - drops only its own hold, through `fm_cldrop`,
+so a clone armed meanwhile keeps the image it now owns. A load refused at
+that point refuses nothing: each mkdir still tries its own load. Inside the
+hold each mkdir, rename and rmtree finds the image LIVE and neither reloads
+nor drops it.
+
 ### 18.6 `dskw_rmdir` — removing an empty subdirectory
 
 ```
@@ -40580,7 +40885,7 @@ buffering, written once and costing the kernel nothing - the write side of
 
 | call | in | does |
 |---|---|---|
-| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_VOL_STAT` for that volume's cluster ONCE - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
+| `os88_wseq_open` | SI = a NUL 8.3 name, DS:DI = a `WSEQ_SIZE`-byte stream, BX = a buffer in DS, CX = its size | creates the file EMPTY in the current directory (size 0 is a cluster multiple), and asks `OSAPI_FILE_DFREE` for that volume's cluster ONCE (its BX: `OSAPI_VOL_STAT`'s AX scales on FAT32, §19.12.8) - a FAT walk, ~105 ms on a 20 MB disk at 4.77 MHz (18.4.5), paid per stream and never per put. A buffer smaller than one cluster is refused `FERR_NAME` |
 | `os88_wseq_put` | DS:DI = the stream, ES:SI = any bytes, CX = any count (0 legal) | copies into the buffer; a full buffer writes the largest whole number of clusters it holds and moves the rest to its front - so a buffer that is itself a cluster multiple never moves a byte |
 | `os88_wseq_close` | DS:DI = the stream | writes what is buffered, any size: the last chunk is the one the slots let be short |
 
@@ -40789,8 +41094,10 @@ DOS was the only caller of the offset door and of `OSAPI_VOL_STAT` when
 they were cut, and it does not ship on the small disks (§24.5, `SMALLPKGS`).
 So on `kern_small` both cells are `stc`/`ret` stubs — legitimate here because
 every caller tests `CF` (KERN-SMALL-CUT-PLAN §10): `apps/os88data.inc`'s
-`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`'s
-open refuses its stream, so REDLINE's Inspect report is refused there —
+`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`,
+which was refused at its open here, no longer asks `OSAPI_VOL_STAT`: it takes
+`OSAPI_FILE_DFREE`'s cluster (§18.4.9.4) and appends every chunk through the
+offset cell's append, so REDLINE's Inspect report is written here too —
 and with them go the INSIDE
 arm of the body, `dsk_write_chain` and its direction byte, and the two far
 entries: **395 bytes of that kernel** (`.text` −11, `.bss` −1, `.cold` −383).
@@ -44997,7 +45304,7 @@ DataSec         = TotSec16 - FirstDataSec
 CountOfClusters = DataSec / SecPerClus
 CountOfClusters <  4085  -> FAT12
 CountOfClusters < 65525  -> FAT16
-else                     -> reject (FAT32 out of scope)
+else                     -> reject (FAT32 out of scope; kern_mega: §19.12)
 ```
 
 Reachability: detection runs after §18.2 rule 13 has passed, so TotSec16 ≤
@@ -45089,7 +45396,7 @@ at a stride of 24. `kernel/dskwin.inc` carries the `%error` for each.
 |-----|------|--------------------------------------------------------------|
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
-| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
+| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored (on a FAT32 volume, `kern_mega` only, the high word is in the name field's +14, §19.12.6) |
 | 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`, or in K/M by `fm_szfig_x` per §22.7.1); forced to 0 for type 2 |
 | 24  | 8    | zero — except that a `DRVC_FILE` driver's `FSV_ENUM` may put a FAT attribute byte at **+24**, which FIND reports (§62.9.17.1) — and **not stored in a staged listing**: `DSK_DE_STRIDE` stops at 24, `dsk_ent` is still 32 wide, and no consumer in the tree reads these eight bytes |
 
@@ -46933,6 +47240,341 @@ the Makefile, where an `.OVL` may only be a cut (`os88ovl.py -o`), a
 exemption is `tests/cfsx`, the C SDK's sidecar mode's own fixture, which
 ships nowhere.
 
+### 19.12 FAT32 — read and written on `kern_mega` (2026-11-19)
+
+**FAT32 is a format, and `kern_mega` reads and writes it; no other kernel
+does.** §19's own arithmetic stops at 65,524 clusters because every cluster
+number in this file system was a word. FAT32 widens the CLUSTER, not only the
+data area's sectors (§18.7.5), and that is resident code on every file
+operation's path — so on `kern_big` it fails the module test (§2.8) inside a
+budget held at zero growth, and on the XT it would also be slow
+(docs/plans/FAT32-MEGA-PLAN.md §1). On `kern_mega` the `.cold` rung is above
+1MB and costs no conventional memory, which is where almost all of this lives.
+**The XT's answer stays FAT16**: up to six volumes of up to 2GB, primary or
+logical (§52.4.1).
+
+The owner's decisions (2026-11-19, the plan's §5): the API names a far folder
+through **new 32-bit forms with the high word in a second register**, the old
+doors refusing what they cannot name (O1); the ceiling is **2TB**, the format's
+own (O2); a FAT32 volume is **hidden from DOS sessions** (O3); and it is
+**read-write from the first build that mounts it** (O4).
+
+#### 19.12.1 One switch, `OS88_FAT32`, and the bytes it does not cost
+
+`OS88_FAT32` is defined by `KERN_MEGA` and nothing else. Every site that
+differs is an `%ifdef` on it or one of the `CLU_*` macros (§19.12.3), which
+assemble to the word-wide instruction they replace on every other build — so
+**`kern_big`, `kern_small` and `kern_dos` assemble to the bytes they were**,
+and that is checked by hashing the three images before and after, not
+asserted. Code goes in `.cold`; what must be resident is `.bss`, counted
+against `KERN_MEGA_RESIDENT_KB` and `tests/megaseg.txt`.
+
+`[dsk_fattype]` gains a third value: 0 = FAT12, 1 = FAT16, **2 = FAT32**.
+Every FAT32 arm is reached by `cmp byte [dsk_fattype], 2` (or by the
+`jb`/`ja` the existing 0/1 tests already make), so a FAT12/16 volume on
+`kern_mega` takes the path it takes on `kern_big`.
+
+#### 19.12.2 The mount: what FAT32's boot sector must say
+
+The staged BPB (§18.9.2) grows on `kern_mega` to cover the sector's bytes
+11..50 (`DSK_BPB_SZ` = 40, 22 bytes of `.bss`). **The per-volume bank does
+not** (`DSK_BPB_BANK` stays 18): a FAT32 head is never banked, so a FAT32
+volume's remount reads its sector 0 again — one transfer on a 286-class
+machine's fixed disk, against 176 bytes of the kernel segment for every
+volume row, which is the one segment `kern_mega` is short of (tests/
+megaseg.txt). The type is still decided by the cluster count alone (§19), but the
+count is reached by a different layout, chosen by **`BPB_FATSz16` = 0**:
+
+| field | FAT12/16 | FAT32 |
+|---|---|---|
+| RootEntCnt (rule 7) | 1..512, ×16 | **must be 0** |
+| FATSz16 (rule 10) | ≥ 1 | **0**, and FATSz32 @36 ≥ 1 |
+| TotSec | TotSec16, or TotSec32 folded (§18.7.5) | **TotSec32 @32, all 32 bits** — 2TB |
+| FSVer @42 | — | **must be 0** |
+| RootClus @44 | — | in [2, CountOfClusters+1] |
+| FSInfo @48 | — | 0 or 0FFFFh = none; else < RsvdSecCnt |
+| ExtFlags @40 | — | bit 7 set = mirroring off: refused unless the live FAT (`ExtFlags & 0Fh`) is FAT 0 |
+| CountOfClusters (rule 15) | < 65,525 | **≥ 65,525** and ≤ 0FFFFFF5h |
+
+**A FAT32 BPB is refused on a floppy** (rule 13's `[dsk_vflop]` test): the
+format needs at least 65,525 clusters and no floppy has them, so a floppy that
+claims to be FAT32 is hostile or broken. **And it is refused on every kernel
+that is not `kern_mega`**, by rules 7 and 10 as before — the arms below do not
+exist there.
+
+Layout, all of it 32-bit: `FirstDataSec = RsvdSecCnt + NumFATs × FATSz32`;
+`[dsk_rootsecs]` = 0; the root region does not exist (§19.12.5). The live FAT's
+first sector is `RsvdSecCnt`, as on FAT16: a volume with mirroring off is
+mounted only when its live FAT is the first (`(ExtFlags & 8Fh) > 80h` is
+refused), and writes go to every copy either way — with mirroring on (bit 7
+clear, every volume mtools, DOS and Windows make) that is the rule, and with
+it off the other copies are unused, so refreshing them is what a driver
+turning mirroring back on does anyway. Reading a FAT other than the first is
+not worth its bytes: no tool this project knows of makes such a volume. **Nor
+does a FAT 1 read error fall back to FAT 2 with mirroring off** (§18.3's
+redundancy is a mirror's): FAT 2 is then stale, and the window's next flush
+would write it over the live FAT 1, so the load fails and the caller answers
+`FERR_IO`.
+
+#### 19.12.3 A cluster is AX and `[dsk_ch]`
+
+A cluster number is 28 bits. The FAT layer's contracts all say "AX =
+cluster", and they keep saying it: on `kern_mega` **the high word rides in
+`[dsk_ch]`**, a `.bss` word that is to a cluster what `[dsk_lbahi]` is to an
+LBA — the second half of one value — except that it is a register, not a
+one-shot. Every routine whose input or output is a cluster in AX takes or
+answers its high word there. On a FAT12/16 volume it is 0, and stays 0 because
+nothing that can only make a 16-bit cluster writes it non-zero.
+
+This is safe for the reason the rest of the FAT layer's module state is: the
+file system runs on the UI task alone (§18.4's single-task rule), so nothing
+can be inside it twice, and an ISR never touches it.
+
+What HOLDS a cluster for longer holds all 32 bits: every `.bss` cluster
+variable is `CLURES` — `resd` on `kern_mega`, `resw` elsewhere — and the
+macros load and store the pair: `CLU_LD v` is `mov ax, [v]` plus `push word
+[v+2] / pop word [dsk_ch]` (no register spent), `CLU_ST v` the reverse,
+`CLU_Z` zeroes both, `CLU_CMPMAX` compares the pair against
+`[dsk_maxclus]`'s dword. A sentinel that used to be 0FFFFh becomes
+0FFFFFFFFh, which no FAT32 cluster can be (the entry is 28 bits).
+
+**`[dsk_ch]` is scratch that every FAT call rewrites** — a listing, a stat, a
+chain step, a free count — so a caller that hands a cluster to `dsk_goto` or
+`dsk_chdir` SETS it: `CLU_HI0` for one that is a word by construction (the
+root, 0), and a folder kept across other file calls keeps its high word with
+it (Root Folder, a drive's mount, the Sticky Apps scan, an Alt-drop's link,
+a join's two folders).
+
+#### 19.12.4 The FAT window holds 4-byte entries
+
+The window (§18.8) is the same 4,608 bytes, 1,152 FAT32 entries. An entry is
+read masked to 28 bits; a write preserves the top four (the format reserves
+them); end-of-chain is any value ≥ 0FFFFFF8h, which the range test already
+treats as "the chain ends here" because it is past `[dsk_maxclus]`. A FAT32
+entry is 4-byte aligned and never straddles a sector. FAT sector numbers are
+32-bit: `[dsk_fatw0]` carries a high word (`[dsk_fatw0h]`, banked per volume
+beside it), every FAT transfer arms `[dsk_lbahi]`, and the dirty range is kept
+as LOW words, which is sufficient because it never leaves the window: the
+range's offset into the window is `d − w0` in sixteen bits, correct across a
+65,536-sector boundary. **No window starts at a low word of 0FFFFh**, which is
+`[dsk_fatw0]`'s "nothing resident": such a start moves down one sector, or,
+when it was clamped to keep the window whole at the FAT's end, UP one — down
+would drop the FAT's last sector, the one asked for. The sector past the end
+is then read (FAT 2's first, or the data area's) and never addressed: rule 16
+puts no entry in it, so nothing dirties it.
+
+#### 19.12.5 The root is a chain, and everything above the walker calls it 0
+
+On FAT32 the root directory is an ordinary cluster chain starting at RootClus.
+**"Cluster 0 is the root" stays true above the walker**: `dsk_dirw_start_x`
+resolves 0 to RootClus on a FAT32 volume, `[dsk_cwd]` is 0 at the root, every
+door's 0 still means the root, and a `..` entry whose cluster is 0 — or
+RootClus, which some tools write — goes to the root. A subdirectory's `..`
+written HERE is 0 when its parent is the root, as the format says.
+
+Because the walker resolves the root to a real chain, `[dsk_wlast]` is set by
+the root walk too, and **`dskw_dirgrow` grows the root** on FAT32 with no code
+of its own; on FAT12/16 the root region is fixed and still cannot.
+`dsk_byclus_x` (the path walk, §19.2.4) treats RootClus as 0 for the same
+reason.
+
+#### 19.12.6 FstClusHI, the listing's high word, and the compression hint
+
+**Every read of an entry's first cluster on a FAT32 volume combines FstClusHI
+@20 with FstClusLO @26**; every write of one writes both, `.` and `..`
+included. On FAT12/16 @20 is ignored, as §19.1 has always said.
+
+**The compression hint (§20.14) is not written on a FAT32 volume and not
+trusted there**: its size word is @20, which IS FstClusHI on this format, so
+writing it would point the file's first cluster into another file. The hint is
+a cache and the read path already checks the file's own `CZ` header
+(`DSK_R_CZL`, §20.14.3), so on FAT32 the mark bytes @12/@13 are cleared, @20
+holds the cluster, and a compressed file's unpacked size comes from its header,
+for `FILE_READ` (`dskw_czknow`) and for the compressor's sizes (`cmz_sizes`).
+**`OSAPI_FILE_FIND` does NOT read it on FAT32**: +18 is the size the file
+occupies and +22 bit 0 is clear, because there is no hint to report from and
+the header's peek goes through `dskw_raw` and `dsk_secbuf`, which the write
+paths own (a sniff there, tried in review, broke a paste). So a package that
+sizes a claim off FIND's +18 for a packed file on a FAT32 volume is refused
+`FERR_BIG` by the read; a package that must read such a file sizes it with
+the read's own answer. Open: a FIND-side header read that owns its buffers.
+
+**The staged listing (§19.1) keeps its 24-byte stride**: the cluster's high
+word goes in the NAME field's last two bytes, +14..+15. A display name is at
+most twelve characters and its NUL is at or before +12, so those two bytes are
+never read as text — the trick `IMG_DVSEG` plays on a volume label (§18.101).
+On FAT12/16 they are zero, as before.
+
+#### 19.12.7 Writes: allocation, root growth and FSInfo
+
+The allocator scans the window for a zero entry **under the 28-bit mask** and
+marks the cluster 0FFFFFFFh; the rover, the free count and the chain walks are
+32-bit. `dskw_free_chain` writes 0 under the mask.
+
+**FSInfo's free count is advisory, so it is never trusted and never kept**:
+the first mount of each volume in a boot (`dsk_f32_fsi`, from `disk_mount_x`;
+`[dsk_fsimask]` holds one bit a volume, cleared when `dsk_vol_add` reuses the
+slot) writes FSInfo's FSI_Free_Count and FSI_Nxt_Free as 0FFFFFFFFh,
+"unknown", after checking its three signatures (41615252h @0, 61417272h @484,
+AA550000h @508) — a sector that does not carry them is not written, and
+neither is one already saying unknown. Every FAT32 driver must recompute an
+unknown count, so the value is always truthful whatever this kernel then
+writes. It is at the mount and not at the first FAT flush because the flush
+runs with `dsk_secbuf` in use by its caller; the cost is one read and at most
+one write per volume per boot, including a boot that only reads. The free count this kernel answers is its own FAT scan
+(`dsk_free_clus_x`, §18.4.10), a window at a time — on a large volume that is
+the FAT's whole size read, which is why the copy engine's room test keeps its
+early stop (`[dsk_fcgoal]`, which is a dword here). The Disk window's status line
+(§22.7) keeps that count in **KB** on a FAT32 volume rather than bytes - a
+free 4GB is past a dword of bytes and not of KB under the 2TB ceiling - and
+prints it with a third unit, `G`, after K and M (`fm_szfig_kb`); every other
+volume's figure is the bytes it was.
+
+#### 19.12.8 The API: `OSAPI_FILE_PLACE`, and the 0FFFFh rule
+
+**A 16-bit door cannot name a folder past cluster 65,535, and it says so
+instead of guessing.** The rule, on every kernel:
+
+- a door that ANSWERS a cluster (`OSAPI_FILE_HERE`, `OSAPI_ARG_FILE`, FIND's
+  +16) answers **0FFFFh** when the high word is non-zero — `HERE` with CF = 1
+  as well; `ARG_FILE` with CF = 0, because its CF says whether there IS a
+  document and there is (the name is answered, and the folder word then
+  refuses wherever it is taken); FIND with its record's flags bit
+  `OSAPI_FIND_FAR` (+22 bit 1) set and the entry still listed;
+- a door that TAKES one (`OSAPI_FILE_GOTO`, `GOTO_Q`, `GOTO_QM`,
+  `OSAPI_FILE_COPY`'s DX/CX) **refuses 0FFFFh** with CF = 1 — and AX =
+  `FERR_NAME` where the door answers a code in AX (`GOTO_Q`, `GOTO_QM`,
+  `FILE_COPY`; `FILE_GOTO` keeps AX, as it always has). On FAT12/16 it
+  always did (0FFFFh is past `[dsk_maxclus]`); on `kern_mega` it is refused
+  by name, because on FAT32 it could be a real folder. The doors' `.text` is
+  unchanged: each calls a `.cold` far entry (`dkf_dsk_chdir16`,
+  `dskf_dsk_goto16`, `dsk_here16f`) in place of the one it called.
+  `OSAPI_PKG_START`'s document locator (§21.5.3), whose folder is a word,
+  refuses it on `kern_mega` with AL = `LD_EBAD`.
+
+So a package built before this reaches a far folder and is refused there,
+loudly, and never lands in the wrong one. Cluster 65,535 itself is nameable
+only through the 32-bit forms.
+
+**`OSAPI_FILE_PLACE`** (an RN door, so it is an ABI addition with no
+`PKG_FMT` bump) is the 32-bit form, one verb in AL. The cluster is DX = low,
+**CX = high**; BL = the volume. Being RN, it stages DS:SI as a name for
+every verb, so SI must address the caller's own data even where the verb
+reads no name (SI = 0, the package's header, will do):
+
+| AL | verb | in | out |
+|---|---|---|---|
+| 0 | `FPL_HERE` | — | BL, DX, CX: `OSAPI_FILE_HERE`'s answer, whole |
+| 1 | `FPL_GOTO` | BL, DX, CX | `OSAPI_FILE_GOTO` |
+| 2 | `FPL_GOTO_Q` | BL, DX, CX | `OSAPI_FILE_GOTO_Q` |
+| 3 | `FPL_GOTO_QM` | BL, DX, CX | `OSAPI_FILE_GOTO_QM` |
+| 4 | `FPL_ARG` | — | BL, DX, CX: `OSAPI_ARG_FILE`'s folder, whole (the name comes from `ARG_FILE`, which answers it even when its DX is 0FFFFh) |
+| 5 | `FPL_STAT` | SI = an 8.3 name in the current folder | AL = its attribute, DX, CX = its first cluster |
+
+An unknown verb is refused with CF = 1, AX = 1. **Only `kern_mega` has a
+body** (`dsk_fpl_door`, `.cold`); every other kernel holds the index with a
+refusal (CF = 1, AX = 1, `RDREF`), because no folder there needs a second
+word and a body would be resident bytes for nothing (docs/KERNEL-MEMORY.md).
+A package written to the 32-bit forms asks `FPL_HERE` once: CF = 1 with
+AX = 1 means the 16-bit doors are complete on this kernel, and it uses
+them. `OSAPI_FILE_COPY`
+gains **`OSAPI_FCP_FAR`** (AL bit 7): ES:DI points at four words, the source
+folder's low and high then the destination's, in place of DX and CX. Every
+other kernel refuses the bit for nothing: AL is then a verb its door does not
+name (`cmp al, 1 / ja`), CF = 1 - which `FPL_HERE`'s refusal already told the
+package to expect.
+
+**`OSAPI_VOL_STAT`** answers DOS's four registers, and on a volume whose count
+does not fit a word it SCALES: AX (sectors per cluster) doubles and BX/DX halve
+until both fit, so AX × CX × BX is still the free bytes to within one cluster;
+past AX = 32,768 the counts clamp at 0FFFFh. `OSAPI_FILE_DFREE` answers free
+BYTES in DX:AX, exact below 4GB and clamped at 0FFFFFFFFh above — a package
+that needs the figure on a larger volume multiplies `VOL_STAT`'s registers,
+which is within a cluster of it. **A scaled AX is therefore NOT the cluster
+size**, and AX × CX passes a word at AX = 128: a package that chunks, aligns
+or masks by the cluster takes `OSAPI_FILE_DFREE`'s BX, which is the true
+sectors per cluster (1..64) on every volume - `os88wseq.inc` (§18.4.9.4),
+PIXEL's ring and XTMP3's destination test do.
+
+**`OSAPI_FILE_READ_SEQ`'s cursor** is the caller's 16 bytes and has no room for
+a second word. On a FAT32 volume `RSQ_CUR` is the cluster's low word and the
+kernel keeps its high word in its own copy of the last cursor (`dwr_c`); a
+cursor whose high word the kernel does not hold — another stream read in
+between — walks from the file's first cluster, which is correct and slower.
+**`FSEQF_RUN` and `FSEQF_MAP` are refused on a FAT32 volume** (CF = 1, AX =
+`FERR_NAME`): their runs are word pairs, and a caller of MAP must already
+handle refusal (a redirected volume has always refused it).
+
+#### 19.12.9 What refuses FAT32, by name
+
+- **FSCHECK** (§60) answers `FSKE_NOFAT`: its bitmaps are a bit a cluster in
+  one segment, which cannot cover 2^28.
+- **The formatter and the disk tool** format FAT12/16, which an XT can read too.
+- **DOS sessions** (§96): the gather that builds kern_dos's volume table drops
+  a FAT32 row (O3), so a DOS program sees no such drive rather than one its
+  FAT code would misread.
+- **Hibernation** (§99) refuses a FAT32 volume as its target; its image
+  records are cluster words. `hb_pick`, THE predicate (§47 rule 5), passes
+  over a volume whose `[dsk_f32mask]` bit is set and goes on to the next
+  fixed one, so the menu item, the probe, the write and the DOS handoff's
+  no-park image all agree; `hbm_root`'s refusal stays as the backstop for a
+  volume that bit has not seen mounted.
+- **The installer** (§117) does not offer a FAT32 partition as a target: the
+  boot path reads FAT12/16.
+- **Mounting a disk image** whose file is on a FAT32 volume answers 'Cannot
+  mount from here': the claim keeps the host folder and the file's first
+  cluster as words (`IMG_M_DIR`/`IMG_M_CLUS`). Clone's image end is whole
+  (`CL_FCLUH`).
+- **The association cache** (§54.7): `ASSOC.DAT`'s rows hold a program's
+  folder as a cluster word, so the writer keeps no cache on a FAT32 volume
+  and a row read there is a hint with a zero high word — a miss costs the
+  search the cache exists to save, nothing worse. The in-memory hints and
+  the pending document's folder are whole (`assoc_cluh`, `assoc_dcluh`).
+
+#### 19.12.10 HDD.DRV offers 0Bh/0Ch; the kernel's mount decides
+
+`HDD.DRV` hands partition types 0Bh and 0Ch to `osapi_vol_mount` on every
+kernel, and the kernel is the fence: `kern_mega` reads the volume, and every
+other kernel's BPB check refuses FATSz16 = 0 as it refuses any boot sector
+not in its format, so the slot is dropped again exactly as a partition whose
+type lies is (§52.4). No flag says which kernel reads FAT32, because none is
+needed — and the driver had no byte to spend on asking: it is on its 4,608-
+byte rung (§52.4.1), and the acceptance was paid for inside it
+(`hd_part_isfat` became a one-word bit table, `hd_sel`/`hd_pslot` one word
+load). The cost on the other kernels is one boot-sector read at the
+automount for a partition that would have been skipped by type.
+
+A FAT32 slot is mounted without the 2GB FAT16 bound (`hd_part_big` is not
+asked at the mount; the Format window still clamps to it, because what it
+writes is FAT16): the partition's own 32-bit length is the volume's
+(`HDV_LEN`, §18.7.5), and the transport is the last bound — rung 1's native
+ATA is LBA28, **128GB**, and a transfer past what the drive's rung addresses
+fails as a disk error. The installer (§117) names the slot "FAT32" and does
+not offer it as a target (§19.12.9).
+
+**On `kern_mega` a FAT32 partition takes its letter in slot order like any
+other volume** - DOS's and Windows' lettering of the same disk - so a volume
+after it on that disk moves one letter later than in builds before this one:
+a FAT32 primary ahead of a FAT16 logical drive makes the FAT32 volume C: and
+the FAT16 one D:, where it was C:. What was saved against the old letter
+names the FAT32 volume now - a desk shortcut's `SC_R_VOL` is a bare volume
+index - and misses there ('not found'); nothing is written to the wrong
+volume. The other kernels drop the refused row before the next slot mounts,
+so their letters are unchanged.
+
+#### 19.12.11 Gates
+
+`tests/fat32.py` builds a FAT32 volume on the host with mtools (`mformat -F`)
+behind a hand-made MBR, with files and a folder placed past cluster 65,535, and
+boots `kern_mega` with `HDD.DRV` on it. The guest lists the root, enters the
+far folder, launches a package off the volume, copies a file onto it, makes a
+folder and deletes a file; the host then reads the volume back with mtools
+(`mdir`, `mtype`, `fsck.fat -n` where present) byte for byte. A second leg
+checks that `kern_big` still refuses the partition with the driver's caption.
+That the three other kernels are the bytes they were is checked by hashing
+their images at the merge base and at the head (the PR's evidence), not by a
+row: a row cannot know the base's bytes once the build number has moved.
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -48121,7 +48763,14 @@ real-mode answer, the inline `mov ax, dx / cmp ax, 1` it was, is a five-byte
 `.text` body off kern_mega. `tests/unit/t_api_abi.py --all` decodes `rd_tab`
 on all four kernels and fails on an index that differs, a kind out of its
 range, or an entry naming the wrong routine (`DOOR_OWN` ledgers the
-refusals).
+refusals). **A kernel may instead END its table before a cell it refuses**,
+but only the table's LAST cells: step 3 below answers an index at or past
+its `RD_N` with the refusal entry's own CF = 1, AX = 1, for no bytes, while
+a gap mid-table would move every later index. kern_small does this for
+`OSAPI_FILE_PLACE` (§19.12.8), its heap rung being locked; kern_big holds
+an `RDREF` row for it (`api_refusec`, six `.cold` bytes) because the SDK's
+indices are generated from kern_big's table, and t_api_abi passes a cell
+past a kernel's `RD_N - RD_P` as refused.
 
 **The door, step by step.** The `int` pushes FLAGS, CS and an IP that names
 the index byte, and clears IF and TF.
@@ -62541,7 +63190,7 @@ there would be nothing to keep one in.
 | off | len | field |
 |---|---|---|
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
-| 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
+| 1 | 1 | its PLACED cell as a v2 byte (`0x40` + a cell below 63, else `0xFF`; the whole byte is in the `SX` block's `DZ`) — in the FILE only: CTRL.DRV writes it from `[desk_zpin]` and the boot reader puts it back (§26.8.6, §26.8.6.1) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
 | 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a Sticky App row (§110.2). The Sticky App mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
@@ -62712,17 +63361,26 @@ a shortcut, or an item the user PLACED (§26.9.5):
 ```
 +0     'O88CFG',0,0  dw 3            ; unchanged
 +10    records ... dw 0              ; unchanged - every reader stops here
++X     the SX block (26.8.6.1)       ; a v2 reader never looks here
 +T     count * SC_REC                ; the live rows, verbatim and compacted,
-                                     ;   each row's +1 its table byte
-+T'    DESK_SC0 bytes                ; zones 0..8's table bytes: a PLACED
-                                     ;   one's, 0xFF for everything else
-+end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2
+                                     ;   each row's +1 its cell as a v2 byte
++T'    DESK_SC0 bytes                ; zones 0..8's cells as v2 bytes: a
+                                     ;   PLACED one's, 0xFF for one that flows
++end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2, for ever
 ```
+
+A **v2 byte** is `0x40` over a cell 0..62, or `0xFF`. That is the byte the
+table itself was until §26.9.2 split it, and it is what every kernel since
+version 2 decodes.
 
 The footer is read from the END, so the reader never walks the records to
 find it. With nothing placed the file is byte for byte what it was before.
 Version 1 (no pins block, a two-byte column/row cell) is refused rather than
 read: it went to nobody.
+
+**`SC_VER` is frozen at 2** (§26.8.6.1). The cells §26.9.1 widened to a
+whole byte travel in an `SX` record that a version-2 reader never sees, so a
+file this kernel writes is a file every older shortcut-reading kernel reads.
 
 - **The writer is `CTRL.DRV`'s.** `sc_m_ser` composes settings, rows, pins
   and footer in a claim of its own, PINNED, for the length of the write.
@@ -62740,14 +63398,84 @@ read: it went to nobody.
   untouched for a file of `CFG_FBUF` or less, which is every file with no
   trailer. A bigger file is read whole into the shortcut claim; a valid
   trailer's rows move down to the claim's base with every string
-  force-terminated, and the pins block and each row's table byte go into
-  `[desk_zslot]` VERBATIM, because the file is untrusted only in what it can
-  break and §26.9.3's first reflow drops any cell this screen has not got.
+  force-terminated, and the pins block and each row's cell go into
+  `[desk_zpin]`, taken from the `SX` block's `DZ` record when the file has
+  one and decoded from the v2 bytes when it does not, and are copied into
+  `[desk_zslot]` as well, so every placed item starts SHOWN in its cell, as
+  the old byte's placed-and-not-gone state did. That way the first reflow
+  keeps it there if it is live, and a flowing drive earlier in index order
+  cannot take its cell first. Nothing else is validated: the file is
+  untrusted only in what it can break, and §26.9.3's reflow shows an item
+  whose cell this screen has not got somewhere else, keeping the cell.
 - **An OLDER kernel refuses a file that carries a trailer, and loses every
   setting.** Its `ovc_load` reads with `CX = CFG_FBUF` and `dskw_read`
   answers a larger file with `FERR_BIG` before any I/O. It cannot be fixed
   from this side, and it bites only on a downgrade, since the file sits
   beside `KERNEL.SYS` on the one boot volume.
+
+##### 26.8.6.1 Upgrading SYSTEM.CFG: the trailer only grows, and only where old readers do not look
+
+§51.5's settings already evolve safely. Every value is a record with a key, a
+`ver` and a `len`, an unknown key is skipped (rule 1), and a changed meaning
+is a new `ver` (rule 2). The trailer is positional and has a single version,
+so bumping it is the one change that costs a downgraded kernel something. A
+version 3 that held whole-byte cells was written once, on the branch that
+widened the cells, and never shipped. Under it an older kernel found no
+trailer and booted with its settings but without a single shortcut or
+placement. So the rule for the trailer is:
+
+1. **`SC_VER` stays 2.** The rows, the pins block and the footer keep the
+   layout and the encoding a version-2 kernel reads.
+2. **What a newer kernel adds goes in the `SX` block**, between the settings'
+   terminator and the rows. Every settings reader stops at the `dw 0`, and
+   the trailer reader works back from the END of the file to where the rows
+   start, so neither reads a byte of it:
+
+   ```
+   records: dw key  db ver  db len  data[len]   ...as §51.5's, one after another
+   tail:    dw length-of-the-records  dw 'SX'   ...ending where the rows start
+   ```
+
+   `ovl_sc_load`'s `.sx` finds the tail, walks the records, and skips any key
+   or `ver` it does not know by its length, as §51.5 rule 1 does. A length
+   that runs past either end is not a block, and the v2 bytes stand.
+3. **A value too wide for its v2 byte is written in both places.** The v2 byte
+   says what an older kernel can use, and the `SX` record carries the whole
+   value. Today there is one record:
+
+   | key | ver | len | data |
+   |---|---|---|---|
+   | `DZ` | 1 | `DESK_SC0` + count | every placed cell as a whole byte, `[desk_zpin]`'s: the table zones 0..8, then each row in file order |
+
+   The row's own byte holds that cell as a v2 byte: `0x40` + the cell below
+   63, and `0xFF` above it, which an older kernel places in its first free
+   cell. CTRL.DRV writes the block with every trailer, so the path runs on
+   every save and is not a special case for VESA.
+
+**What each pairing gets:**
+
+| writer → reader | shortcuts | placements |
+|---|---|---|
+| this kernel → this kernel | all | all, every cell up to 254 (`DZ`) |
+| this kernel → a v2 kernel | all | every cell below 63: all of VGA, EGA, CGA, Hercules and VESA 800×600. A cell past that flows to the reader's first free one |
+| a v2 kernel → this kernel | all | all it had (v2 bytes, decoded) |
+| this → v2 → this | all | the v2 kernel's save drops `SX` (§51.5 rule 1), so cells past 62 come back as it left them |
+
+The cost is no resident byte. The writer is CTRL.DRV's settings core (about
+74 bytes, which took `kern_mega`'s image to 16,430 and `MOD_MAX_KB` from 16
+to 17 - the owner's call, 2026-11-20: a refusal bound, so only that one
+claim grows, by a 512-byte granule while it is loaded), the reader is `.boot3`, and `.sx` copies the `DZ` record into `[desk_zold]`,
+which nothing reads before the first reflow. The file grows by
+8 + `DESK_SC0` + count bytes, 32 with fifteen shortcuts.
+
+**The gate is a frozen version-2 reader.** `tools/os88stik.py`'s `parse_cfg_v2`
+is the version-2 kernel's `ovl_sc_load` written once in Python and never
+edited. `tests/unit/t_stik.py` holds `os88stik.cfg`'s files to it: the
+shortcuts come back, each cell below 63 is that cell, a wider one is `0xFF`,
+and the settings head parses to its terminator. `tests/desksc.py` holds the
+SYSTEM.CFG the KERNEL writes to it as well, after a drag, so the writer cannot
+drift from the host's copy. **A change that makes a file it writes unreadable
+to a version-2 kernel fails both.**
 
 #### 26.8.7 What is resident, and what is CTRL.DRV's
 
@@ -62827,26 +63555,48 @@ of adapters.** Two rules make that true, and both were wrong once:
 | Hercules 720×348 | 5 | 7 | 35 |
 | EGA geometry 640×350 | 5 | 6 | 30 |
 | CGA 640×200 | 4 | 6 | 24 |
+| VESA 800×600 (§120) | 9 | 7 | 63 — exactly the old cap |
+| VESA 1024×768 | 12 | 10 | 120 |
 
 `[desk_ncell]` (kern_big) is how many cells this screen has: the columns from
 cell 0's left to the band's left edge, a left dock included, times
-`[desk_rows]`, capped at 63. `desk_rowcalc` computes it with the rows, so a
+`[desk_rows]`, capped at `DESK_CMAX`. `desk_rowcalc` computes it with the rows, so a
 display switch (§39.11.2) or a dock move re-shapes the grid and reflows it in
 the same call. The ITEM count does not follow the cell count: it stays at
 24 (§26.8.1's `SC_MAX` is 15), the CGA's cells. More cells means more places
 to put the same items.
 
+**`DESK_CMAX` is 255, and the build proves every screen fits under it.** A cell
+is a whole byte, `DSL_NONE` (`0xFF`) being "no cell", so 255 cells is what the
+tables can name. Until VESA it was 63: six bits of a byte that also carried
+a placed bit and a gone bit. A 1024×768 desktop has 120 cells, so the grid
+stopped after the 63rd and an item could be dropped only in the six or so
+columns nearest the right edge, about 600 px of a 1024 px screen.
+`DESK_FITS` (`desk.inc`) works out the cell count of a screen with no dock
+in the way and fails the build when it exceeds `DESK_CMAX`. It is applied to
+Hercules's 720×348 and, under `VID_EXT`, to `vxabi.inc`'s `VXG_WMAX` ×
+`VXG_HMAX`, the widest primary `VESA.DRV` will choose (§120.2.2, the
+driver's `VX_XMAX`/`VX_YMAX`). So **a larger VESA mode is a kernel build that
+checks the grid can hold it**: 1280×1024 (12 × 16 = 192 cells) fits, and
+1600×1200 (285) fails here, and then needs a 16-bit cell. The runtime cap
+stays as the guard behind that check. `kern_small` keeps 64, because its
+volumes take the first cells in order and never the 64th.
+
 #### 26.9.2 The table
 
-`[desk_zslot]` holds ONE BYTE PER ZONE, and that byte is the whole answer to
-"where is it, and is it shown":
+Two bytes per zone, in two adjacent tables, answer "where is it, and is it
+shown":
 
-| bits | | |
+| table | holds | `DSL_NONE` (`0xFF`) |
 |---|---|---|
-| 0..5 | `DSL_SLOT` | the cell, 0..`[desk_ncell]`−1 |
-| 6 | `DSL_PIN` | PLACED: the user put it there. A shortcut always is |
-| 7 | `DSL_GONE` | not shown. On a placed item it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free |
-| `0xFF` | | nothing: no item, or a flowing one that is not live |
+| `[desk_zslot]` | the cell it is SHOWN in, 0..`[desk_ncell]`−1 | not shown |
+| `[desk_zpin]` (kern_big) | the cell it is PLACED in: the user put it there (a shortcut always is). While the item is not shown it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free. Shown and placed, the two are the same cell | it FLOWS |
+
+A third, `[desk_zold]`, is `desk_reflow`'s scratch (§26.9.4). The tables were
+one byte, with the cell in bits 0..5, `DSL_PIN` at bit 6 and `DSL_GONE` at
+bit 7, and that is the 63-cell cap §26.9.1 retired. `desk_init` fills
+`[desk_zslot]` and `[desk_zpin]` with one `rep stosb`, because they are
+adjacent.
 
 The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
@@ -62858,8 +63608,11 @@ live, so it holds no cell and is never painted or hit. That test has to be
 resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
 zone a cell is showing.
 
-**A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
-capped below — so "nothing" needs no test of its own in the reflow's compares.
+**A cell no screen has is `DSL_NONE` itself**, which `[desk_ncell]` (at most
+`DESK_CMAX`, 255) never reaches, so in the reflow's compares "nothing" needs
+no test of its own: a flowing item's `[desk_zpin]` is past every screen's
+cells and goes to the first free one. `desk_cmark` passes over any cell at
+or past `DESK_CMAX`, so posting "no cell" is harmless.
 
 #### 26.9.3 The placement rule: `desk_reflow`
 
@@ -62869,20 +63622,41 @@ live — so it is the whole of "a volume came", "a volume went", "the Wire
 came", "an item was moved or removed" and "the screen changed shape". Two
 passes, and their order is the design:
 
-1. **Let go.** Every FLOWING item releases its cell (kept under `DSL_GONE`
-   for the repaint). A PLACED item that is no longer live goes from the
-   screen but REMEMBERS its cell. Any item in a cell this screen has not got
-   is forgotten.
+1. **Let go.** Every item releases its cell UNLESS it is placed, live, and
+   shown in its own `[desk_zpin]` cell. A FLOWING item always lets go. So
+   does a DISPLACED one, shown somewhere else because its cell was taken or
+   this screen has not got it, so that it tries its own cell again first. A
+   PLACED item that is no longer live goes from the screen and keeps
+   `[desk_zpin]`, so it REMEMBERS its cell.
 2. **Take.** Every live item without a cell, IN INDEX ORDER, takes one: a
-   placed one its remembered cell if that is free, otherwise — and every
-   flowing one — the first free cell. Index order is volumes, then the
-   service item, then shortcuts, so the Wire follows the drives whichever
-   driver loaded first, exactly as it did.
+   placed one its own cell if this screen has it and it is free, otherwise
+   — and every flowing one — the first free cell, and **the cell of its own
+   is kept**. Index order is volumes, then the service item, then shortcuts,
+   so the Wire follows the drives whichever driver loaded first, exactly as
+   it did. A shortcut with no cell of its own (a wish of `0xFF`) is placed
+   wherever it lands.
+
+**`[desk_zpin]` is never forgotten by the reflow.** It was: an item in a cell
+the screen had not got lost its placement, and a placed item whose cell was
+taken became a flowing one. With 63 cells on every screen that cost little.
+With VESA it cost every placement past the VGA's 42 cells on every boot,
+because kmain runs the first pass (`[desk_ready]`, below) on the boot's VGA
+grid and `vx_boot_x` switches the desktop to 1024×768 only after it. A drive
+dragged to the left of a VESA desktop came back in the right-hand column.
+Now that item is shown in the first free cell of the small grid and goes back
+to its own cell in the reflow `vid_switch`'s `desk_rowcalc` runs. A trip
+through the Display page to a smaller adapter and back keeps the layout for
+the same reason. Only the user (a drag, a remove) and `OSAPI_DESK_ITEM`
+write `[desk_zpin]`, and the boot reader seeds it from SYSTEM.CFG. Two items
+whose own cells are the same (a drive dragged elsewhere while unmounted,
+then a shortcut dropped into its cell) settle without flapping. Pass 1 keeps
+whichever one is shown there, the other takes the same first free cell on
+every pass, and it goes back once the cell is free.
 
 So the plan's D2 — *gapless, by re-adding every unplaced drive on any
 change* — costs no knowledge of what changed: an unplaced item is a "drive"
 to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
-writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
+writes the asked-for cell into `[desk_zpin]`, not shown, and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
 
@@ -62905,8 +63679,13 @@ answer written down, and it needs neither `desk_owner` nor `[desk_ready]`.
 #### 26.9.4 What a change repaints
 
 `desk_reflow` posts every cell it CHANGED — the one an item left and the one
-it took — through `desk_cmark`, which sets the cell's bit in the 64-bit
-`[desk_cdirty]` and `[desk_zdirty]`, and posts `ui_task`. Nothing else is
+it took — through `desk_cmark`, which sets the cell's bit in
+`[desk_cdirty]` (`DESK_CMAX` bits, 32 bytes on kern_big) and
+`[desk_zdirty]`, and posts `ui_task`. It is a DIFF: pass 1 copies every
+`[desk_zslot]` into `[desk_zold]`, and pass 2 posts a zone's old and new cell
+only when they differ, so an item that went nowhere costs nothing.
+`desk_zones_paint` steps over a clean `[desk_cdirty]` byte eight cells at a
+time, so 255 cells cost it 32 compares when only one is dirty. Nothing else is
 needed to repaint a mount, an unmount, a driver attaching, a drag or a
 remove. `desk_zones_paint` runs `wm_paint_dmg` (§11.91) once per dirty cell:
 the desktop dither under it, any item now in it, and only the windows that
@@ -63432,7 +64211,7 @@ makes a link.
 `fm_dgdrop` asks `fm_mods`, which now answers Alt (bit 3) beside Ctrl and
 Shift, AT THE DROP. The drag's armed Cut is disarmed as a desktop drop's is,
 and the gesture goes to CTRL.DRV as `SC_OP_LNK` with the destination's volume
-and folder. `sc_m_lnk` composes the record in `cpc_buf` from the drag's
+and folder (on `kern_mega` its high word too, in CX, §19.12.3). `sc_m_lnk` composes the record in `cpc_buf` from the drag's
 `fcp_cb*`, sc_m_new's path code minus the picture, writes it with
 `dskw_write` (an existing link of that name is replaced) and ends in
 `fm_paste_res`, so the listing is re-read and repainted like a paste's.
@@ -73933,8 +74712,10 @@ number* as a keystroke. Measured, that is a field that takes the caret and then
 ignores every digit typed into it — no error, no diagnostic, and the caret
 still blinking to say the machine is listening.
 
-**A driver's page only**, and that is not a gap to be filled in later: a key
-that reached a static page would have nothing to do there.
+**A driver's page and the Keyboard page (§31.16) only**, on both kernels: a
+key that reached any other static page would have nothing to do there, so
+`modc_e_onkey` hands the selected `CP_IKEY` record's keys to `cp_key_key` and
+everything else to the driver's page (kern_big) or drops it.
 
 **It is in the image, beside `cp_item_click`, as `CPE_ONKEY`** — and it was
 resident for most of its life, as a size decision that has since expired. When
@@ -73943,8 +74724,10 @@ spent (paint, click, flush, tick), so a fifth doubled that table for *every*
 module, in `.bss` every machine carries, and forty-one resident bytes was the
 cheaper of the two. §2.8.1's per-module blocks retired the cap: an entry costs
 `CTRL.DRV`'s own four bytes, so the body moved and what stays resident is
-`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**
-(`kern_small` has no key handler, §62.9.15). It does NOT call `mod_need`: a key
+`cpf_cp_onkey`, a far call and a `ret` — **−32 resident bytes on `kern_big`**.
+`kern_small` had no key handler (§62.9.15) until the Keyboard page's sample
+gave it one: `cp_tpl` names `cpf_cp_onkey` there too, with `CPE_ONKEY` in its
+own slot block. It does NOT call `mod_need`: a key
 reaches the panel only while its window is up, and the image is loaded before
 the window opens and dropped when it closes, so a load here could only ever be
 a floppy read on a keystroke — and a slot resting on `mod_gone` drops the key,
@@ -74321,6 +75104,49 @@ the kernel's DS (§12.4), so CTRL.DRV stages a menu into `cp_sbuf`, and 28
 bytes do not hold twelve items. Widening it is resident `.bss` for one view;
 the arrows are none. `kern_small` has none of this: there is no driver to pin.
 
+### 31.16 Keyboard page — optional layouts and typing sample
+
+The Keyboard item appends after the existing static items, preserving their
+record IDs. The frame remains 320×151, with the existing list scrolling on
+big kernels and the shorter static list on small.
+Display remains the only hidden static page. The hide bitmap covers the
+first eight records; additional records are always visible. The build
+asserts that the hideable Display record stays in that bitmap.
+
+The right pane has five existing radio controls at x4, y22/36/50/64/78,
+with full labels at x22, two pixels below each glyph: BIOS default,
+US QWERTY, Spanish (Spain), Latin American Spanish and French AZERTY.
+The selected ID is queried from the keyboard module. A changed choice is
+staged, then applied after the page returns. Load failure retains the prior
+choice and reports it. Selecting the current choice changes nothing.
+An extended sample byte (80h and up) first HOLDs the keyboard module, which
+may load it; a refused HOLD drops the byte and shows the same `Keyboard not
+loaded` toast. Nothing latches the refusal, since on `kern_mega` CTRL.DRV
+was a few bytes short of the `MOD_MAX_KB` claim kernel.asm asserts when this
+was written (the bound is 17KB since §26.8.6.1), so each later extended byte
+asks, and is answered, again.
+Only the previous and new selected glyphs are redrawn after activation.
+
+The sample caption is at (4,96), its frame is (2,108)–(217,121), and 24
+character cells start at (6,111). While this page is selected it receives
+ordinary typed keys, including the supported CP850 characters; Backspace
+removes its last character and Escape clears it. This is a sample, with no
+document or file format of its own. The field uses opaque padded runs, so
+a shorter replacement does not need an erase-and-letter pass.
+
+The saved-setting caption at (4,122) says `Saved when panel closes` on
+kernels with settings persistence and `Until the next restart` on small.
+The shared label helper adds 2 pixels to the text position, so its final row spans
+y124–131, wholly inside the 132-pixel content pane on CGA.
+Changing a layout marks the existing deferred settings write owed; closing
+Control Panel saves once. The sample and pending transaction reside in
+26 bytes of CTRL.DRV's own BSS, separate from the save buffer: desktop
+placement gestures can save settings while the panel is still open. A clean
+close also reaches the existing module flush entry to release the sample's
+glyph hold, without loading an absent module or writing settings.
+The page reuses the existing 28-byte kernel string staging buffer without
+expanding its backing.
+
 ## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
 **What it is.** A latch-free, port-free CPU implementation of `vga12.inc`'s
@@ -74667,15 +75493,14 @@ hands its row to unit 2), so `cp_fdltr` reads the letter off the unit's row
 when it has one and otherwise names the one `dsk_flop_add_x`'s order would give
 it — A:, B:, D:, E: on a machine that has not put something there first.
 
-#### 31.14.2 Where the row sits: last, so the hard disk's page is under it
+#### 31.14.2 Static category order
 
-The static list is grouped rather than appended: Scheduler, Date/Time,
-Drivers, Display, then **Sound, Theme and Dock** together — how the machine
-sounds and looks — and **Floppy last**. Driver pages follow the static rows in
-class order (§31.9), and `DRVC_DISK` is the lowest class that publishes one
-(`DRVC_SOUND` publishes none), so when `HDD.DRV` is loaded its page is the row
-directly under Floppy and the two disk pages read as a pair. Without it,
-Floppy is simply the last row.
+The static list groups Scheduler, Date/Time, Drivers, Display, Sound, Theme,
+Dock and Floppy. Keyboard (§31.16) is appended after Floppy so the existing
+category IDs remain stable. Driver pages follow all static rows in class
+order (§31.9); `DRVC_DISK` is the lowest class that publishes one
+(`DRVC_SOUND` publishes none). Thus a loaded `HDD.DRV` page follows Keyboard.
+The keyboard page also exists on kern_small, after its existing categories.
 
 Nothing keys on the order but the record constants, which moved with it:
 `CP_IVID` 4 → 3 and `CP_ISND` 3 → 4 (and 3 ↔ 2 on kern_small), and
@@ -109112,10 +109937,11 @@ partition (§52.4.1), so a disk partitioned into three comes up as three
 volumes, three drive letters and three desktop icons. Two tests decide, and
 both are needed:
 
-- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh. An extended
-  partition (05h/0Fh) is not a volume but a chain of them, and is walked
-  rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is a format this kernel does
-  not read (docs/plans/FAT32-MEGA-PLAN.md is what reading it would take);
+- the partition **TYPE** byte is one of 01h, 04h, 06h, 0Eh, 0Bh, 0Ch. An
+  extended partition (05h/0Fh) is not a volume but a chain of them, and is
+  walked rather than mounted (§52.4.1); FAT32 (0Bh/0Ch) is offered to every
+  kernel's mount, which only `kern_mega`'s accepts (§19.12.10), and without
+  the 2GB bound below;
 - and the volume actually **mounts**. A partition whose type says FAT and
   whose content does not gets its row and its claim handed straight back, and
   the walk carries on to the next slot. That is the half a type byte cannot
@@ -109390,9 +110216,9 @@ stays 3,584 and the claim 4 KB.
   other letter in an extended partition (issue #386). Making logical drives
   in the disk tool is still out of scope — DOS's FDISK does that — and an
   install target is still a primary, which is what a BIOS boots.
-- **FAT32.** A format, not a partition type: cluster numbers are words through
-  the whole of the kernel's file system and its API. docs/plans/FAT32-MEGA-PLAN.md
-  is the survey and the plan, kern_mega first.
+- **FAT32** on `kern_big`. A format, not a partition type: cluster numbers are
+  words through the whole of that kernel's file system. `kern_mega` reads and
+  writes it (§19.12); docs/plans/FAT32-MEGA-PLAN.md is the survey and the plan.
 
 ## 52.10 Install — booting os8088 from a hard-disk partition
 
@@ -112570,6 +113396,16 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
     `OSAPI_FSX_PAGE`, `OSAPI_VIDEO`, `OSAPI_FONT_GLYPHS`, `OSAPI_KEY_DOWN`,
     `OSAPI_KEY_MAP` (§9.7.3), `OSAPI_SND_CAPS`, `OSAPI_WM_CONTENT` and
     `OSAPI_WM_WAKE` (MEGA-VIDEO-REALMODE-PLAN 7.2);
+  When the optional native provider is held (§9.16.3), its table is already
+  conventional and needs no service-area copy. The existing `fsx_rfont`
+  word carries FFFFh for this case (every normal copy offset is even).
+  Entry keeps its converted real segment and nonzero base, and clamps live
+  bounds to 32..126 so FONT_GLYPHS does not inspect protected KLFP selectors.
+  The returned ASCII pointer is borrowed only until the bracket returns;
+  the provider stays pinned by the unchanged layout/glyph clients. Return
+  restores the provider's 255/223 bound/span after the selector walk, before
+  another protected-mode caller can run. Ordinary pool-font copies and
+  default-face brackets retain their existing behavior.
   * **as it is, with a real-mode arm** of a few bytes: `OSAPI_FSX_WAIT`,
     whose `FSXW_FRAME` waits on `hlt` (there is no scheduler to yield to),
     and `OSAPI_MOUSE`, which answers the pointer's words and does not run
@@ -119903,7 +120739,8 @@ RD_MAXKB    16384       the ARITHMETIC ceiling - never what is offered
 RD_MINKB    8
 RD_DEFKB    64          what a machine with no saved settings gets
 RD_STEPKB   8           the step of - and +, and the granule of every size
-RD_FILEMAX  65024       the largest single file (see below)
+RD_FILEMAX  65024       RETIRED: the largest single file before the 32-bit
+                        walk (see below); a file is bounded by its store
 RD_MAXENT   96          directory rows, over the whole volume - in the
                         table's claim, ahead of the chain (62.9.13.1)
 ```
@@ -119931,13 +120768,16 @@ that half succeeds must fail as a whole, and taking the small one first is
 what makes the failure cheap. The directory rides in the same claim, ahead of
 the chain (§62.9.13.1).
 
-**A file is capped at `RD_FILEMAX` and the reason is arithmetic, not policy.**
-Every offset inside a file here is a word — `FSV_READAT` takes one — and
-65,024 is the largest multiple of 1,024 under 64KB. A larger file is refused
-with `FERR_BIG` before a byte moves, which is the refusal the one-extent store
-already made and in the same words. The *transfer* arithmetic is 32-bit
-throughout (`rd_read`, `rd_write`, `rd_append` all take `DX:CX`), because the
-file API's counts are and a store this size can hold one.
+**A file is bounded by its store, and no longer by `RD_FILEMAX`.** The cap
+was arithmetic, not policy: while every offset inside a file was a word,
+65,024 - the largest multiple of 1,024 under 64KB - was the largest file. The
+walk is 32-bit now: `FSV_READAT` takes its offset in DI:SI, `rd_io` walks the
+extents from a 32-bit `[rd_off]` and folds the caller's buffer after every
+piece, and `rd_fits` (`drivers/ramdisk/rdfsv.inc`) refuses with `FERR_BIG`
+only a file larger than the whole volume, before a byte moves. The *transfer*
+arithmetic was always 32-bit (`rd_read`, `rd_write`, `rd_append` all take
+`DX:CX`). So a store in XMS holds a file of megabytes, up to `RD_MAXKB`, and a
+package larger than 64KB runs from it with its parts read at their offsets.
 
 **The store may live above 1MB.** `RDC_LOC` selects the conventional claim heap
 (§50) or the extended store (§41), and the toggle is **greyed on a machine
@@ -120735,7 +121575,24 @@ RDPV_MOUNT  = 3   in   AX = KB wanted; rounded UP to RD_STEPKB
                        has RDPV_STATE for its size); nothing is resized
                        CF = 1, AL = RDERR_MEM: rd_kb_max is under the size,
                        and nothing was claimed; or rd_mount's own RDERR_*
+RDPV_MOUNTC = 4   in   CX = KB wanted; otherwise exactly RDPV_MOUNT
 ```
+
+**Mount AS THE MACHINE: `RDPV_MOUNTC` through `OSAPI_DRV_USE`'s `DRVU_CALL`.**
+The package door (`OSAPI_DRV_CALL`) keeps the caller's dispatch stamp on
+purpose - a sockets or sound verb answers FOR the caller - so an extended
+store mounted through it was claimed with `OSAPI_XMEM_ALLOC` stamped as the
+CALLING INSTANCE, not the kernel's `0xFF` `rd_mount` assumes. Two faults
+followed, invisible until a Wire Load reached an XMS store (92.13.1): every
+file verb's stage copy, which `drv_fs_call` asks as the kernel, was fenced
+against the block (`xm_chk`) and refused - `FERR_IO`, `Could not write` on
+the first big entry - and the caller's teardown would have force-freed the
+block under the still-mounted volume. `DRVU_CALL` clears the stamp the
+calling task set, which is the Control Panel's own `drv_cp_call` bracket, but
+it keeps AX for itself and passes CX, DX, SI and DI through; `RDPV_MOUNTC` is
+`RDPV_MOUNT` with the size in CX, so the Wire mounts through it and the store
+is the machine's. `RDPV_MAX` is 4; a driver from before answers verb 4 CF = 1
+and AX = 0, which the Wire reads as the store refused.
 
 **UI-task context only, both of them**: `RDPV_STATE` asks `OSAPI_MEM_AVAIL`
 and `RDPV_MOUNT` registers a volume and paints a desktop zone, neither of
@@ -143237,8 +144094,8 @@ therefore refused rather than reduced, and the refusal lives in `thm_set` —
 the one routine both callers go through — rather than at the callers.
 
 **The test is the PRIMARY's kind mapped to a depth, and NOT `[vid_mono]`.**
-`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify; `VID_HERC`
-and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
+`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify, as does
+`VID_VESA` (§120); `VID_HERC` and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
 as long as VGA was the only colour adapter, where the identity and the
 capability were the same fact; `VID_EGA` (§39.24) is a colour adapter that is
 not a VGA, so the identity test refused Color on the one machine class this
@@ -143253,6 +144110,17 @@ while the same panel on the VGA accepted it. `[vid_kind]` is the primary's and
 `vid_ctx_act` never moves it (§39.12), so `cp_thm_colgrey` reads the same byte
 as `thm_set` and the greying and the refusal cannot disagree — with each
 other, or with which monitor the panel happens to be on.
+
+**`cp_thm_colgrey` is `thm_set`'s own arithmetic, not a list of kinds.** Both
+take `[vid_kind]` − 1 and compare it unsigned against 2, which is below for
+`VID_HERC` and `VID_CGA` (the 1bpp kinds) and not below for every other kind.
+`VID_VESA` (§120) is 8 or 16 bits deep and draws the same 16-colour desktop
+through its DAC (§120.1), so it qualifies. The predicate used to name `VID_VGA`
+and `VID_EGA`, and when kind 4 arrived `thm_set` accepted Color on a VESA
+desktop while the Theme page greyed the row and refused the click: the two
+had drifted apart, which is exactly what §47 rule 1 forbids. A kind added
+after VESA is colour by default to both of them, so a new 1bpp kind has to
+be numbered below `VID_EGA` or change the ONE compare in both places.
 
 - The Control Panel's row is **greyed** on a 1bpp machine (§47 rule 3: grey a
   *fact*), and `cp_thm_colgrey` is the single predicate behind the greying,
@@ -162864,7 +163732,7 @@ closed:
 |---|---|---|
 | a module calling resident code | every `SHOUT` (`call far [sh_v_*]`) and `CHFP` (`call far [ch_v_*]`): 1,170 + 18 sites in `CHART.OVL`, 336 in `MACRO.OVL` | the shim is `CHX` → **`ch_xthunk`** (`apps/os88chartovl.inc`) |
 | `MACRO.OVL` calling `CHART.OVL` | `CHOUT`, 17 sites: `call far [ch_ovfar]` straight across | `SHOUT ch_ovcall` — through resident code like any other call out |
-| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
+| a module calling a kernel slot that can claim | `WM_CREATE`/`SHOW`/`DESTROY` (raise caches), every `FILE_*` (sector cache, FAT window, mount): 30 sites in `CHART.OVL` (one of them `os88chart.inc`'s BMP export, `CH_FWRITE`), 9 in `MACRO.OVL`; and `KEYBOARD` (a HOLD loads `KEYBOARD.DRV`, §9.16.1): `os88kbd.inc`'s two sites in `CHART.OVL`, the Note box's CP850 (§83.7), through `OS88KBD_CALL` | **`SHK`**: a vector, a `CHX` shim and a two-instruction resident stub (`sh_k_*`) — one byte SHORTER a site than the far call it replaces |
 | `ES` = the module's own claim across a file call | `MACRO.OVL`'s text channels read into and write from its own tail (§81.91.1, `push cs / pop es`) | `SHK m2read` / `m2write`: the claim is PINNED for the call and declared again after (`sh_m2pin`/`sh_m2unpin`, §66.5.7.1's `np_dmov` pair), because `dsk_xfer` pins a destination per transfer and not the walk between them (§66.3 rule 5) |
 
 **`ch_xthunk` is `cc_ovthunk`'s shape done in place**, because no register
@@ -162890,7 +163758,8 @@ the loop. No `jmp far`/`call far` with an immediate segment exists in either
 module, and no resident code far-calls a vector. The slots a module still calls
 DIRECTLY are the ones that cannot reach `mem_claim`: the drawing and font
 slots, `SET_COLOR`, `WM_CONTENT`, `VIDEO`, `KEY_DOWN`, `WM_KEEPH`,
-`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing).
+`WM_ONWHEEL`, and `MEM_AVAIL` (which plans and moves nothing). `KEYBOARD` is
+NOT one of them: its HOLD loads a module (`mod_need`, which claims).
 
 **Declared after the read and the stamp check**, never before — the read
 holds `ES:BX` in the claim: `ch_ovneed` with `ch_ovreloc` (two stores,
@@ -163249,6 +164118,37 @@ wants the stipple keeps font_run. WireChat never disables its field.
 It is `OS88LINE_PENS`' shape (§83.5): each site a macro that is the call it
 replaced when nothing is defined, so every other package assembles
 byte-identical.
+
+### 83.7 CP850 text input and explicit glyph holds
+
+`apps/os88kbd.inc` provides `os88kbd_hold`, `os88kbd_release` and a bounded
+buffer probe. They preserve registers and pass failures as carry. Calls
+that can load the provider belong in task/key/file-load context, never in
+a paint routine. Holds are idempotent per instance (§9.16.1).
+A HOLD can load `KEYBOARD.DRV` and so claim, which may compact: an includer
+whose copy of the file sits in a movable module defines `OS88KBD_CALL`
+before the include to route the slot call through resident code, as SHEET's
+chart module does with `SHK keyboard` (§82.16.11). The default is the plain
+`call OSAPI_KEYBOARD`.
+
+`OS88LINE_CP850` opts a one-line field into extended native input; its
+absence retains the existing ASCII-only contract for addresses, filenames
+and other restricted fields. An opted-in field accepts 32..126 and
+128..255 after acquiring a glyph hold. DEL (127) stays a control byte.
+The multiline prose field accepts the same set by default; defining
+`OS88TEXT_ASCII` restores its ASCII-only input contract.
+
+Neither control guesses that another control's buffer is gone: a caller
+releasing an instance hold must first finish all its extended-text users.
+Instance teardown supplies the final release. Notepad uses these same
+holds for keyboard, file and clipboard input, preserves extended document
+bytes through line-ending normalization and save/reopen, and releases the
+hold on New when no remaining find/replace buffer needs extended glyphs.
+A paste only ACQUIRES: the selection it replaced is in the undo arena, and
+Undo can restore extended bytes no scan of the document would find.
+If extended file content cannot acquire the provider, the bytes remain
+preserved and the app reports that the keyboard module is needed; it
+never substitutes a different codepage or silently deletes those bytes.
 
 ## 84. Software floating point (`apps/os88fp.inc`)
 
@@ -180341,7 +181241,7 @@ WC_PKGFMT with ITS OWN `PKG_FMT`, which needs nothing from the kernel: a
 running package's format IS the kernel's, or the loader would not have
 started it (§20.2.0). Higher greys both buttons with `Needs a newer os8088 -
 update the system disk`, lower with `Made for an older os8088`; a WC_NEEDW
-above `WIRE_LEVEL` (7) greys them with `Needs a newer Wire - update the
+above `WIRE_LEVEL` (8) greys them with `Needs a newer Wire - update the
 system disk`. 0 in either is a catalog from before the bytes and is not
 judged. **Every Wire released before these bytes reads none of them** - the
 reader never looked past +252 - so the bytes protect machines from the
@@ -180367,16 +181267,18 @@ disk beside its kernel, so `Needs a newer Wire - update the system disk` is
 the true sentence for it too. The rows are `WIRE_CELL_LEVELS` in
 `tools/os88wire.py`.
 
-**A new `PKG_FMT` starts a new generation, and `PKG_FMT` 13 has no rows yet.**
+**A new `PKG_FMT` starts a new generation, and `PKG_FMT` 13 has one row.**
 A row describes a RELEASED kernel at this format; every older package is
 fenced by WC_PKGFMT whatever its level. Kernel size pass 19's flag day moved
 `PKG_FMT` 10 -> 13 and renumbered the table (§20.3.4), so the rows that
 stood for v1.0.20261014 .. the level-6 Wire (levels 3 to 7, 0x046D ..
 0x04E9 in the pre-flag-day numbering) describe no kernel a format-13 package
-can meet, and `WIRE_CELL_LEVELS` is empty: the first release at 13 is the
-floor, and the release after it that first adds a cell adds the first row.
-`WIRE_LEVEL` stays 7 - it is also the reader's capability (the archive
-formats, §92.13.1), which the generation does not reset.
+can meet, and were dropped: the first release at 13 is the floor.
+v1.0.20261116 was that release (20261117 and 20261118 followed at the same
+format), its table ending at 0x023C, so `OSAPI_KEYBOARD` (§9.16), the first
+cell appended after it, cuts the first row: `(0x023C, 8)`. `WIRE_LEVEL` did
+not restart at 3 - it is also the reader's capability (the archive formats,
+§92.13.1), which the generation does not reset - so the row is level 8.
 
 **A DOOR cell needs no level.** A rare cell is an index into the kernel's
 door table (§20.3.4), and a kernel with no word for an index REFUSES it - CF
@@ -180389,10 +181291,11 @@ image carrying data spells `CD 81 FF` by chance.
 of the last release** (the rule the PKG_FMT 10 rows were cut by: two
 releases shared that format and both Wires were level 2, so one byte had to
 hold both back, and the older table decided).
-`WIRE_TABLE_END` (0x023C, the flag day's `osapi_table_end` with `OSAPI_FILE_FIND_SEQ` (§19.7.1.1),
+`WIRE_TABLE_END` (0x0244: the flag day's `osapi_table_end` with `OSAPI_FILE_FIND_SEQ` (§19.7.1.1),
 `OSAPI_MOUSE_REL` (§9.14) and `OSAPI_KEY_MAP` (§9.7.3) appended before any kernel at `PKG_FMT` 13 was released - a cell added to an UNRELEASED generation moves the
-end and cuts no row) is the end of the table the TOP level's kernel
-has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
+end and cuts no row - which made 0x023C, and then `OSAPI_KEYBOARD` (§9.16)
+appended after that table was released, which cut the level-8 row) is the
+end of the table the TOP level's kernel has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
 --pkgdir`, because no Wire in the field can be told about it: the release
 that first publishes such a package adds a row (the next level, its first
 cell), moves `WIRE_TABLE_END` to that kernel's `osapi_table_end`, and raises
@@ -180720,6 +181623,7 @@ File menu's items carry a `MENU_DIS` prefix from it.
 | `Made for an older os8088` | both: `WC_PKGFMT` is below it |
 | `Needs a newer Wire - update the system disk` | both: `WC_NEEDW` is above `WIRE_LEVEL` |
 | `Needs RAMDISK.DRV - use Add to Disk` | `WF_ARC`, Load only: no driver of the class answers `RDPV_IDENT` with `RD_SIG`, or it refuses `RDPV_STATE` (an older driver) |
+| `Needs an XMS RAM disk - use Add to Disk` | `WF_ARC` with `WF_DISK` (a version 2 tree, 92.13.1), Load only: `RDPV_STATE`'s location is not `RDL_XMS` |
 | `Needs NNNK free for a RAM disk` | `WF_ARC`, Load only: no store is mounted and `RDPV_STATE`'s largest possible store is under `WC_NEEDKB` rounded up to `RD_STEPKB` (92.14) |
 | `RAM disk needs NNNK more room` | `WF_ARC`, Load only: a store is mounted and its free KB is under `WC_NEEDKB` |
 
@@ -181058,13 +181962,23 @@ the cap for one kind of entry and changes nothing else.**
   archive that needs no big entry stays version 1 and every Wire in the
   field keeps reading it.
 - **The record carries `WF_DISK`** with `WF_ARC` and `WF_FLOPPY` (92.2), and
-  the writer derives it: a version 2 archive cannot go to a RAM disk, whose
-  largest file is `RD_FILEMAX` = 65,024 bytes (62.9), so Load Program greys
-  with `Needs its files on a disk - use Add to Disk` and Add to Disk is the
-  path. The predicate tests `WF_DISK` on an archive BEFORE the RAM disk
-  decision (92.7). A reader from before this section does not, and its Load
-  Program fetches the archive and refuses it at the header - the same
-  outcome, said later.
+  the writer derives it. It once meant "no RAM disk at all": a RAM disk file
+  stopped at `RD_FILEMAX` = 65,024 bytes. 62.9.10's 32-bit walk took that cap
+  away, so it now means **a RAM disk in extended memory only**. A store big
+  enough for a version 2 tree in conventional memory is heap its own program
+  then cannot start in - Borat Teaches Typing's 227KB, mounted on a 640KB
+  machine, would leave too little to run it - so `wr_ramck`, which the
+  predicate and the click both ask, requires `RDPV_STATE`'s location (AH) to
+  be `RDL_XMS` for a `WF_DISK` archive and otherwise greys Load Program with
+  `Needs an XMS RAM disk - use Add to Disk`. In XMS the store is bounded by
+  `RD_MAXKB` (16MB) and the machine's extended memory, and the usual room
+  reasons follow. The pieces land with `OSAPI_FILE_APPEND` on the RAM disk
+  exactly as on a floppy. **A Wire from before this rule greys Load Program
+  on every `WF_DISK` archive** (`Needs its files on a disk - use Add to
+  Disk`), which is the safe half of it, so the catalog needs no new level;
+  one from before this section refuses the archive at the header.
+  `tests/thewire.py` asserts the grey on its 360KB machine, and `--xms` (the
+  `thewirexms` row) runs a version 2 tree from an XMS store.
 
 **On the machine it is a third pause.** The worker stores a big entry's bytes
 into the claim exactly as it stores a small one's; when the claim is full and
@@ -181155,7 +182069,7 @@ second time by name from the RAM disk's Disk window with the Wire still open,
 it comes up again. Loading `CPMTOOLS` after it wants a store the core's mount
 did not size for, and says so with the figure (`RAM disk needs NNNK more
 room`) — the RAM disk's page sets a larger one first, or Add to Disk takes it
-to a floppy. `RD_MAXENT` is 96 rows and `RD_FILEMAX` 63KB; the core is 39
+to a floppy. `RD_MAXENT` is 96 rows; the core is 39
 entries in 42 rows with its three folders, and its largest file is the
 package. On a 286 with XMS the store is
 above 1MB and none of this is tight.
@@ -234870,7 +235784,7 @@ discovering them at publication:
 
 | limit | value | what the converter does |
 |---|---:|---|
-| the largest single file, `WIRE_FILEMAX` (§92.13) — and `RD_FILEMAX` = 65,024 one device along (§62.9.10), because every offset inside a RAM-disk file is a word | **64,512** | **refuses to write a band over it.** A bank that would exceed it — a 4bpp VGASPEC picture at 76,800 bytes, or any future style — is written as **numbered parts**, and the package reads them in sequence into ONE claim with one `os88_file_read_seg` per part at successive 512-aligned offsets. Each part is 512-padded, so the next part's base is aligned by construction |
+| the largest single file, `WIRE_FILEMAX` (§92.13) — which was also `RD_FILEMAX` = 65,024 one device along (§62.9.10) until the RAM disk's walk went 32-bit | **64,512** | **refuses to write a band over it.** A bank that would exceed it — a 4bpp VGASPEC picture at 76,800 bytes, or any future style — is written as **numbered parts**, and the package reads them in sequence into ONE claim with one `os88_file_read_seg` per part at successive 512-aligned offsets. Each part is 512-padded, so the next part's base is aligned by construction |
 | directory rows over the whole RAM-disk volume, `RD_MAXENT` (§62.9.10) | 96 | keeps the folder **under about 90 files**. The 80 level records are grouped **eight to a file**, the way the DOS `LEVELxxx.DAT` files already do, and there is one band per style bank — so the folder is about 30 to 40 files with the package, the overlay and the manifests in it |
 | the whole archive, `WIRE_ARCMAX` (§92.13) — the first size refused | 1,048,575 | the full set is ~836KB of converted data plus the package and the overlay, which fits with room. The converter prints the archive total beside its per-geometry cluster manifests |
 | every name | uppercase 8.3, `[A-Z0-9_-]` | the band, part and manifest names are generated in that alphabet, not derived from the level titles |
@@ -239530,7 +240444,10 @@ fourth byte of the `VM` record** (ver 3, 4 bytes: kind, `[vid_dmode]`,
 (`kernel/vxabi.inc`'s `VXC_*`): 0 is Auto; else bit 7 set, bits 0-1 the
 width (640, 720, 800, 1024), bits 2-3 the height (400, 480, 600, 768), bit 4
 the depth (clear 8, set 16; a 15bpp mode answers for 16). The attach takes
-it in CL and picks the offered mode matching all three, falling back to Auto
+it in CL and picks the offered mode matching all three - the DEEPEST of them
+when a 15bpp and a 16bpp record share the class, ties to the first (`vx_find`,
+since §135.9.1: before it the first answered, so no class reached QEMU's 0111h
+and `VXV_NEXT` cycled 0110h/0111h for ever) - falling back to Auto
 when none does — a settings disk carried to a card without that mode gets the
 best that card has, never a refusal (the §39.11.3 safety story, one byte
 along). `VXV_PICK` (CL = a class) chooses again at run time, and `VXV_NEXT`
@@ -239678,7 +240595,10 @@ Then one private verb, `VXV_INIT` (0x40), hands the driver `vx_blk` in DX:SI
 state that already exists (`vid_tab` row 4, `gfx_color`, `vga_xorm`,
 `vga_pn`, `gfx_sub_st`, `font_seg`, `wm_clip_r0`, `wm_clip_cm`, `cur_tabp`,
 `cur_hx`, `cur_drawn_x`, the `ico_*` cells, `vid_kind`, `gfx_pat`, `vx_ep`
-itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
+itself, the two kernel addresses `vx_kret` and `vx_null`, and `font_last`
+with `font_span` - §6.7's LIVE glyph bounds, `VXB_FONTLIM`, which
+`VX_FONTRUN` reads with the table it bounds; until `VX_ABI_VER` 6 the run
+tested the constant 126 and drew every CP850 code as a blank cell). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
 `vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
 resident and the one resident row where it is not, §39.2) from the chosen
@@ -239976,8 +240896,11 @@ sixteen back off the glass (white is white, black is black). `tests/vesacp.py`
 (S4) drives the Display page: the VESA row at the four-row pitch, two clicks
 on it cycling the class 0 → 128 → 132 with the label changing and a longer
 label's tail erased, then Set Primary landing on 640x480x8 with `vx_class`
-0x84 and a 640x480 screendump. All three are soak rows (QEMU by name,
-CLAUDE.md's closed list). The resident hook is measured by
+0x84 and a 640x480 screendump. `tests/vesakbd.py` types n-tilde into the
+Keyboard page's sample under Spanish (Spain) and reads its eight authored
+rows back off the glass - §6.7's CP850 face through `VX_FONTRUN`, which
+drew every code past 126 as a blank cell until `VXB_FONTLIM`. All four are
+soak rows (QEMU by name, CLAUDE.md's closed list). The resident hook is measured by
 `tests/unit/t_buildmatrix.py`'s `novidext` row, and `t_vidext.py` keeps the
 selector inventory of §120.3.1 honest. The fullscreen round trip is S8's
 driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and
@@ -239987,6 +240910,56 @@ Bochs's vgabios offers nothing above 800x600, so Auto lands on 0114h there,
 and `tests/vesa.py`'s `px` re-expands a 565 pixel QEMU's way because Bochs's
 display fills the low bits with ones. `vesablitd` is not ported: its
 picture disk carries the shipped PiXEL, and kern_mega runs PiXEL's arm.
+
+### 120.10 Mode information for a mode changer - `VXV_INFO`
+
+The wide Control Panel's mode table (§135.9) needs every offered mode's
+geometry, depth and memory, and the card's VBE version and video memory -
+which `VXV_NEXT` (§120.2.3) answers only one class at a time and the card
+facts not at all. `VXV_INFO` (`0x44`, `kernel/vxabi.inc`) answers both in
+registers, one call a record, so the table is `count` calls and no walk.
+
+**Why registers.** The caller reaches the driver through `drv_call`, which
+spends BX on the driver row and enters the image with ES = the kernel's
+segment: there is no buffer a caller can name for the driver to fill that is
+in the driver's own segment, and the kernel's segment is not the caller's
+when the caller is a module. Three verbs' worth of precedent (`VXV_NEXT`)
+already returns in CL/CH/DL/DH.
+
+| in | out |
+|---|---|
+| `AL` = `VXV_INFO`, `CL` = `0FFh` (the CARD) | CF = 0. `AX` = the VBE version word (QEMU answers `0300h`), `DX` = total video memory in 64KB units (4F00h +18), `CL` = the offered count, `CH` = the index of the RUNNING record, `SI` = the index Auto would pick (the "recommended" mode, §120.2.3) |
+| `AL` = `VXV_INFO`, `CL` = i < count (RECORD i, the table's order, which is the card's) | CF = 0. `AX` = X, `DX` = Y, `CL` = its class byte (`VXC_*`, exactly the `VE` byte `VXV_NEXT`/`VXV_PICK` use), `CH` = its depth (8, 15 or 16 - a 15bpp mode says 15 here although its class says 16), `SI` = the framebuffer KB it needs (BytesPerScanLine x Y, rounded up to a KB), `DI` = the VBE mode number |
+| `CL` >= count and not `0FFh`, or the image never initialised | CF = 1, nothing else defined |
+
+**Registers.** BX is kept (it is the caller's driver row); AX, CX, DX, SI and
+DI are outputs, so the verb **clobbers SI and DI**, unlike `VXV_NEXT`, whose
+caller paints a pane through them. The card's version and memory are read
+once at attach and copied into four bytes of the driver's state, because the
+4F00h buffer is the attach-only region that is zeroed once the mode is
+chosen (§120.2.1, `vx_attok`). Memory is in KB, not banks, so the page's
+column is one divide away from a figure a user knows; a mode that fits in
+the card is not tested here - the card's memory is in the same answer and
+the table greys the rows that exceed it.
+
+**The index is the record's position** in the driver's table (at most 16,
+`VX_NMODES`), stable for the life of the image. `VXV_PICK`/`VXV_NEXT` still
+speak classes; the index is only for the information verb.
+
+**ABI decision: `VX_ABI_VER` stays 6.** This verb is ADDITIVE in
+`VXV_PM`'s exact sense: a kernel that predates it never sends it, and an
+image that predates it refuses an unknown verb with CF = 1 (`vx_entry`'s
+`.no`), which the panel reads as "no information: fall back to the
+`VXV_NEXT` walk". Stepping the number would refuse a stale `VESA.DRV` beside
+the new kernel for nothing. A change to the record's meaning (a register
+moving) is the case that WOULD step it. `tools/abi.lock.json` covers
+`apps/os88api.inc` and `drivers/os88drv.inc` for `PKG_FMT` and `DRV_VER`
+and `kernel/vxabi.inc` for `VX_ABI_VER`: the fingerprint of the latter moves
+with this change, which is a clarification of the contract and not a bump
+(`tools/abilock.py --update`).
+
+**Cost.** `VESA.DRV` image (bss included) 7,421 -> 7,542 bytes (+121); no
+resident kernel byte.
 
 ## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
 
@@ -258449,6 +259422,955 @@ routines that follow it:
 Byteopoly's banks: song bank 1,129 bytes (4 songs, 37 pitches, 7 patches,
 20 patterns), effects bank 357 (20 effects), of a 5 KB allowance.
 
+## 134. Borat Teaches Typing (`apps/boratype/`)
+
+Native C typing tutor. Its binding contract is docs/BORATYPE-SPEC.md;
+its story list is docs/plans/BORATYPE-PLAN.md. It reuses the C package
+runtime (§73), band core (§130.6), game kit (§133), native fullscreen
+latch (§11.2), and the exclusive bracket (§53) for CGA color gameplay.
+No new resident kernel memory or API slot is allocated.
+
+## 135. The wide Control Panel - a second face for VGA and VESA (`kernel/cpw*.inc`, `CPWIDE.DRV`, `CPWIDE.DAT`)
+
+**Status: the plan is `docs/plans/CPWIDE-PLAN.md`; each story there says
+whether a subsection below is pinned only or shipped.** Until a story is
+ticked, what its subsection describes is a design, not a fact about the
+kernel.
+
+**Premise.** The Control Panel of §31 is 320×151 because CGA is 200 rows:
+§31.1 pins 151 as the minimum that holds nine list rows under `wm_fit`'s CGA
+ceiling, and every page lives in a 221×132 pane. On a 640×480 VGA or an
+800×600 / 1024×768 VESA desktop that pane is a postage stamp: the Drivers
+page shows four drivers at a time with no room to say what any of them is,
+the Display page cannot list the modes a VBE card offers (§120.6 cycles them
+through one radio row), and the Theme page names four themes it cannot show.
+The owner's brief (2026-11-21):
+
+> redesign the control panel for vga and vesa video modes where there is
+> more room to show information and provide a more powerful control panel
+> layout. Use a modular approach to determine what control panel UI to load
+> without bloat. Color, assets, icons and other UI elements to enable better
+> usability are allowed. The drivers view is especially in need of a
+> redesign since we plan to grow the library of drivers. I also want to have
+> a more powerful video mode changer and theme changer since I am going to
+> build out more VESA video modes and special video drivers in the future.
+
+The design reference is three mockups and two icon sheets made with Codex's
+image generation, kept with their prompts as source (`docs/cpwide/`,
+`kernel/cpwart/`).
+
+### 135.1 What it is, in one table
+
+| | |
+|---|---|
+| what | a second FACE of the same Control Panel: the same `KIND_CTRL` window, the same settings, the same `SYSTEM.CFG` bytes, the same close-time flush (§31.8) - drawn as a large two-pane window with icons, grouped page list, a header strip and a status line |
+| where | **`kern_big`, `kern_emu` and `kern_mega` only.** `kern_small` has no VGA renderer (§39.27) and no driver layer (§51.0); it never assembles a byte of this section and its `CTRL.DRV` is byte for byte unchanged |
+| when | at OPEN, when the primary display is a colour display whose WORK AREA holds the 616×408 face: `[vid_kind]` is `VID_VGA` or `VID_VESA`, and the band `wm_fit` places windows in is at least 632 wide and 408 high (§135.2 step 4) - so EGA's 640×350, VESA's 640×400, Hercules, CGA, and a 640×480 VGA with the Dock on its left or right edge keep the compact face. The decision is taken once per open; a `vid_switch` while the panel is open does not change face until it is closed and opened again (§135.2) |
+| how it loads | `CTRL.DRV` is loaded exactly as today, and then `CPWIDE.DRV` - a second on-demand module (§2.8), `MOD_CPW` - beside it. `CTRL.DRV` keeps ALL the panel's logic and every compact page; `CPWIDE.DRV` carries only the wide chrome, the shared widget kit of §135.5 and the three pages drawn natively wide (Drivers §135.8, Display §135.9, Theme §135.11). The two call each other through slot blocks (§135.4). Nothing is assembled twice |
+| assets | `CPWIDE.DAT`, a data file beside `CTRL.DRV` on every system disk of the three kernels but the 360KB one (§135.2): the icon sheets as 4bpp + mask and the driver catalog (§135.6, §135.7). Read once at open into a heap claim, freed at close |
+| refusal | **a refusal is a normal path, and it is the compact face.** `CPWIDE.DRV` or `CPWIDE.DAT` missing, refused by `mod_check`, or a heap that cannot fund them: the panel opens compact, exactly as before this section existed, with no message. The wide face is an improvement, never a requirement |
+| resident cost | the `MOD_CPW` row, its name, its `mod_fpt` word and slot block, the open-time predicate, and one slot more in `CTRL.DRV`'s block for the gate - **no rung crossed on any kernel** (CLAUDE.md, and the owner's standing zero-resident rule). Measured per wave in the plan |
+
+### 135.2 Choosing the face, loading it, and falling back
+
+Shipped by story S1. The pieces, and who owns each:
+
+| piece | where | what it is |
+|---|---|---|
+| `MOD_CPW` = 11 | `kernel/mod.inc` | the module id, after every id already numbered (so none moved; `MOD_NIMG` is 12 on kern_big, and `MOD_FSCK`/`MOD_SETS`/`MOD_KBM` follow it). A `mod_tab` row and `mod_f_cpw` (`'CPWIDE.DRV'`), kern_big's alone; in `MOD_HIOK` (kern_mega keeps it above 1MB like every module) |
+| `CPWFP` | `kernel/kernel.asm` | its `MODFP` slot block: ONE far entry, `cpw_ev` (`CPW_NENT` = 1) |
+| `.modv` / `.modvb` | `kernel/kernel.asm` | the image's sections, between `.modq` (KEYBOARD.DRV) and FSCHECK's; the Makefile cuts it as `-m 11=cpwide.drv` (`BIGMODS`), `os88ovlchk`, `os88modcost` and `kernsize` know the section |
+| `[cp_wide]` | `CTRL.DRV`'s bss (`.modcb`) | 0 compact, 1 wide. Written by `cpg_open` and `cp_wclose` alone, zero in the file tail - a re-adopted image starts compact |
+| `CPG_OPEN` | `CTRL.DRV`, through `CPE_GATE` | the choice AND the launch: the resident `cp_open_x` calls it once `CTRL.DRV` is in (`mov ah, CPG_OPEN` / `call far [CPFP + CPE_GATE*4]` / `jmp short`), in place of the `app_launch` and its beep that were there - so `.cold` is 2 bytes SMALLER, which is what kept kern_emu inside its rung (§135.12) |
+| `cpw_open` / `cpw_close` | `CPWIDE.DRV` (`CWV_OPEN` / `CWV_CLOSE`) | `CPWIDE.DAT` read into a claim of its own, and the window's size; the claim freed and the compact template put back |
+
+**The open**, in order (`cpg_open`):
+
+1. A panel that is already up keeps its face: `app_launch` only fronts it,
+   so nothing below runs.
+2. A face left by an open that never showed (an `app_launch` that refused)
+   is closed first (`cp_wclose`), so a claim can never be stranded.
+3. What `KD_INIT` used to do - `[cp_down]` and the shared arm cleared
+   (§13.8.3) - is done here, in the image: every launch of `KIND_CTRL` is
+   `cp_open_x`'s, and the 13 resident bytes of `cp_kinit` paid for the row.
+4. The predicate: `[vid_kind]` is `VID_VGA` or (kernels with `VID_EXT`)
+   `VID_VESA`, and **the work area, not the screen, holds the face**: the
+   band `wm_fit` clamps every window to (§11, §30.5) is at least
+   `CPW_W1` + `CPW_FITX` = 632 wide (`[vid_band_xe]` - `[vid_band_x0]`) and
+   at least `CPW_H1` = 408 high (`[vid_dock_y0]` - `MBAR_H` - 1, the height
+   clamp's own count). The 16 px over the frame are `wm_fit`'s snap (§11.94):
+   it may move the frame up to 7 px left and widen it by 2, and a frame it
+   had to snap DOWN would be under the face. So a Dock standing Left or Right
+   on a 640 screen (a 608-wide band) opens compact, where the Dock page is in
+   reach to move it back; an auto-hiding Dock reserves one column and keeps
+   the wide face; an 800×600 screen with a side Dock still holds it. The
+   band includes every reservation `dock_geom` makes, so a future edge
+   strip is answered by the same two numbers. (A screen narrower than 640 or
+   shorter than 480 fails this test too, so no separate size test is kept.)
+5. `mod_need MOD_CPW`; then `CWV_OPEN`: under the boot volume bracket
+   (`drv_vol_bank`/`drv_vol_back`), `drv_find` sizes `CPWIDE.DAT` (its
+   UNPACKED size - `PKGZ` packs it, §20.13.5), refused under the 16-byte
+   header or over 16,384 bytes (§135.6); `mem_claimp_hi_x` claims
+   `CPW_WSZ` + the file, `MEM_K_MOD` - pinned, top-down, beside the module
+   (`tests/pins.txt`); `dskw_read_x` reads it whole at `CPW_WSZ`; and the
+   file is CHECKED before an offset in it is trusted: the magic, the
+   version, its own size field against the bytes read, at least `CWI16_N`
+   and `CWI32_N` icons, and each of the three blocks inside the file.
+6. The window: **616×408** on a primary under 800×600, **760×520** on one
+   of at least 800×600, centred on the primary (never above the menu bar),
+   written into `cp_tpl` - which `app_launch` then copies. `cp_tpl`'s
+   compact frame is named (`CP_TX`, `CP_TY`, `CP_TW`, `CP_TH` = 160, 130,
+   320, 151) so the close can put it back.
+7. `[cp_wide]` = 1.
+8. `app_launch` (`KIND_CTRL`), as `cp_open_x` did it: a refusal - no
+   instance slot, no window - closes a face just chosen, beeps (§34.3) and
+   answers CF = 1, which `cp_open_x` hands its callers as before.
+
+**Any refusal is the compact face, silently**: no `CPWIDE.DRV` (`mod_need`
+refuses), no `CPWIDE.DAT`, a file that fails a check, or a heap that cannot
+fund the claim - the claim (if taken) is freed, `mod_drop MOD_CPW` runs, and
+the panel opens at 320×151 exactly as before §135. No toast, no beep.
+
+**A refused `CPWIDE.DRV` is not asked for again** until the next boot:
+when `mod_need MOD_CPW` refuses, `cpg_open` writes 0 over the first byte of
+the module's resident file name (`mod_f_cpw`, `kernel/mod.inc`) and tests
+that byte before any later lookup. Without it a VGA machine with no
+`CPWIDE.DRV` (one booted off the 360KB system disk, which omits it) read the
+disk at EVERY open - one `int 13h` a press, a media check on a drive with no
+change line, where main made none on a re-adopted panel (2.8.3; measured on
+MartyPC's XT with VGA). A flag in `CTRL.DRV`'s own bss would not do: a
+re-adoption zeroes it. The name costs no byte. `mod_need` gives no reason,
+so a refusal for want of heap is remembered too, until the next boot - a
+price taken for the common case. A `CPWIDE.DAT` refusal is NOT remembered:
+it may be heap.
+
+**The close**: `CPE_FLUSH`'s stub (`modc_e_flush`) runs the compact close
+(`cp_flush_close_x`, §31.8 - `SYSTEM.CFG` is written exactly as before),
+then `cp_wclose`: `CWV_CLOSE` frees the claim and restores `cp_tpl`,
+`mod_drop MOD_CPW`, `[cp_wide]` = 0. Then the resident thunk drops
+`CTRL.DRV` as it always did. `MOD_CACHE` keeps both images as purgeable
+caches (§2.8.3).
+
+**A `vid_switch` while the panel is open does not change face**, and nor
+does a Dock moved to a side edge from the Dock page. The window manager
+clamps the window to the new work area; the wide face lays itself out from
+the content box it is given, and if that box is smaller than 616×408's
+(`cpw_big`, the one test) it is in the SMALL state: it draws one line -
+"Close and reopen the Control Panel." - and nothing that could run past its
+edge (`cpw_small`), and **nothing in it is pressed or acts**: `cpw_click`,
+`cpw_up`/`cpw_drag`, `cpw_key`, the Date/Time clock's `cpw_tick` and
+`cpw_listev` each ask `cpw_big` first and return. The one exception is the
+Display page during a Test... (§135.9.3), whose Keep group is drawn and
+pressed in the small state; that page guards its own edges (`cpv_big`).
+Closing and opening chooses again, by step 4's test - so the reopened panel
+is compact when the new work area cannot hold the face.
+
+**Forwarding.** `CTRL.DRV`'s far entries `CPE_PAINT`, `CPE_ONCLICK`,
+`CPE_ONUP`, `CPE_ONDRAG`, `CPE_ONKEY` and `CPE_TICK` open with `CPWF CWV_*`
+(`call cp_wfwd` / `db` the event, 3 bytes each): compact, `cp_wfwd` steps
+past the byte into the entry's own body (one compare); wide, it calls
+`CPWIDE.DRV`'s `cpw_ev` with BP = the event and returns far for the entry.
+The resident `cpf_*` thunks are unchanged. `cp_list` (the list's membership
+changed - a driver came up or went) sends `CWV_LIST` instead of drawing.
+
+**Not on the 360KB system disk (the owner's decision, 2026-11-22).**
+`CPWIDE.DRV` and `CPWIDE.DAT` are in `$(SYS360OMITDRV)` beside CDROM.DRV and
+PCIETHER.DRV: with the three wide pages the disk needed 708 clusters of 706.
+A machine booted from the 360KB system disk therefore opens the compact
+face, by this section's own refusal path - an XT, where the wide face's
+drawing and its ~20KB of heap fit worse than on a 286 or better; the
+720KB, 1.2MB and 1.44MB
+system disks, the emu disk and the live media carry both files.
+
+### 135.3 The window, its panes, and the hosted pages
+
+Shipped by S2. The layout, CONTENT-relative (`kernel/cpwlay.inc`; every
+inner dimension derives from the content box, so both sizes are one layout):
+
+| element | where | drawn as |
+|---|---|---|
+| page list | x 0..119 (`CPW_LW` 120), y 0 to the status rule | white ground in spans; a heading every group (`SYSTEM`, `HARDWARE`, `APPEARANCE`: dark grey words padded to 14 cells, 13 rows with the air); a row every page (20 px pitch: a 19-row bar, the 16×16 icon at x 6, the name at x 26); the selection a blue bar with white text |
+| rule | x 120, y 0 to the status rule | 1 px black |
+| header strip | x 121 (`CPW_PX`) to the right edge, y 0..43 (`CPW_HDRH`) | the page's 32×32 icon at (PX+8, 5); its list name at (PX+48, 10) and a one-line description at (PX+48, 24), each padded with its paper to the right edge; a 1 px rule at y 41 |
+| page area | x 121.., y 44 (`CPW_BY`).. | the hosted page (below), or a wide page |
+| status line | the content's last 14 rows (`CPW_STH`), a 1 px rule above | light grey band, one run: `"<K> K free - <n> of <m> drivers loaded - settings saved when the panel closes"` - K is `OSAPI_MEM_AVAIL`'s largest claim; redrawn only when K, n or m changed |
+
+The list's groups are `cpw_lay`'s, in the image: SYSTEM = Scheduler,
+Date/Time, Keyboard, Floppy; HARDWARE = Drivers, Display, Sound, then one row
+per driver-owned page (§31.9, in `drv_cp_class` order); APPEARANCE = Theme,
+Dock. A record `[cp_hide]` hides (§31.10.1) is hidden here too. The list does
+not scroll: at 616×408 it holds the three headings, the nine static rows
+and six driver pages, and a row that would cross the status line is not
+laid out.
+
+Icons: each static record has a 16×16 and a 32×32 out of `CPWIDE.DAT`
+(`cpw_rtab`, in record order, checked at assembly against `CP_ITEMS`); a
+driver page's is its class's - `DRVC_DISK` the disk, `DRVC_NET` the
+network, any other the gear.
+
+**Redraw only what changed** (PERFORMANCE.md rule 1). A click on a list row
+redraws the row losing the bar, the row gaining it (each one fill, one blit,
+one run), the header strip's icon and two lines (no erase: opaque), and the
+page area - never the list's ground, the rules or the status line. A driver
+coming up or going (`CWV_LIST`) rebuilds the list and redraws it whole -
+every row may have moved - and the status line if a number moved.
+
+**A page without a wide version is HOSTED**, and until S7-S9 land, that is
+every page. `cp_origin` is the ONE place that computes the compact pane's
+origin, and on the wide face it answers the content origin plus
+(`CPW_HX`, `CPW_HY`) = (32, 44): so `cp_page`'s own erase, from
+DI + `CP_DIVX` + 1, starts exactly at `CPW_PX`, the pane is 229×132 at the
+page area's top left, and every compact paint, probe, arm, release, drag,
+key and tick computes the same origin through the same code. A hosted page
+has no heading (`cp_item_paint` skips it while `[cp_wide]` is 1: the header
+strip names the page). `CPWIDE.DRV` lays the white ground to the right of
+and under the hosted rect, and hands the rest to `CTRL.DRV` through the gate:
+`CPG_HPAINT` paints, and the page area's press, release, drag, key and tick
+go to `CPG_HCLICK`, `CPG_HUP`, `CPG_HDRAG`, `CPG_HKEY`, `CPG_HTICK` - the
+compact face's own far bodies, unchanged. A release or drag whose arm is a
+wide control's (`CPW_ID0` and up, §135.5) is the wide face's own.
+
+The Drivers list itself is the wide face's own page (§135.8).
+
+### 135.4 The gate - how the two images call each other
+
+Shipped by S3. Two entries, one each way:
+
+- **`CPWIDE.DRV` → `CTRL.DRV`: `CPE_GATE`** (`CTRL.DRV` entry `CPE_B + 10`;
+  `CP_NENT` is `CPE_B + 12` on kern_big). Entered FAR with AH = a `CPG_*`
+  opcode; an opcode past `CPG_N` answers CF = 1. The first `CPG_NFAR` (5)
+  ARE the compact face's far bodies, entered past their `CPWF` forward; the
+  rest are near procs returning through the gate's `retf`. Dispatch is a
+  `ret` into `cpg_tab`'s word, checked at assembly against `CPG_N`.
+  `cpw_gate` calls it with the ES the event arrived with.
+- **`CTRL.DRV` → `CPWIDE.DRV`: `cpw_ev`** (`CPWFP` slot 0). Entered FAR with
+  BP = a `CWV_*` event; it preserves every register but BP (the forwarder
+  owns it) and answers CF for `CWV_OPEN` alone. An event other than
+  `CWV_OPEN` with no asset claim is dropped.
+
+| `CWV_*` | | in |
+|---|---|---|
+| 0 `CWV_PAINT` | W_PAINT | SI = the window, gfx lock held |
+| 1 `CWV_CLICK` | W_ONCLICK | CX/DX = the SCREEN point, SI = the window |
+| 2 `CWV_UP` | W_ONMOUSEUP | the same |
+| 3 `CWV_DRAG` | W_ONDRAG | the same |
+| 4 `CWV_KEY` | W_ONKEY | AX = the key word, SI = the window |
+| 5 `CWV_TICK` | CPE_TICK | nothing (the resident tick gate still asks `[cp_sel]` = Date/Time) |
+| 6 `CWV_LIST` | `cp_list` | nothing: the list's membership changed |
+| 7 `CWV_CLOSE` | the close | nothing |
+| 8 `CWV_OPEN` | the open | nothing; out CF = 1 refused |
+
+| `CPG_*` | | in | out |
+|---|---|---|---|
+| 0 `CPG_HCLICK` | the hosted page's press (`cp_onclick_x`) | CX/DX screen, SI = the window | - |
+| 1 `CPG_HUP` | ...its release (`cp_onup_x`) | the same | - |
+| 2 `CPG_HDRAG` | ...its drag (`cp_ondrag_x`) | the same | - |
+| 3 `CPG_HTICK` | ...the Date/Time clock (`cp_tick_x`) | - | - |
+| 4 `CPG_HKEY` | ...a key (`cp_onkey_x`) | BX = the key word, SI = the window | - |
+| 5 `CPG_OPEN` | choose the face and launch the panel (§135.2) - the resident `cp_open_x`'s | - | CF = 1 app_launch refused (beeped); every register kept |
+| 6 `CPG_HPAINT` | the selected page at the hosted origin, its erase and all (`cp_page`) | BX = the window | - |
+| 7 `CPG_NAME` | a record's list name, staged (`cp_item_name`) | AL = a record | SI = `cp_sbuf` |
+| 8 `CPG_DRVON` | load `drv_tab` row AL if it is down: want = 1, `cdl_load`, answered, owed (`cp_drv_on`) | AL = a row | - |
+| 9 `CPG_DRVOFF` | unload it - VESA.DRV puts the desktop on the VGA first (§120.4) - not wanted, error cleared, answered, owed (`cp_drv_off`) | AL = a row | - |
+| 10 `CPG_DRVWANT` | the want bit alone, answered and owed (Start at boot) | AL = a row, CL = 0/1 | - |
+| 11 `CPG_DRVTTL` | its `DRV_TITLES` name, staged ('' for an empty row) | AL = a row | SI = `cp_sbuf` |
+| 12 `CPG_DRVSTAT` | its status sentence, staged (`drv_status_x`) | AL = a row | SI = `cp_sbuf` |
+| 13 `CPG_DRVMEM` | its `drv_memk` word (half-KB; `DRVM_PLUS` in bit 15, §31.6.2) | AL = a row | AX |
+| 14 `CPG_VIDSET` | Set Primary (`cp_vid_set`): the VESA row has the driver pick the class first, a display on the VBE leaves and comes back; `vid_switch`; every window repainted | AL = a `VID_*`, CL = a class | CF = 1 refused; AX spent |
+| 15 `CPG_VXCALL` | a verb to VESA.DRV (`cp_vid_vxcall`; CF = 1 while `vesa_row` is not loaded - on every kernel with `VID_EXT`, kern_mega included) | AL = a `VXV_*`, CL = a class | the verb's |
+| 16 `CPG_VGC` | Force Color toggled, owed, applied on a tick (`cp_vgc_tog`) | - | - |
+| 17 `CPG_THMSET` | a theme applied (`cp_thm_apply`), greying already asked | AL = a `THM_*` | CF = 1 it was live |
+| 18 `CPG_THMCUST` | Customize... (THMPAL.DRV, §76.14.14), its refusal said | - | - |
+| 19 `CPG_SAVER` | the screen saver's settings (§79.7), its refusal said | - | - |
+| 20 `CPG_WDSET` | `SYSTEM.CFG` owed at the close (`cp_wdset`) | - | - |
+| 21 `CPG_REPOST` | every window repainted, owed (`cp_repost`) | - | - |
+| 29 `CPG_THMPRE` | Color applied after a preset was installed (`cp_thm_pre`, §135.11) | - | CF = 0 |
+
+Ops 8-21 are the compact pages' own bodies, factored out of their click
+paths so both faces run ONE body (`cp_drv_tog`/`cp_drv_off`/`cp_drv_on`,
+`cp_vid_set`, `cp_vgc_tog`, `cp_thm_apply`, `cp_thm_saver`/`cp_thm_cust`;
+kern_small's compact code is untouched by the factoring). They are the ONLY
+way a wide page changes state `CTRL.DRV` owns; a wide page may read kernel
+data directly (DS = `KERNEL_SEG`: `drv_tab`, `[cp_sel]`, `[vid_kind]`...) and
+may write the page-selection bytes `[cp_sel]` and `[cp_dview]` itself, as
+the list does. Theme PRESETS have no op: they are THMPAL.DRV's (§76.14.14).
+**A countdown on a wide page (§135.9's Test...) needs a tick on a page other
+than Date/Time**, which the resident `cp_tick_due_x` does not deliver today;
+S8 owns that change and its resident bytes.
+
+### 135.5 The widget kit
+
+Shipped by S4: `kernel/cpwkit.inc`, assembled into `CPWIDE.DRV` behind
+`cpwide.inc`, so the wave-2 pages draw with these and not with copies.
+**The common contract**: every coordinate is CONTENT-relative (the working
+area's `CPW_W_OX`/`CPW_W_OY`, set at every window event); ES = the asset
+claim, DS = `KERNEL_SEG`, the gfx lock held; every register is preserved but
+a documented output; text is ONE opaque `font_run` (§6.1) and nothing writes
+a pixel twice - a band with text in it is laid as the spans around the run;
+a widget's label is an IMAGE string (CS); text from elsewhere goes through
+`cpw_run`/`cpk_text`, whose BL names the segment: 0 the image (CS), 1 the
+kernel's (DS - `cp_sbuf`, what the gate stages), 2 the asset claim (ES -
+the catalog, the working area). A renderer may leave the pen at the ink
+after a run (VESA.DRV does): a proc sets `[gfx_color]` before every fill.
+
+| proc | in | out | what |
+|---|---|---|---|
+| `cpw_fill` | AX/BX/CX/DX = left/top/right/bottom, inclusive; `[gfx_color]` | - | one filled rect |
+| `cpw_run` | CX/DX = x/y; SI = a string in segment BL; AL = ink, AH = paper | CX = the x past it (8 a cell) | one opaque run: DS set to the string's segment for the one `OSAPI_FONT_RUN` call (an X cell reads through the caller's DS), so no copy whatever its length |
+| `cpw_runp` | `cpw_run`'s | `cpw_run`'s; pen = paper | the run, and its paper to the content's right edge on its 8 rows: a shorter line replaces a longer one in one pass |
+| `cpw_icon` | AL = a `CWI16_*`/`CWI32_*`, AH = 0 16×16 / 1 32×32, BL = the ground, CX/DX = x/y | - | the icon's pixels copied into the working area with every transparent nibble (mask bit 0, §135.6) made the ground, and ONE `OSAPI_GFX_BLIT4` - no ground under it, any ground colour |
+| `cpk_group` | AX/BX/CX/DX = the box; SI = its title | - | a group box: a 12-row light grey title band (black words) laid in five spans round the run, and a black frame - left, right, bottom - under it. The body is the page's ground |
+| `cpk_button` | AX/BX/CX/DX = the rect; SI = the label; DI = `OS88UI_DIS`/`OS88UI_DEF`/0 | - | §20.5.1.3's button, through `os88ui_kbtn` (the rect staged absolute in `os88ui_krect`, the label in `cp_sbuf`). A page arms it with an id from `CPW_ID0` (0C000h) and acts on the release |
+| `cpk_inrect` | SI = 4 words in the image (a rect); CX/DX = a point | CF = 0 inside | the hit test for a page's own rect tables |
+| `cpk_tabs` | CX/DX = the strip's left/top; SI = its labels (NUL strings, an empty one last); AL = the chosen | CX = past the last tab | a tab / filter strip, 14 rows: each tab its label with 4 px either side, the chosen white on blue, the rest black on light grey, a 1 px white gap after each |
+| `cpk_tabhit` | SI = the labels; CX = x from the strip's left | AL = the tab, CF = 0; CF = 1 none | its hit test |
+| `cpk_table` | BX = its block in the working area | - | a scrolling table: the visible rows through the page's ROW PAINTER, then `os88ui_sbar` (§13.10) with the block copied absolute into `os88ui_ksb` |
+| `cpk_tbrows` | BX = the block | - | the rows alone (a scroll) |
+| `cpk_tbclick` | BX = the block; CX/DX = a press | CF = 1 outside; CF = 0, AX = the row pressed, or 0FFFFh for the bar - ACTED ON: an arrow is one row, the track a page, the view redrawn by its rows and `os88ui_sbmove` | the table's press |
+| `cpk_badge` | CX/DX; AL = `CPK_OK`/`CPK_ERR`/`CPK_WARN`; AH = the ground; SI = a label or 0 | CX = past it | a status badge: the 16×16 mark (`CWI16_OK` + AL) and a black label on its middle rows |
+| `cpk_text` | CX/DX; SI = a string in segment BL; DI = a width in cells (1-95); AX = ink/paper | DX = the row under the last line | long text: lines broken at the last space that fits (hard at the width when a word is longer), each padded with spaces to the full width - one opaque run a line, 10 px apart |
+
+**The table block** (`CPKT_*`, 18 bytes in the working area): x, y, width
+(the 12 px bar included), row pitch, rows that fit, rows there are, the
+first row shown, the ROW PAINTER - a near proc in the image, entered with
+AX = the row, BL = its ground (`CWHITE`, `CBLUE` for the selected row), CX/DX
+its left/top, DI its width without the bar, which paints the whole row
+opaque and keeps every register - and the selected row (0FFFFh none). The
+columns, their headings and the selection bar's ink are therefore the
+PAGE's: a column layout is the row painter's arithmetic, and a header row is
+a `cpw_run` over it.
+
+**The working area** (`CPW_WSZ` = 848 bytes at the asset claim's start,
+`cpwide.inc`): the content origin and size, the window, the caller's ES,
+the status line's cache, the list's 28 entries, a 96-byte composed line
+(`CPW_W_STR`), the 80-byte PAGE BLOCK (`CPW_W_PAGE`), 16 KEPT bytes
+(`CPW_W_KEEP`), the kit's 12-byte scratch, and the 512-byte icon staging
+buffer. `CPWIDE.DAT` follows it, **on a paragraph**: a packed read (§20.13.5)
+expands at one, so an offset off the grid is a refused open, and `cpwide.inc`
+refuses to assemble one. The working area is zeroed at every open.
+
+#### 135.5.1 The working area's map - who owns which byte
+
+**The page block belongs WHOLE to the page showing.** Each wide page lays
+its own map over all 80 bytes, so leaving a page loses its block: a page
+must rebuild everything it reads there on a FRESH entry, and anything that
+has to outlive a visit is a KEPT byte, outside the block, that no other page
+writes. Before this rule the Drivers page kept its filter and selection at
+page + 18 and + 20, which the Theme page's `CPT_B` and the Display page's
+`CPV_FLT`/`CPV_ASEL` also wrote, and coming back to Drivers showed an empty
+table or another page's filter. A new page adds its row here, its kept
+bytes in `CPW_W_KEEP` (13 of its 16 are spare; it grows by whole paragraphs), and a
+fresh-entry flag of its own if it keeps anything in the block across
+repaints.
+
+| bytes | name | owner | lifetime |
+|---|---|---|---|
+| 0-17 | `CPW_W_OX` .. `CPW_W_LSEL` | the chrome (`cpwide.inc`) | the open |
+| 18 | `CPW_W_FULL` | the list paint | one paint |
+| 19 | `CPV_LIVE` | the Display page's fresh-entry flag: 1 while the block is its own; `cpw_page` clears it for any other page (§135.9.2) | the open |
+| 20-31 | `CPW_W_KIT` | the kit's scratch (§135.5) | one call |
+| 32-143 | `CPW_W_LIST` | the page list's 28 entries | rebuilt by every list paint |
+| 144-239 | `CPW_W_STR` | a composed line | one call |
+| 240-319 | `CPW_W_PAGE` | **the page showing, whole**: Drivers `CPD_*` (the table block, the categories, the box's top, the columns, the listed rows - checked against the block in `kernel.asm`), Display `CPV_*` (checked in `cpw_vid.inc`), Theme `CPT_*` (checked in `cpw_thm.inc`) | one visit |
+| 320 | `CPW_W_DFLT` | the Drivers page's filter (0 All, else a `CWC_*`) | the open |
+| 321 | `CPW_W_DSEL` | the Drivers page's selected `drv_tab` row (0 at the open: row 0 if it is listed, else the first row) | the open |
+| 322 | `CPW_W_DON` (`CPW_D_ON`) | 1 while the page block is the Drivers page's; `cpw_page` clears it before drawing any other page (§135.8) | the open |
+| 323-335 | - | spare kept bytes (the file stays on a paragraph) | - |
+| 336-847 | `CPW_W_ICON` | the icon staging buffer | one blit |
+
+`cpwide.inc` refuses to assemble if the kept bytes leave the gap between the
+block and the icons, and each page refuses one that outgrows the block.
+
+**The worked example** is the Drivers page (§135.8): tabs over a subset (one
+`cpk_tabs` call a tab), a table with a row painter of its own, a group box, text
+lines, buttons and icons - all of this kit and nothing else.
+
+### 135.6 `CPWIDE.DAT` - the asset file
+
+Built by `tools/cpwdat.py` from `kernel/cpwart/*.png` and
+`drivers/catalog.toml`; deterministic, no generation service in `make`
+(CLAUDE.md, *Treat artwork as source*). Little-endian:
+
+```
++0   db 'CW'          magic
++2   db 1             version
++3   db n16           16x16 icons
++4   db n32           32x32 icons
++5   db ncat          catalog entries (§135.7)
++6   dw off16         offset of the 16x16 block
++8   dw off32         offset of the 32x32 block
++10  dw offcat        offset of the catalog
++12  dw size          the file's length
++14  dw offstr        offset of the description string block (§135.7)
+16x16 icon, 160 bytes: 128 bytes 4bpp (stride 8, high nibble leftmost,
+         §5.4) + 16 mask words (bit 15 = leftmost pixel, 1 = opaque)
+32x32 icon, 640 bytes: 512 bytes 4bpp (stride 16) + 32 mask dwords
+         (two words a row, left word first, same bit order)
+```
+
+**Exact layout.** The header is 16 bytes (`CWD_HDR`); then, back to back, the
+32 16×16 icons at `off16` (= 16; 5,120 bytes), the 12 32×32 icons at `off32`
+(= 5,136; 7,680 bytes), the catalog at `offcat` (= 12,816; `ncat` × 64 bytes)
+and the description strings at `offstr` (NUL-terminated, in catalog order, line
+1 before line 2). Every offset in the file is from the file's start. A 16×16
+icon's mask is 16 words, one a row, bit 15 the leftmost pixel; a 32×32's is 32
+rows of two words, the left 16 pixels first. A pixel is opaque (mask bit 1) or
+transparent (mask bit 0, nibble 0); colour nibbles are indices into the sixteen
+EGA/VGA colours in their usual order - black, blue, green, cyan, red, magenta,
+brown, light grey, dark grey, light blue, light green, light cyan, light red,
+light magenta, yellow, white - which are the sheets' RGB values `#000000`,
+`#0000AA`, `#00AA00`, `#00AAAA`, `#AA0000`, `#AA00AA`, `#AA5500`, `#AAAAAA`,
+`#555555`, `#5555FF`, `#55FF55`, `#55FFFF`, `#FF5555`, `#FF55FF`, `#FFFF55`,
+`#FFFFFF`; the key `#FF00FF` is the transparent pixel and anything else is a
+build error (`tools/cpwdat.py` names the file, cell and pixel).
+
+**Measured (2026-11-21, 13 catalog entries): 14,642 bytes unpacked** - header
+16, icons 12,800, catalog 832, strings 994 - **5,290 bytes packed** (LZ4, `PKGZ`'s
+default; `make PKGZ=` ships it plain). The ceiling is 16,384 unpacked
+(`CPWIDE.DAT` is read into one heap claim); each new driver adds 64 bytes and its
+description strings, so the file has room for about a dozen more entries.
+
+**It is on the disk like a driver.** `CPWIDE.DAT` rides `$(DRIVERS)`, so it is
+on every kern_big, kern_emu and kern_mega system disk - the 1.44MB, 720KB and
+1.2MB floppies, the emu disk, the hard-disk and live-media images, the mega
+images - and on no kern_small disk (`$(SMALLDRIVERS)` never held it). It is
+**not** on the 360KB system disk: it and `CPWIDE.DRV` are in
+`$(SYS360OMITDRV)`, the owner's decision of 2026-11-22 (§135.2), so a 360KB
+boot opens the compact panel. `os88disk.py`
+leaves it an ordinary file (archive only: SPEC.md 19.6 locks only what would
+unboot the disk, and a read-only file is one a keep-install cannot replace), so
+it is visible in the root listing and takes one slot of it. It is packed as a `CZ` file by
+`tools/os88lz.py --wrap` in the same pass as a driver: the directory entry
+carries the §20.13.5 hint, so a kernel read that names the file expands it
+transparently into a claim of the unpacked size - the wide panel sees the 14,642
+bytes above and never the stream. The rule is `$(BUILD)/cpwide.dat` in the
+Makefile; its prerequisites are the tool, `kernel/cpwfmt.inc`, the catalog,
+both sheets, the compressor and the `PKGZ` stamp, and it is built per `BUILD=`
+tree, so kern_emu's and kern_mega's directories and a knob tree each carry
+their own copy of the same bytes.
+
+Measured before the 360KB omission (2026-11-21), it cost 11 of that disk's
+706 512-byte clusters (678 → 689 in use, 17 free) and one root directory slot;
+the wave-2 pages later took the disk past what it had, which is why it is off.
+
+A transparent pixel's colour nibble is 0 and means nothing; the drawer
+substitutes the ground. Icon indices are the sheets' cells, row-major:
+16×16 indices 0-15 are page icons (Scheduler, Date/Time, Keyboard, Floppy,
+Drivers, Display, Sound, Theme, Dock, Hard disk, Network, Debug monitor,
+generic driver page, Mouse, Memory, Ports) and 16-31 the driver categories
+and status marks (Display, Sound, Storage, CD-ROM, RAM disk, Network card,
+Input, Memory, System, Screen saver, USB, Virtual machine, Unknown, OK,
+Error, Warning); 32×32 indices 0-11 are the header icons (Scheduler,
+Date/Time, Keyboard, Floppy, Drivers, Display, Sound, Theme, Dock, Hard
+disk, Network, generic driver). `kernel/cpwfmt.inc` carries the offsets,
+sizes and index `equ`s (`CWD_*`, `CWI16_*`, `CWI32_*`, `CWC_*`) that the
+module assembles with; `tools/cpwdat.py` refuses to write a file that
+disagrees with it.
+
+### 135.7 The driver catalog - what a driver IS, outside the kernel
+
+`drv_tab` (§51) knows a driver's file, title, class and memory figure and
+nothing a user would call a description. A library that grows by dozens
+cannot put that in resident tables, so it lives in `drivers/catalog.toml`,
+one table per driver FILE, compiled into `CPWIDE.DAT`'s catalog: 64-byte
+fixed records -
+
+```
++0   db file[12]      8.3 name, NUL-padded - the key, matched against
+                      the drv_tab row's DRVR_FILE name
++12  db cat           CWC_*: 0 unknown, 1 display, 2 sound, 3 storage,
+                      4 network, 5 input, 6 memory, 7 system
++13  db icon          16x16 icon index
++14  db long[26]      long name, NUL-terminated (<= 25 chars)
++40  dw d1            offset (from the file's start) of description line 1
++42  dw d2            ...of line 2, or 0
++44  db pad[20]       reserved (0)
+```
+
+and the description lines themselves - NUL-terminated, at most 46
+characters each - in the string block at `offstr`. The constants are
+`kernel/cpwfmt.inc`, which the module assembles with and `tools/cpwdat.py`
+checks against. A `drv_tab` row with
+no catalog entry is shown with the Unknown icon, its `drv_tab` title and no
+description - a new driver works before anyone writes its entry.
+`tests/unit/t_cpwdat.py` (fast tier) fails the build for any shipped
+`drv_tab` row of any kernel without an entry, an entry whose file is no
+row's, a line over its limit, or an icon outside the palette.
+
+**The 13 entries (2026-11-21)** are every file `drv_tab` names on any kernel:
+SOUND.DRV, HDD.DRV, ETHER.DRV, RAMDISK.DRV, NET.DRV, VMMOUSE.DRV (kern_emu),
+USBMOUSE.DRV, EMS.DRV, CDROM.DRV, HTTPFS.DRV, VESA.DRV, PCIETHER.DRV and
+PC1MOUSE.DRV. A file that is not a `drv_tab` row - THMPAL.DRV, HDDTOOL.DRV,
+the on-demand modules - has no entry and needs none. Each entry says what the
+driver does and what hardware it needs in plain words; the page shows the
+description in its details box. The file's header comment is the recipe for a
+new driver, and `python3 tools/cpwdat.py --check` lists the rows that lack one.
+
+**What `t_cpwdat.py` reads.** The `drv_tab` side is `kernel/driver.inc`'s table,
+scraped as the union of every kernel's rows (one source, ifdefs per kernel),
+and the file side is `build/cpwide.dat`, read back by a second reader written
+in the test from `kernel/cpwfmt.inc`'s numbers and compared pixel by pixel with
+the sheets and record by record with the catalog. `build/cpwide.dat` differing
+from what `cpwdat.py` writes now fails it, so a stale asset file cannot ship.
+
+### 135.8 The Drivers page
+
+Shipped by S7: `kernel/cpw_drv.inc`, %included into `CPWIDE.DRV` beside the
+kit, to the mockup `docs/cpwide/cp-drivers-vga-640x480.png`. It is the wide
+face's OWN page - drawn natively, not hosted - for the Drivers record while
+`[cp_dview]` is 0; its Ports view (below) is the compact page, hosted. It
+replaced the kit's worked example (the read-only catalog group under the hosted
+list). Everything is built to scale to dozens of drivers: the table scrolls,
+the tabs are the categories a kernel really has, and a driver is described by
+its `CPWIDE.DAT` catalog entry (§135.7), never by a table in this file.
+
+**Layout** (content-relative; `XL` = `CPW_PX` + 8 = 129; `TW` = content width
+- `XL` - 8: 477 at 616x408, 621 at 760x520; the box and table share it):
+
+| element | where | drawn as |
+|---|---|---|
+| page ground | page area, to the status rule | one fill, then every widget opaque |
+| filter tabs | (`XL`, 48), 14 rows | `All`, then each `CWC_*` (§135.7) that has a `drv_tab` row on this kernel, in category order: Display, Sound, Storage, Network, Input, Memory, System. One `cpk_tabs` call per tab (the kit's strip over a subset). A row with no catalog entry is Unknown: no tab, shown under All |
+| column heads | (`XL`, 64), 12 rows | one opaque run on light grey: Name, Status, Memory, Start at boot |
+| table | (`XL`, 76), 18 px pitch, `TW` wide, the 12 px bar included | `cpk_table` over `cpd_row`: **10 rows at 616x408, 16 at 760x520** - the rows are what the box leaves |
+| DETAILS box | (`XL`, status rule - 116), 112 rows, `TW` wide | `cpk_group` titled `DETAILS`; its body: the 32x32 icon at (+8, +16), the text column at +52 |
+| status line | the shell's | redrawn when the driver count moved |
+
+A row, row-relative, in the spans round its runs (nothing written twice): the
+16x16 category icon at x 2 (the catalog's icon, the gear for a file the
+catalog does not know); the name at 20, 22 cells (the catalog's long name, else
+the `drv_tab` title through `CPG_DRVTTL`; cut at 22); the badge at 196, 12
+cells; the memory at 292, 8 cells; the Start at boot box at 356 + 46, 12x12.
+The window's width above 616 is shared out in whole cells to the badge, memory
+and boot columns, a third each (`cpd_geo`): at 760 they sit at 244, 388 and
+500.
+
+**The badge** is `drv_status`'s own reading of the row's live state - a
+reported reason (`DRVR_ERR` 1..`DRVE_NERR`-1) outranks Loaded, else a loaded
+row is Loaded and anything else Not loaded - mapped to four colours and never
+to a second opinion: green **Loaded**; grey **Off** (Not loaded); red **No
+hardware** (`DRVE_HW`); yellow **Error** (every other refusal). The DETAILS
+box says the full sentence. The **memory** is `drv_memk`'s figure through
+`CPG_DRVMEM` with §31.6.2's rules (`~`, the half KB, `+`). The **check box**
+shows the row's WANT bit (`DRVR_WANT`): a press on the boot column toggles it
+through `CPG_DRVWANT` - the want bit alone, answered and owed (§31.8), nothing
+loaded or unloaded - and repaints that one row.
+
+**DETAILS** is the selected row's: the category's header icon (Display,
+Sound, Storage and Network have theirs; any other the gear), the long name, the
+file name (dark grey), the catalog's two description lines, the status sentence
+(`CPG_DRVSTAT`) and `Memory: ~N K`. Each line is ONE opaque run padded to the
+text width (`cpk_text`), so a shorter one replaces a longer in the same pass.
+Four buttons (x 52, 116, 188, 300 from the box's left, 18 rows, the box's last
+22 rows):
+
+| button | live when | does |
+|---|---|---|
+| **Load** (id `CPW_ID0`) | the row is down | `CPG_DRVON`: want = 1 and `cdl_load` |
+| **Unload** (+1) | the row is up, or down and wanted | `CPG_DRVOFF`: unload, want cleared, error cleared - "unloaded but wanted clears the want" (§31.6): the only gesture for *stop asking* |
+| **Settings...** (+2) | the driver is loaded and publishes a page (§31.9: its class is among `drv_cp_class`'s) | selects that page in the list (`cpw_select`) |
+| **Ports...** (+3) | always | hosts the compact page's Ports view (§31.15): `[cp_dview]` = 1 and the hosted paint; its own Back (a hosted release) brings this page back whole (`cpw_dsync`) |
+
+A button arms `CPW_ID0` + its number on the press and is drawn down; the
+release draws it up and acts only if the pointer is still over it (§13.8.3).
+A greyed button arms nothing.
+
+**What each action redraws** (CLAUDE.md, Performance rules 1-2): a **tab** the
+strip, the table (top 0) and DETAILS; a **row** the row losing the bar, the one
+gaining it and DETAILS (the whole table when the selection scrolls into view);
+the **bar** the rows and `os88ui_sbmove`; the **check box** one row; **Load /
+Unload** that row, DETAILS, the status line's driver count and - only when its
+length moved - the page list (a driver page may have appeared or gone, §31.9).
+A failed load shows its reason in the row's badge and in DETAILS. Nothing else.
+**Up** and **Down** move the selection a row (the panel's own key edge).
+
+**Gate ops.** None added: the page uses `CPG_DRVON`/`OFF`/`WANT`/`TTL`/`STAT`/
+`MEM` (§135.4); `CPG_N` stays 22 and opcodes 22-24 are unused.
+
+**State** is the working area's 80-byte page block (§135.5.1): the kit's
+table block, the categories present, the box's top, three column x's and one
+byte for each of at most `DRV_MAX` listed rows - all rebuilt by every paint -
+and two KEPT bytes outside it, the filter (0 All, else a `CWC_*`) and the
+selected `drv_tab` row. **The filter and the selection are kept while the
+panel is open**, whatever page was visited between. A FRESH entry (`CPW_D_ON`
+= 0: another page has had the block, or the Ports view was showing) also
+resets the table's first row, to the top or as far down as brings the kept
+selection into view; a repaint while the page shows keeps the scroll.
+
+### 135.9 The Display page - the mode changer
+
+Shipped by S8 (`kernel/cpw_vid.inc`, prefix `cpv_`), to
+`docs/cpwide/cp-display-vesa-1024x768.png`. The owner's brief asks for "a
+more powerful video mode changer ... since I am going to build out more VESA
+video modes and special video drivers", so **the page reads what the
+hardware offers and encodes no list**: the adapters are `[vid_avail]`'s bits,
+and the modes are §120.10's `VXV_INFO` records, one call a record. A future
+driver that answers that verb gets this page for nothing.
+
+#### 135.9.1 What is on it
+
+| element | what it is |
+|---|---|
+| **Adapter** group | one row per adapter the machine HAS (§31.10's rule: an absent adapter is no row, not a greyed one), in the order VGA, VESA, EGA, Hercules, CGA; VESA only while `VID_A_VESA` is lit (the driver loaded). A row reads `VGA 640x480`, `VESA 1024x768` (the live mode while it runs) and `, running` on the running adapter. The selection is a blue bar - a PENDING choice, as `[cp_vsel]` is on the compact page (§31.10: selecting and switching are two actions); the page keeps its own copy and does not write `[cp_vsel]` |
+| the desktop line | `Desktop` and three radios, Single / Right / Below (§31.10.2), on the group's last line - drawn only where `vid_dual_ok` allows a pairing, exactly as the compact page, and applied on the spot through `CPG_VIDARR` |
+| **Mode preview** group | a monitor drawn to the SELECTED mode's aspect - the screen in cyan inside a dark grey bezel, fitted to a 64×40 box (five fills, and the ground in four spans round it) - and two lines beside it: the resolution and the colours |
+| **Modes** group | for the VESA adapter: a filter strip (`All`, then one tab per colour depth the card offers - `256`, `32,768`, `65,536` - built from the records, never fixed), a header line, and a scrolling table (`cpk_table`) with the columns Resolution, Colours, Memory (the record's framebuffer KB) and Status. Status carries `current` (the running record, §120.10's `CH`), `recommended` (Auto's pick, `SI`) and `startup` (the record whose class is the `VE` byte; the Auto row when it is 0). The table's first row is **Auto** - "the recommended mode", the class byte 0. For any other adapter the group says what that adapter is in one line (it has one mode, §31.10); with the VESA adapter selected and no answer from the verb (an older `VESA.DRV`, CF = 1) the table is the Auto row alone and a line says so |
+| **Use mode at startup** | a check box (the Drivers page's tick box, §135.8, when live; the gate's glyph when greyed or pressed): ticked when the `VE` byte (`CFG_VE`, §120.2.3) is the selected row's class (Auto: 0). Ticking writes that class, un-ticking writes 0 (Auto), owed through `CPG_WDSET` - **the byte alone**; nothing switches. Greyed off the VESA adapter, and on the Auto row while it is ticked (there is nothing to un-tick to) |
+| **Force Color** | §31.10.4's box through `CPG_VGC`, greyed without a VGA **and while `[vid_kind]` = `VID_VESA`**: Force Color is a VGA BIOS power-on setting (§39.30) and its live half reloads DAC 0..63 with the EGA table, which on a packed 8bpp desktop is the desktop's palette (QA-4) - a fact (§47), through `cp_vid_fcok`, so the compact page's box greys alike. The bit is set from a planar display and is owed for the next start |
+| **Apply** | switch now and keep: Set Primary's meaning (§31.10, §120.6) through `CPG_VIDSET` - AL = the selected adapter, CL = the selected row's class (Auto 0); the VESA kind has the driver pick first and leaves and comes back when it is already on the VBE. Greyed when the selection is what is running: the adapter is the running one and, for VESA, the row's record is the running record (Auto's is the recommended one) |
+| **Test...** | Apply for 15 seconds (§135.9.3). Greyed with Apply |
+| **Running mode** group | two lines: the running adapter and mode (`VESA 1024x768, 65,536 colours`), and the card (`VBE 3.0, 16 MB video memory` - the version word as major.minor, memory in MB from 1MB up, else KB; `VESA Display is not loaded` without the driver, `Restart to use VESA Display` when `vesa_row` is loaded but `VID_A_VESA` is not lit - VESA attaches at boot only, §120.4; the one-mode line under Modes says the same). The startup mode is the table's `startup` mark, not a line here. During a test this group's place is the **Keep this mode?** group |
+
+Colours are named from the depth (8 → 256, 15 → 32,768, 16 → 65,536) and,
+for the planar adapters, from the kind (VGA and EGA 16, Hercules and CGA 2).
+
+**One row per CLASS, and the row is the record the class reaches.** The
+class byte (§120.2.3) does not tell a 15bpp record from a 16bpp one, so a
+card that offers both at one geometry (QEMU offers ten records: 0110h/0111h,
+0113h/0114h, 0116h/0117h are such pairs) has records no class can select.
+S8 made `vx_find` answer the DEEPEST record of a class (ties: the first), so
+that the class means "this geometry at the best depth the card has for it",
+`VXV_PICK` lands on it and `VXV_NEXT` walks each class once (before S8 it
+answered the first, and the compact page's cycle stuck on 640x480x16 for
+ever, 0110h and 0111h each naming the other's class); and this table lists
+only the records `vx_find` would answer. On QEMU that is seven rows and Auto:
+640x400, 640x480, 800x600 and 1024x768 at 256 colours, the three larger at
+65,536. Rows keep the card's order (§120.10).
+
+#### 135.9.2 Geometry - one layout, two window sizes
+
+CONTENT-relative, from the content box, so the 616×408 and the 760×520
+window (§135.2) are the same arithmetic; `L` = `CPW_PX` + 4 = 125 and `R` =
+the content width - 5. Every text line is a 12-row ROW (`cpv_row`): two rows
+of paper, one opaque run padded with spaces to the row's width in cells, two
+rows of paper, and the paper in the last few columns the cells do not reach -
+four primitives, and nothing written twice.
+
+| block | rows | x |
+|---|---|---|
+| ground | 44..47, and the 3 rows above the status rule | the page area |
+| Adapter | 48..122: band, four row slots (60, 72, 84, 96), the desktop line (108), 2 rows of paper | `L`..`L`+255 |
+| Mode preview | 48..122: the picture in an 80×62 zone, its two lines beside it | `L`+260..`R` |
+| Modes | 127..`C0`-5: band; the filter strip at +14 (14 rows, its row's paper round it); the header line at +30; the table from +42, `NV` = whole 12-row rows to 2 above the frame | `L`..`R` |
+| controls | `C0` = the status top - 54, 50 rows: the two check boxes (12-row glyph + row, 2 rows apart), then Apply and Test... (64×18, 4 apart) at `C0`+32 | `L`..`L`+211 |
+| Running mode / Keep this mode? | `C0`..`C0`+49 | `L`+216..`R` |
+
+At 616×408 the table holds 12 rows, at 760×520 21. The list's ground, rules,
+header strip and status line are the chrome's (§135.3) and never redrawn by
+the page.
+
+**Redraw only what changed** (CLAUDE.md, Performance rule 1): a press on an
+adapter row redraws the two rows that changed, the preview and the Modes
+group (its content depends on the adapter), the controls (their greying) and
+nothing else; a filter tab, the strip and the table; a table row, the two
+rows, the preview and the controls; a check box, its glyph; Keep, the right
+group. **Nothing is drawn after `CPG_VIDSET` or `CPG_VIDARR` returns** -
+§31.10's rule: the switch re-fits every window, so the origin the press was
+handed may describe a rectangle that no longer exists, and `cp_repost` has
+already handed the whole screen to `ui_task`, whose repaint comes back here
+as `CWV_PAINT` with the new origin.
+
+**The page's state** is the page area of the working area (`CPW_W_PAGE`,
+§135.5): the table block, the filter, the adapter and row chosen, the
+record count, running and recommended indices, a class byte per record (bit
+5 marks a 15bpp one), the rows, the filter's depths, and the test's state.
+Working-area byte 19 (`CPV_LIVE`, the pad between `CPW_W_FULL` and the kit's
+scratch) is 1 while that state belongs to this page: `cpw_page` clears it
+when any other page is drawn, so coming back to Display builds the page again
+from the running mode, while a repaint of Display - every `vid_switch`'s -
+keeps the selection, the filter and a running test. (`CPW_D_ON` is a kept
+byte outside the block since §135.5.1, and `cpw_page` clears it before
+drawing this page.)
+
+#### 135.9.3 Test... - the state machine
+
+```
+IDLE --Test...--> save kind, class, arrangement; left = 15; [cp_tickp] = CP_IVID;
+                  CPG_VIDSET(target)   (CF = 1: back to IDLE, CPG_REPOST)
+TESTING --tick--> left - 1; 0 -> REVERT, else the countdown line redrawn
+TESTING --Keep--> IDLE, [cp_tickp] = CP_ITIME; the right group is Running mode again
+TESTING --Revert, Esc, the countdown, the panel closing--> REVERT
+REVERT:  IDLE, [cp_tickp] = CP_ITIME;
+         CPG_VIDSET(saved kind, saved class) - CF = 1: CPG_VIDSET(VID_VGA);
+         the arrangement saved != the live one: CPG_VIDARR(saved)
+```
+
+- **What is saved** is what was RUNNING: `[vid_kind]`, `[vx_class]` (the
+  live record's class, which `vx_find` maps back to that same record - the
+  deepest of its class, and Auto's pick is the deepest of the largest), and
+  the arrangement as the radio it reads (`[vid_dmode]` ? `[vid_dlay]` + 1 :
+  0). Nothing about the TEST mode's picture is needed to go back, so an
+  unreadable picture reverts exactly.
+- **A revert that fails leaves a working display**: the VGA, which every
+  machine this face opens on has (VESA is a mode of the VGA card).
+- **Keep commits like Apply**: the switch already happened and `cp_repost`
+  already owed `SYSTEM.CFG`; Keep only ends the test.
+- **The page is modal while the test runs**: a press anywhere but Keep and
+  Revert - the page list included - does nothing, so the countdown cannot be
+  left on a page that does not tick. `cpw_click` hands the Display page the
+  whole window's press (one dispatch line) for that reason.
+- **The countdown** is the panel's 1 Hz `CPE_TICK`, which the resident gate
+  delivers only for the page named by `[cp_tickp]` (below). It counts on
+  every tick that arrives; it DRAWS only while the window is visible and
+  nothing covers it (`wm_obscured`, the §14 background-drawing contract). A
+  tick does not arrive while a fullscreen program or a screen-saver session
+  covers the desktop, or while the panel is hidden (its W_FLAGS visible bit,
+  the gate's own test) - the countdown waits then, and those are states the
+  user had to see the picture to enter.
+- **The panel closing during a test reverts first.** `modc_e_flush` calls
+  `cp_wclose` BEFORE `cp_flush_close_x` on kern_big (the order was the other
+  way), so `CWV_CLOSE` reverts (`cpv_quit`) while the claim is still held and
+  `SYSTEM.CFG` is written with the mode the user had before the test. The
+  revert takes the gfx lock unless the running task already holds it
+  (`[gfx_lock_own]` = `[sch_cur]`). The reboot path reaches the same body.
+- **A test into a smaller desktop**: after any switch `wm_refit` clamps the
+  window, and a content box under the face's 616×408 is §135.2's small
+  state. On the Display page during a test that state is the **Keep this
+  mode?** group alone, at content (4, 4), 264×50 - so a test of 640x400, of
+  a Hercules (720×348) or of a CGA (640×200) can still be kept or reverted
+  with the mouse, and Esc and the countdown need nothing visible. Kept, the
+  panel shows §135.2's line until it is closed and opened again; reverted,
+  the window manager's natural bank (§39.11.2.1) gives the window its size
+  back and the wide page returns.
+
+#### 135.9.4 The resident tick gate - 3 bytes
+
+`cp_tick_due_x` asked `[cp_sel] == CP_ITIME` with an immediate. On kern_big,
+kern_emu and kern_mega it asks `[cp_sel] == [cp_tickp]` instead (`xor al,
+imm8` → `xor al, [mem]`, +2 bytes of `.cold`), and `cp_tickp` is one byte of
+`ctrl.inc`'s resident data, `CP_ITIME` at assembly (+1 byte of `.text`). The
+Display page writes `CP_IVID` there for the length of a test and puts
+`CP_ITIME` back at every way out of one. The alternative that cost nothing
+resident - a test of two records (`and al, ~(CP_ITIME ^ CP_IVID)`, 2 bytes) -
+was refused: it would take the gfx lock once a second whenever EITHER face's
+Display page is up, and the lock's cursor promise is the very flicker the
+"seconds in menu bar" setting exists to avoid (ui.inc's step 4).
+kern_small is unchanged (`KERN_BIG` only).
+
+#### 135.9.5 Its gate ops and its doors
+
+| `CPG_*` | | in | out |
+|---|---|---|---|
+| 25 `CPG_VIDARR` | the desktop arrangement applied now (§31.10.2's click body, factored out as `cp_vid_arr`: the two bytes, EXTD.DRV's sync, `vid_disp_init`, `wm_rowcalc`, `wm_refit`, `cp_repost`; EXTD.DRV refusing toasts the panel's load line) | AL = 0 Single, 1 Right, 2 Below | CF = 1 refused; every register kept |
+| 26 `CPG_GLYPH` | `os88ui_glyph` - a check box or radio, which lives in `CTRL.DRV`'s image (`OS88UI_KGLYPH`) and nowhere a wide page can reach - for any wide page | CX/DX = SCREEN x/y, AL = `OS88UI_G*` (with `GON`/`GDOWN`), BL = 1 greyed | every register kept |
+| 27, 28 | reserved for S8, unused | | |
+
+`CPG_N` is 27 on the S8 branch; 22-24 are S7's and are refusals there. The
+rest is existing ops - `CPG_VIDSET`, `CPG_VXCALL` (`VXV_INFO`), `CPG_VGC`,
+`CPG_WDSET`, `CPG_REPOST` - and kernel data read directly (`[vid_kind]`,
+`[vid_avail]`, `[vx_class]`, `[vid_dmode]`, `[vid_dlay]`, `[drv_cfg+CFG_VE]`,
+written with `CPG_WDSET` beside it as the compact page writes it),
+`vid_dual_ok` through the image's KGO hop. Controls arm `CPW_ID0` + n
+(`cpw_edge` hands the release of a wide control to the Display page while it
+is the page) and fire on the release inside the same control, drawn pressed
+between (§13.8.3).
+
+#### 135.9.6 What differs from the mockup
+
+The info box shares the bottom band with the controls instead of running the
+page's width (the table keeps the rows at 616×408); the Keep group's band
+is blue with white words, as the mockup's, but drawn by the page rather than
+by `cpk_group` - in the small state after a test of a Hercules or a CGA the
+desktop is 1bpp, where the kit's grey band sets black words on black and blue
+rounds to black under white ones; the filter has no `16` (16 colours is the
+VGA adapter, which is a row of the Adapter group, not a VBE mode); the
+adapter rows say `VGA 640x480` rather than `VGA 640x480 16 colours` (the
+colours are in the preview); the preview has no aspect line - the picture
+is drawn to the aspect, and the line cost ~110 bytes of a page over its
+budget.
+
+### 135.10 Reserved (VESA mode information - see §120.10)
+
+The verb the mode table reads is the VESA driver's, so its contract is in
+§120.10 beside the others; this number is kept so §135's numbering does not
+move.
+
+### 135.11 The Theme page - the theme changer
+
+Pinned by S9, to `docs/cpwide/cp-theme-vga-640x480.png`; the code is
+`kernel/cpw_thm.inc` (prefix `cpt_`), assembled into CPWIDE.DRV after the
+chrome. `cpw_page` hands the page to `cpw_thm_paint` while `[cp_sel]` is
+`CP_ITHM`, `cpw_click` hands the press to `cpw_thm_click`, and `cpw_edge`'s
+release of a wide control to `cpw_thm_up`; the compact Theme page
+(`cp_thm_paint`) is no longer hosted on the wide face. A display that cannot
+show Color (1bpp, §76.12.1) never reaches this face, so no control here is
+greyed; `thm_set` keeps the refusal.
+
+**Contents** (page-relative to the content box; L = `CPW_PX` + 8 = 129,
+R = content width - 9; "extra" = content height - 389, so 0 at 616x408 and
+112 at 760x520):
+
+| element | where | what |
+|---|---|---|
+| four cards | y 52 (`CPT_TOP`), x = L + i x (w + 8), i = 0..3 = `THM_BRIGHT`, `THM_DARK`, `THM_COLOR`, `THM_WIN`; w = (content width - 161) / 4 (113 / 149); h = 84 + extra / 2 (84 / 140) | a miniature desktop, menu bar, window and title bar, drawn from a table of rects (`cpt_tab`) in the THEME'S OWN pens: the row is `thm_tab`'s Bright / Dark row, and for Color and Windows the live Color row `THM_CROW` (a Windows card wears the Color row, §76.14.13, with a bevelled grey window), so a changed preset previews truthfully; a dithered desktop (`THM_DITHER`) is `gfx_fill_gray`. Under it its name, centred. The LIVE theme (`[thm_kind]`) has a 2 px blue ring and its name on a blue bar; the rest a 1 px black ring |
+| COLOR PRESETS | group at y = 52 + h + 8, 60 tall, x L..R | the eight rows of `drivers/thmpal/thmrows.inc` (the same macro `THM_PRESET_ROWS`, so THMPAL.DRV and this page cannot disagree about a colour) as 28x32 swatches at x = L + 14 + 38 i: the title colour (row byte 3) over the desktop colour (byte 5) in a black outline; the live preset (the 'TP' byte, `[drv_cfg + CFG_THMP]`), while the theme is Color or Windows, has a 3 px blue ring. **Customize...** right-aligned in the group |
+| Effects | group at y = presets + 68, 56 tall, x L, half the width | "Window animations" and an On / Off tab strip (`cpk_tabs`) over `[wm_animon]`. §11.99's zoom IS this setting (the compact page's second group, `CFG_ANIM`), so the mockup's separate "Desktop zoom" box is not drawn: it would be a second control for the same byte |
+| Screen Saver | group beside it, x L + half + 8 .. R | a 96x34 black picture with ten stars (primitives, no bitmap) and **Settings...** |
+
+**Acting.** A card or a swatch acts on the PRESS, as the compact radio does
+(§13.8.3): a card is `CPG_THMSET` with its `THM_*` (CF = 1: already live,
+nothing drawn). **A click draws no card and no swatch itself**: `cp_thm_apply`
+asks `cp_repost`, `ui_task` repaints every window - this one included, through
+`CWV_PAINT` - so the frame moves with the world, once, and nothing is drawn
+twice. The animation strip acts on the press, writes `[wm_animon]`, owes
+`SYSTEM.CFG` (`CPG_WDSET`) and redraws the one strip (nothing else is on
+screen to repaint). **Customize...** (`CPG_THMCUST`) and **Settings...**
+(`CPG_SAVER`) are armed (`CPW_ID0` + 1 and + 2, the pressed look drawn at
+once) and fire on the release, only if it lands inside the same rect - the
+compact page's rule (§13.7).
+
+**Presets: the decision.** A preset is applied with ONE click and no driver
+ABI change (`THMV_ABI_VER` and THMPAL.DRV are untouched; the dialog stays
+Customize...'s). CPWIDE.DRV carries the eight rows itself (80 bytes, the one
+macro) and does what `tv_install` does: the preset's row over the Color row
+`THM_CROW`, its number into 'TP'. `[thm_cstrp]`, the title style, is NOT
+touched, so a preset recolours a Windows theme and keeps it Windows. Then
+**`CPG_THMPRE` (29)**: `thm_set` with `THM_COLOR` unconditionally (it promotes
+to Windows by itself when bit 2 of `[thm_cstrp]` says so), a refusal
+toasted, `cp_repost`. **A swatch switches the theme to Color** when Bright or
+Dark was live, as Customize... does (§76.14.14): the swatches are never
+inert. `CPG_THMSET` could not serve: it answers "already live" for Color and
+changes nothing, which is exactly a second preset.
+
+| `CPG_*` | | in | out |
+|---|---|---|---|
+| 29 `CPG_THMPRE` | the Color row and 'TP' were just installed: apply Color (`cp_thm_pre`, `CTRL.DRV`'s 6 bytes beside `cp_thm_apply`) | - | CF = 0 |
+
+Numbers 30 and 31 are reserved and unused; `CPG_N` is 30 on this branch, and
+the table pads 22-28 (`cpg_none`: CF = 1) for the agents who own them - the
+merge drops the pads.
+
+**Cost on the XT.** A full paint is: the page ground (1 fill), each card
+about 21 `gfx_fill`s and one text run (Windows card 26) = 90 calls, the preset
+group's band and frame (about 9) and 8 swatches of 3 fills (+ 4 for the live
+ring) and a button, the Effects group (about 9) and the Screen Saver group
+(about 25: ten stars). About 170 drawing calls and 3 buttons, which is
+170 x 756 us = about 130 ms of fixed cost plus the pixels, once per theme
+change - beside the world's own repaint it is not the bill. No call is made
+while the page merely sits, and a press that changes nothing draws nothing.
+
+**Measured (S9, 2026-11-21).** `CPWIDE.DRV` +1,551 bytes (4,471 -> 6,022 on
+kern_big, 6,022 on kern_emu, 4,485 -> 6,034 on kern_mega) with the whole
+page, the eight rows and all the strings; `CTRL.DRV` +22 on each kernel
+(`cpg_none` and its seven pad words, `cp_thm_pre`, the table word); no
+resident byte on any kernel (`kernsize`: kern_big 265 left, unchanged).
+
+**Where it differs from the mockup.** No "Desktop zoom" box (above); the
+animation choice is a tab strip, not two radio buttons, because the kit has
+no radio and `os88ui_glyph` lives in CTRL.DRV's image where CPWIDE.DRV cannot
+call it; the swatches' selection is a 3 px blue ring around the whole swatch.
+
+### 135.12 Cost, measured
+
+Filled per wave from `tools/kernsize.py` (all three kernels), the images'
+sizes, the heap held while the panel is open, and the open time on the XT
+with VGA (MartyPC `os8088_xt_vga`) against the compact face.
+
+**Wave 1 (S1-S4), 2026-11-21**, against `feature/cpwide` before it
+(`tools/kernsize.py` on fresh builds of each; `make budget-check` holds all
+four kernels):
+
+| | kern_big | kern_emu | kern_mega | kern_small |
+|---|---|---|---|---|
+| `.text` | 39,506 → 39,509 (+3) | 39,752 → 39,755 (+3) | 45,271 → 45,274 (+3) | byte-identical |
+| `.bss` | 4,964 → 4,972 (+8) | 4,964 → 4,972 (+8) | 5,195 → 5,203 (+8) | |
+| `.cold` | 37,456 → 37,454 (−2) | 37,456 → 37,454 (−2) | 52,682 → 52,680 (−2) | |
+| rungs | kernel 274 → 265 left | kernel 28 → 19 left | image 222 → 211, cold 54 → 56 left | unchanged |
+| KERN_SIZE | 95,232 (unchanged) | 95,232 (unchanged) | resident 61,952 (unchanged) | 57,344 |
+| `CTRL.DRV` | 16,200 → 16,663 (+463) | 16,218 → 16,681 (+463) | 16,431 → 16,902 (+471) | 5,896 (unchanged) |
+| `CPWIDE.DRV` | 4,471 | 4,471 | 4,485 | - |
+
+The resident +9 is: the `mod_tab` row (4) and `'CPWIDE.DRV'` (11), the
+`mod_fpt` word (2) and `CPWFP`'s slot (4), `CPE_GATE`'s slot in `CTRL.DRV`'s
+block (4) - less `cp_kinit`'s body, whose work moved into `CPG_OPEN`, and
+two bytes of `cp_open_x` (the launch moved into the image with the choice).
+**kern_emu was the binding rung**: 28 bytes of slack at the start, and the
+first cut (the choice resident, the launch where it was) crossed it - the
++11 of `.text`+`.bss` moved the FAT window up a paragraph and `.cold`'s +6
+then pushed `.vgabuf` past the 512-byte step. Moving `app_launch` into
+`CPG_OPEN` made `cp_open_x` two bytes shorter rather than six longer, and
+kern_emu now has 19 bytes left; nothing in this section may add a resident
+byte to kern_emu without finding one first.
+
+Heap while the wide panel is open, beyond the compact panel's: `CPWIDE.DRV`
+(4,471 bytes, one 4,608-byte claim) and the asset claim, `CPW_WSZ` (832; 848 since §135.5.1) +
+`CPWIDE.DAT` (14,642 unpacked; 5,290 on the disk) = 15,474 bytes (15,490
+since §135.5.1's kept bytes), a 15,872-byte claim - 20,480 bytes in all, both `MEM_K_MOD` and both given back
+at the close. The open reads one file more than the compact face (the
+module) and one data file; the XT open time is the QA pass's to measure.
+
+**S7 (the Drivers page), 2026-11-21:** CPWIDE.DRV 4,471 -> 6,092 (big), 6,092 (emu), 4,485 -> 6,102 (mega): +1,621 / +1,621 / +1,617. CTRL.DRV unchanged (16,663 / 16,681 / 16,902), no resident byte, no rung moved, no gate op added.
+
+**Wave 2, S8 (the Display page), 2026-11-21**, against `feature/cpwide`
+94a7d9784 (fresh builds of each; `make budget-check` holds all four kernels):
+
+| | kern_big | kern_emu | kern_mega | kern_small |
+|---|---|---|---|---|
+| resident | +3 (`cp_tickp` +1 `.text`, `xor al, [mem]` +2 `.cold`) | +3 | +3 | byte-identical |
+| rungs | kernel 265 → 262 left | kernel 19 → 16 left | image 211 → 210, cold 56 → 54 left | unchanged |
+| `CTRL.DRV` | 16,663 → 16,695 (+32) | 16,681 → 16,713 (+32) | 16,902 → 16,934 (+32) | unchanged |
+| `CPWIDE.DRV` image+bss (`MODV_SIZE`) | 5,153 → 9,860 (+4,707) | 5,153 → 9,860 | → 9,890 | - |
+| `CPWIDE.DRV` on the disk (lz4) | 4,471 → 8,474 | 4,471 → 8,474 | 4,485 → 8,488 | - |
+| `VESA.DRV` | 3,677 → 3,698 (+21, `vx_find`) | same | same | same |
+
+The page is 4,707 bytes of `CPWIDE.DRV` against the fan-out's 3,300
+allocation; the lead accepted it (the Drivers and Theme pages came in near
+1,600 each, and the module's cap, `MOD_MAX_KB` 17,408, holds with room). The heap while the
+wide panel is open grows by the module's claim, 5,120 → 10,240 bytes.
+
+### 135.13 Testing
+
+The rows the plan names, and the QA pass of the plan's final section. The
+compact face's rows (`dispcp`, `cpnames`, `cplistrow`, `cpup`, `cppromise`,
+`btnall`, `cfgtrip`, ...) must stay green on CGA, Hercules and EGA, where it
+is still the only face.
+
+**Wave 1 (S1-S4) reaches**, and names for the final pass (none was run
+during the wave, by the owner's rule): every Control Panel row - `dispcp`,
+`cpnames`, `cplistrow`, `cpup`, `cppromise`, `btnall`, `cfgtrip`, and every
+row that opens the panel on a VGA or VESA desktop, which now opens WIDE:
+the VESA rows that drive the Display page (`vesacp`, `vesa`, `vesa8`,
+`vesashut`, `vesapref`), the driver-page rows (`ethcfg` and the RAM disk's,
+hard disk's and PicoMEM's panel rows), `colorpresets_qemu` (Customize...),
+and the kern_mega rows that open the panel. **A row that clicks the compact
+panel's coordinates on VGA will miss on the wide face**: such a row either
+reads the window's origin and `cp_origin`'s (`tools/os88geom.py`) or is
+pinned to the compact face by an image without `CPWIDE.DRV` (deleting it
+opens compact, §135.2) - which the QA pass decides per row. Host gates the
+wave changed: `btnrules` (`tests/btnsites.txt`: `cpwkit.inc`'s button),
+`stkbalance`, `ovlchk`, `pins` (`tests/pins.txt`: the asset claim),
+`moddrop` (MOD_CPW's drop is `cp_wclose`'s).
+
+**What the final pass decided, per row** (2026-11-23). A row that drives a
+compact page's LOGIC on a VGA or VESA desktop is PINNED to the compact face
+by `tests/cpface.py`: before the first open it writes 0 over the first byte
+of `mod_f_cpw` - the kernel's own mark that `CPWIDE.DRV` was refused (135.2)
+- so the open takes the compact face without a lookup, as a machine whose
+system disk has no `CPWIDE.DRV` does after its first open; no image changed
+and no kernel byte spent. The wide face
+hosts the very same page code (135.3), so a pinned row still tests the page
+it was written for. Pinned: `hmadrv`, `heaphi`, `rdxms`, `ethcfg`,
+`vesakbd`, `vesacp`, and `colorpresets` (whose desktop sample sits under a
+wide frame moved aside). **`cpwide`** (`tests/cpwide.py`, soak, QEMU) is the
+row that drives the WIDE face: it opens at 618x408 on 640x480, the page list
+selects Drivers, Theme, Display and Dock (each click answered by `cp_sel`,
+which is also the row's check that its mirror of `cpw_lay` still matches the
+build), the Drivers page redrawn after Theme and after Display is pixel for
+pixel the one drawn first (QA-3, 135.5.1), and the hosted Dock page's Left
+makes the next open compact while the compact Dock page's Bottom makes the
+one after it wide again (QA-1, step 4 above).
+
+Looked at on the glass, QEMU (wave 1): VGA 640×480 opens wide at 616×408
+(every hosted page drawn; the list, header and status line; the Keyboard
+page's radio and typed text through the gate; Theme → Color repainting the
+world; the catalog's tabs and scroll bar; a driver loaded on the hosted
+list updating the status line); VESA 1024×768 opens at 760×520, and Set
+Primary back to the VGA keeps the open panel drawn on the smaller desktop;
+CGA opens compact and a hosted-code refactor (the Drivers page's toggle)
+behaves as before; a VGA system disk without `CPWIDE.DRV` opens compact
+silently. Not looked at: Hercules and EGA (compact by the predicate), the
+two VESA sizes between, and any real-hardware or MartyPC timing.
+
 ## 150. BASIC/8088 — the language as a package (`apps/basic/`)
 
 **The language is called BASIC/8088**, after the machine it is for and in the
@@ -261767,3 +263689,4 @@ which is why the plan's wave 4 is a desk shell and not a nicety. The dock has
 its second already — §30.7's LaunchPad, which under this chapter is a dock
 SHELL rather than a replacement for §30's strip, so the stock dock stays and
 clearing one record goes back to it.
+

@@ -130,6 +130,14 @@
   "strings": "075d3ddf5a3a826e",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "BORATYPE_O88": {
+  "sources": [
+   "apps/boratype"
+  ],
+  "stamped": "242d42709",
+  "strings": "a1a14df9480fe648",
+  "why": "first page: written from apps/boratype (menus, key routing, HELP.TXT, lessons, achievements, save files) and docs/BORATYPE-SPEC.md"
+ },
  "BOUNCE_GIF": {
   "sources": [],
   "stamped": "e4576a70",
@@ -268,13 +276,30 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "CPWIDE_DAT": {
+  "sources": [],
+  "stamped": "242d42709",
+  "strings": null,
+  "why": "first page: written from SPEC.md 135.6-135.7 and drivers/catalog.toml"
+ },
+ "CPWIDE_DRV": {
+  "sources": [
+   "kernel/cpwide.inc",
+   "kernel/cpw_drv.inc",
+   "kernel/cpw_vid.inc",
+   "kernel/cpw_thm.inc"
+  ],
+  "stamped": "242d42709",
+  "strings": "f88cbb8a26ef502d",
+  "why": "first page: written from SPEC.md 135 and the cpw* sources' strings (page list, Drivers, Display with Test..., Theme)"
+ },
  "CTRL_DRV": {
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "38069791",
-  "strings": "968a5adf84f05f2f",
-  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
+  "stamped": "51ded3c12",
+  "strings": "9ad9501242322293",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "CWORD": {
   "sources": [],
@@ -332,9 +357,9 @@
   "sources": [
    "kernel/diskops.inc"
   ],
-  "stamped": "faab005c",
+  "stamped": "51ded3c12",
   "strings": "676cabf40e203a01",
-  "why": "Clone and Write Image give the target a serial of its own (SPEC.md 18.8.2.1); added one sentence each, nothing quoted changed"
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "DOCK_DRV": {
   "sources": [
@@ -627,9 +652,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "adbf66f33",
-  "strings": "f1565744de501e24",
-  "why": "apps/install changed only in OS88VER.TXT (release 20261118's date and what-is-new lines); the page quotes neither, so it stands unchanged"
+  "stamped": "8d647b342",
+  "strings": "9e2cf182bfc64738",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261123's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -656,6 +681,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "KEYBOARD_DRV": {
+  "sources": [
+   "kernel/keyboard.inc"
+  ],
+  "stamped": "51ded3c12",
+  "strings": "075d3ddf5a3a826e",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "KOROBEIN_MID": {
   "sources": [],
@@ -779,9 +812,9 @@
   "sources": [
    "apps/notepad"
   ],
-  "stamped": "9deeee7d",
-  "strings": "b93994888feea78c",
-  "why": "New asks about unsaved changes (checked on MartyPC)"
+  "stamped": "51ded3c12",
+  "strings": "a1a773a4678f2c0d",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "NOTES": {
   "sources": [],
@@ -1221,9 +1254,9 @@
   "sources": [
    "apps/thewire"
   ],
-  "stamped": "e4576a70",
-  "strings": "87b20c30500765e6",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "324a520b1",
+  "strings": "d6b3ce6bd54c8bd6",
+  "why": "Load Program runs a version 2 bundle from an XMS RAM disk; new reason Needs an XMS RAM disk - use Add to Disk"
  },
  "THMPAL_DRV": {
   "sources": [
@@ -1340,9 +1373,9 @@
    "kernel/vidext.inc",
    "kernel/ctrl.inc"
   ],
-  "stamped": "38069791",
-  "strings": "9a119e740c33a0bb",
-  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
+  "stamped": "51ded3c12",
+  "strings": "f9650272015e5b0e",
+  "why": "Checked keyboard page, CP850 text and module disk/lifetime behavior against the implemented UI; VESA behavior is unchanged by the appended category"
  },
  "VIDEO_O88": {
   "sources": [

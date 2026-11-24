@@ -1,19 +1,19 @@
 {
  "DRV_VER": {
-  "fingerprint": "fa1b058e4aff37818f40b13f2da0a9238124a85459a4c48733df77dca576a841",
+  "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
   "version": 14
  },
  "HD_ABI_VER": {
-  "fingerprint": "6a6338a0ced60206a6481ad09bf867865d77a622495d564cf1b6b707b55f8fdb",
+  "fingerprint": "beb2409210c773233d4634fd4d3bd96f6a43d6a11202ee6cf9219265e856eeca",
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "172c2e7961e01deb103f0de33ba0f9dad4a63ec4ccf2e5f43f1c4637bb46f80c",
+  "fingerprint": "78d9a6aeaf42b14a7e9ff44e3a9493639ab52ecd4166769ac38ceda37300db9a",
   "version": 13
  },
  "VX_ABI_VER": {
-  "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
-  "version": 5
+  "fingerprint": "ee81b0cbdb41411a43e970d6aa6d78bf8c91e807361912715b8562f7a028e259",
+  "version": 6
  },
  "XM_ABI_VER": {
   "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
@@ -2435,6 +2435,62 @@
    "guard": "HD_ABI_VER",
    "reason": "DRVM_CEIL_DISK 4 -> 5: HDD.DRV's image is 4.5KB for logical drives and the large-disk transports (SPEC.md 52.4.1); a quoted ceiling, nothing built before stops running",
    "to": 7
+  },
+  {
+   "fingerprint": "d057432301f2a22ee4fa121576cb326ec39180872a71b35d2892d13ee446fd27",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
+   "to": 13
+  },
+  {
+   "fingerprint": "c8835bd0471c16ab4fc259e06d38a80647ed576e988f1fafeb1eb943e4f4a8c2",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
+   "to": 14
+  },
+  {
+   "fingerprint": "beb2409210c773233d4634fd4d3bd96f6a43d6a11202ee6cf9219265e856eeca",
+   "from": 7,
+   "guard": "HD_ABI_VER",
+   "reason": "OSAPI_FILE_PLACE (door 0x60, RN) added at the end of the table, FPL_* verbs, OSAPI_FCP_FAR/OSAPI_FIND_FAR bits and the C SDK's os88_file_place - additions only, every package built before still runs (SPEC.md 19.12.8, FAT32 on kern_mega)",
+   "to": 7
+  },
+  {
+   "fingerprint": "78d9a6aeaf42b14a7e9ff44e3a9493639ab52ecd4166769ac38ceda37300db9a",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
+   "to": 13
+  },
+  {
+   "fingerprint": "a8f72a915b39c66209a9e4ebd7f3ff2809b98c8e3943c31058e8970f4af37b99",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of main's OSAPI_FILE_PLACE (door 0x60, SPEC.md 19.12.8) with #396's OSAPI_KEYBOARD cell 0x023C (SPEC.md 9.16): both additions at the end, every package built before still runs",
+   "to": 14
+  },
+  {
+   "fingerprint": "667638d196c3dfbd1bcc0780388d403a99be4901a335d95d3380b763ee831332",
+   "from": 5,
+   "guard": "VX_ABI_VER",
+   "reason": "VX_ABI_VER 6: vx_blk grows VXB_FONTLIM, a pointer to font_last/font_span, so VESA.DRV's VX_FONTRUN bounds the glyph index by the live span (SPEC.md 6.7) instead of the constant 126 - accented CP850 text drew blank on a VESA desktop. The block's layout moved, so a VESA.DRV of version 5 cannot run beside this kernel: bump, and the attach refuses the mismatch.",
+   "to": 6
+  },
+  {
+   "fingerprint": "371c177248034bb699bdb70d7ea356c328c6b11cacbc17f301f4230d0b629105",
+   "from": 6,
+   "guard": "VX_ABI_VER",
+   "reason": "vxabi.inc gains VXG_WMAX/VXG_HMAX (merged over #398's VX_ABI_VER 6): the widest primary VESA.DRV may choose, which the kernel sizes its desktop grid (DESK_CMAX) and menu bar against; no selector, block or register contract moved, so VX_ABI_VER stays 6",
+   "to": 6
+  },
+  {
+   "fingerprint": "ee81b0cbdb41411a43e970d6aa6d78bf8c91e807361912715b8562f7a028e259",
+   "from": 6,
+   "guard": "VX_ABI_VER",
+   "reason": "VXV_INFO (0x44): additive verb for the wide Display page, like VXV_PM; an image or kernel from before it cannot be broken by it, so VX_ABI_VER stays 6",
+   "to": 6
   }
  ]
 }

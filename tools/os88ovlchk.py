@@ -61,14 +61,15 @@ CCELL = re.compile(r'^\s*(?:OSAPI_(?:NCELL|FCELL)\s+'
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modm', '.modu', '.modf', '.modl', '.modh', '.modp',
         '.modd', '.modk', '.modx', '.modw', '.modj',
-        '.modn', '.mods', '.boot3m')  # module images (2.8). THE UNION:
-        # .modm is this branch's and .modu upstream's, and a name missing here
-        # is a module this tool silently does not check - which is why the
-        # line carries that sentence, and why .modw joined it at the
-        # 2026-10-14 merge, .modj/.modn at the 2026-10-18 one and .mods at
-        # the second 2026-10-20 one, rather than replacing anything. THIS
-        # CONFLICT HAS NOW COME UP THREE TIMES and the sentence above is what
-        # resolves it every time: take the union.
+        '.modn', '.mods', '.modq', '.modv', '.boot3m')  # module images
+        # (2.8). THE UNION: .modm is this branch's and the rest upstream's,
+        # and a name missing here is a module this tool silently does not
+        # check - which is why the line carries that sentence, and why .modw
+        # joined it at the 2026-10-14 merge, .modj/.modn at the 2026-10-18
+        # one, .mods at the second 2026-10-20 one and .modq/.modv (CPWIDE.DRV,
+        # SPEC.md 135) at the 2026-11-24 one, rather than replacing anything.
+        # THIS CONFLICT HAS NOW COME UP FOUR TIMES and the sentence above is
+        # what resolves it every time: take the union.
 # `.boot3m` is the keyboard mouse's pointer half (SPEC.md 2.8.8, 9.6.7), a
 # module image with no FILE: it rides KERNEL.SYS's `.boot3` tail and is
 # adopted from memory into a heap claim, then run with DS = KERNEL_SEG and
@@ -2005,6 +2006,38 @@ def expand(path, seen, defines=None):
         yield path, n, raw
 
 
+_DEF = re.compile(r'^\s*%i?define\s+(\w+)')
+
+
+def _defined_syms():
+    """Every symbol any source %defines, plus the -D names in the Makefile.
+
+    Used ONLY to spot a block that cannot assemble, so erring towards
+    "defined" is the safe direction: an unknown symbol keeps its block and a
+    real crossing is still reported.
+    """
+    out = set()
+    for root, _dirs, files in os.walk('apps'):
+        for fn in files:
+            if not fn.endswith(('.inc', '.asm')):
+                continue
+            try:
+                with open(os.path.join(root, fn), encoding='utf-8',
+                          errors='replace') as fh:
+                    for line in fh:
+                        m = _DEF.match(line)
+                        if m:
+                            out.add(m.group(1))
+            except OSError:
+                pass
+    try:
+        with open('Makefile', encoding='utf-8', errors='replace') as fh:
+            out.update(re.findall(r'-D\s*(\w+)', fh.read()))
+    except OSError:
+        pass
+    return out
+
+
 def check_pkgs():
     bad = []
     walked = 0
@@ -2164,9 +2197,47 @@ def check_pkgs():
         # one linear pass for the section each line lands in: a `section`
         # directive inside an include stays in force after it, exactly as it
         # does for NASM
+        # A BLOCK NOTHING CAN DEFINE IS NOT ASSEMBLED, and its calls are not
+        # calls. This pass does not evaluate %ifdef in general (the note
+        # below says why) - but a symbol no file ever %defines and no -D
+        # passes in cannot be true, so `%ifdef SYM` around it is dead text.
+        # OS88LINE_CP850 is the live case: os88line.inc offers CP850 input
+        # behind it, nothing opts in, and when upstream taught os88text.inc
+        # the same trick (2026-11-24) ITS copy of os88kbd.inc landed in
+        # SHEET's MODULE - whereupon those dead lines read as .text -> .modc.
+        #
+        # EVERY `%if` FORM COUNTS AS A LEVEL, and that is the whole care
+        # needed: the first cut of this tracked only %ifdef/%ifndef/%endif,
+        # so an %ifidni inside a dead block ate its %endif, `dead` never
+        # cleared, and the scan went blind for the rest of the stream - a
+        # REAL injected crossing then went unreported. The mutation caught
+        # it; the depth counter is what fixes it.
+        defined = _defined_syms()
         rows, cur = [], '.text'
+        depth, dead_at = 0, None
         for f, n, raw in stream:
             line = raw.split(';')[0]
+            if re.match(r'\s*%if', line):
+                depth += 1
+                if dead_at is None:
+                    g = re.match(r'\s*%(ifdef|ifndef)\s+(\w+)\s*$', line)
+                    if g and ((g.group(1) == 'ifdef') ==
+                              (g.group(2) not in defined)):
+                        dead_at = depth
+                continue
+            if re.match(r'\s*%endif', line):
+                if dead_at == depth:
+                    dead_at = None
+                depth = max(0, depth - 1)
+                continue
+            if re.match(r'\s*%el', line):
+                if dead_at == depth:
+                    dead_at = None      # ...the arm that IS assembled
+                elif dead_at is None:
+                    dead_at = depth     # ...and the one that is not
+                continue
+            if dead_at is not None:
+                continue
             m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC2?)(.*)', line)
             if m:
                 cur = SECT_ALIAS.get(m.group(1), m.group(1))

@@ -2482,6 +2482,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
                                       $(BUILD)/win95.drv $(BUILD)/desk.drv \
                                       $(BUILD)/stikmenu.drv $(BUILD)/serial.drv \
+                                      $(BUILD)/cpwide.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2835,6 +2836,8 @@ checkdocs:
 	@python3 tools/os88index.py --check
 	@python3 tools/os88help.py --check
 	@python3 tools/cp437font.py --check
+	@python3 tools/cp850font.py --check
+	@python3 tools/keyboardmaps.py --check
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -2893,7 +2896,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv $(KMODDIR)/keyboard.drv
 # ...and kern_big's FOURTH, hibernate (SPEC.md 87, MOD_HIBER). It is NOT in
 # $(KMODS) because $(SMALLDRIVERS) is $(KMODS) and kern_small has no hibernate
 # at all now - no mod_tab row, no name and no module - so a small floppy that
@@ -2914,12 +2917,16 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODD
 # so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a Sticky App's
 # OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all. And so is
 # STIKMENU.DRV (SPEC.md 110.12), Locator's Sticky Apps menu, which its drop
-# loads and its pick drops: kern_small has no Sticky Apps menu.
+# loads and its pick drops: kern_small has no Sticky Apps menu. And so is
+# CPWIDE.DRV (SPEC.md 135.2), the wide Control Panel's face, which the panel's
+# open loads beside CTRL.DRV on a colour primary of at least 640x480 and its
+# close drops: kern_small has no VGA renderer and no wide face.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
-          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv
+          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv \
+          $(KMODDIR)/cpwide.drv
 endif
 # FSCHECK.DRV (SPEC.md 118.14.1) is cut beside them and is NOT in $(DRIVERS):
 # it is no mod_tab row and the kernel never loads it - System Check does, from
@@ -2952,12 +2959,13 @@ KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
 ifneq ($(KERN_SMALL),)
 KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
-KMODARGS += -m 5=$(BUILD)/serial.drv
+KMODARGS += -m 5=$(BUILD)/serial.drv -m 6=$(BUILD)/keyboard.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
             -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv \
-            -m 10=$(BUILD)/fscheck.drv
+            -m 10=$(BUILD)/keyboard.drv -m 11=$(BUILD)/cpwide.drv \
+            -m 12=$(BUILD)/fscheck.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -3749,6 +3757,12 @@ DRIVERS += $(BUILD)/vesa.drv
 # ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
 # ($(SMALLDRIVERS) is a restatement that never held it)
 DRIVERS += $(BUILD)/pciether.drv
+# CPWIDE.DAT - the wide Control Panel's icons and driver catalog (SPEC.md
+# 135.6, 135.7): a DATA file beside CTRL.DRV, built by tools/cpwdat.py. It is
+# kern_big / kern_emu / kern_mega's alone - kern_small has no wide panel - and
+# $(SMALLDRIVERS) is a restatement that never held it. On a
+# boot disk: an ordinary file (SPEC.md 19.6), so it takes one root listing slot.
+DRIVERS += $(BUILD)/cpwide.dat
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -4206,6 +4220,16 @@ $(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
 $(BUILD)/faces:
 	mkdir -p $@
 
+# CPWIDE.DAT (SPEC.md 135.6) packs like a driver: a 'CZ' file the kernel's
+# transparent read expands into the claim the directory hint sizes. Every input
+# is a prerequisite - the two sheets, the catalog, the layout it is checked
+# against and the compressor - and PKGZSTAMP carries the PKGZ knob, so a
+# BUILD= tree (kern_emu's, kern_mega's, a knob's) rebuilds it for its own PKGZ.
+$(BUILD)/cpwide.dat: tools/cpwdat.py kernel/cpwfmt.inc drivers/catalog.toml \
+                     kernel/cpwart/cp-icons-16.png kernel/cpwart/cp-icons-32.png \
+                     tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	python3 tools/cpwdat.py -o $@ $(if $(PKGZ),--fmt $(PKGZ))
+
 $(BUILD)/faces/%.f88: $(BUILD)/%.f88 tools/os88lz.py $(PKGZSTAMP) | $(BUILD)/faces
 ifeq ($(PKGZ),)
 	cp $< $@
@@ -4390,7 +4414,14 @@ COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 # it would take two thirds of what the disk has left.
 # System Check's manifest marks them OPTIONAL (118.2.3), so a hard disk
 # installed from this disk is not reported as missing them.
-SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv
+# The WIDE CONTROL PANEL's two files (SPEC.md 135.2) are the FIFTH and
+# SIXTH, the owner's decision of 2026-11-22: the wave-2 pages took the disk
+# past what it had left (708 clusters of 706), and a 360KB machine is an XT,
+# where the wide face's drawing and ~20KB of heap fit worse than on a 286+.
+# Without them the panel opens compact, silently - 135.2's refusal path - so
+# a 360KB boot is the compact face, as it was before 134 existed.
+SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv \
+                $(KMODDIR)/cpwide.drv $(BUILD)/cpwide.dat
 DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
     DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
     there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \
@@ -5998,6 +6029,19 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 	@mkdir -p $(BUILD)/wirecfg
 	printf '10.0.2.2:8092/wire/\n' > $@
 
+# THE XMS WIRE MACHINE (SPEC.md 92.13.1): the same two ticks plus an 'RD'
+# record (51.9.1) whose RDC_LOC is RDL_XMS, so the RAM disk the Wire mounts
+# lives above 1MB - the one place a version 2 tree may go. Its own directory
+# for build/vmmcfg's reason above. RDC_VER 1, 64KB (RDPV_MOUNT resizes it),
+# RDL_XMS = 1, no image to restore.
+$(BUILD)/wirexmscfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(BUILD)/wirexmscfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 2)).to_bytes(2,'little') + b'RD' + bytes([1,24]) + \
+	  bytes([1]) + (64).to_bytes(2,'little') + bytes([1]) + bytes(20) + \
+	  b'\0\0')" > $@
+
 # **$(KERNFILE) AND NOT $(BUILD)/kernel.bin.** This branch PACKS the kernel
 # (SPEC.md 2.9.13) and the boot sector expects the packed file; the two
 # names are the IMAGE and the FILE and every rule that puts a kernel on a
@@ -6009,6 +6053,16 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) 
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
+
+# ...and its 1.44MB system disk: XMEM.DRV rides $(DRIVERS) here, where the
+# 360KB disk omits it ($(SYS360OMITDRV)), and the kernel loads it on any 286
+# or better - QEMU's default CPU. `thewirexms` (tests/thewire.py --xms) boots
+# it to run a version 2 archive from an XMS RAM disk.
+$(BUILD)/thewirexms.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/wirexmscfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/wirexmscfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
 # THEWIRE.O88 and a second WIRE.CFG, because before the desktop zone existed
@@ -6035,7 +6089,7 @@ $(BUILD)/thewiredata.img: tools/os88disk.py Makefile | $(BUILD)
 # entry, because a package with PARTS is the one thing the image form of
 # OSAPI_PKG_START refuses (SPEC.md 92.14.2, 21.5.1). It goes on no floppy.
 #> [Gate disks] thewiretest :: The Wire's gate disks, pointed at a fixture catalog
-thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img $(BUILD)/mseg.o88
+thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewirexms.img $(BUILD)/thewiredata.img $(BUILD)/mseg.o88
 	@echo "thewiretest: build/thewire360.img - ETHER.DRV already wanted, and"
 	@echo "             SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092/wire/."
 	@echo "             build/thewiredata.img is the scratch B: it writes to."
@@ -7844,7 +7898,7 @@ $(DOSNETSTAMP): | $(BUILD)
 # presents as a fix that did not work, on a binary that never contained it.
 # Four other rules had the same hole and were fixed with this one.
 SHEET_SRC := apps/sheet/sheet.asm apps/os88api.inc \
-             apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+             apps/os88ui.inc apps/os88line.inc apps/os88text.inc apps/os88kbd.inc \
              apps/os88chart.inc apps/os88chartbss.inc \
              apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
              apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
@@ -7953,7 +8007,7 @@ $(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAM
 	$(OS88PKGB) $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
-$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc apps/os88kbd.inc \
                      $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(PKGSBDEF) -o $@ apps/notepad/notepad.asm
 	@echo "notepad: $(call FILESIZE,$@) bytes"
@@ -14629,7 +14683,7 @@ NPBENCHSRC := apps/notepad/notepad.asm tests/npbench.inc
 npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img \
          $(BUILD)/nprun.img $(BUILD)/nprun360.img
 
-$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc apps/os88ui.inc apps/os88kbd.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DNPBENCH -I apps/ -I tests/ \
 		-o $@ apps/notepad/notepad.asm
 	@echo "npbench: $(call FILESIZE,$@) bytes"
@@ -17558,7 +17612,7 @@ run-pcibig: $(BUILD)/pcibigtest.img $(BUILD)/apps.img
 # kernel reads both (20.13.3), so nothing refused and nothing looked wrong.
 # The flags byte is where it shows - 0x09 on a packed package against 0x01 -
 # and `tools/os88pkgsize.py`'s "on disk" line is what prints the cost.
-$(SMALLAPPDIR)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc \
+$(SMALLAPPDIR)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88kbd.inc \
                             apps/os88ui.inc $(SBSTAMP) | $(BUILD)
 	@mkdir -p $(SMALLAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
@@ -19632,7 +19686,7 @@ N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PO
 # rides GAMES\ in the set below rather than a folder of its own.
 N1942PARTS = $(addprefix $(BUILD)/,1942V.GFX 1942VX.GFX 1942L.GFX 1942C.GFX 1942CX.GFX 1942.SFX $(N1942SCENES))
 N1942LIVE := $(BUILD)/1942.o88
-ALLAPPSFILES := $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+ALLAPPSFILES := $(BUILD)/boratype.o88 $(BUILD)/breadxt.o88 $(BREADXTFILES) $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/MIDIRACK.BNK \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(CWORDDISK) \
@@ -19655,7 +19709,8 @@ ALLAPPS := $(ALLAPPSFILES) $(PX_SAMPLES_360) $(BUILD)/runcpm-src.stamp tools/get
 # volume's ASSOC.DAT (54.7.1). The LOOM=32 directory slots below are priced
 # by os88allapps.py like every other entry.
 
-ALLAPPSARGS := $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
+ALLAPPSARGS := BORATYPE:$(BUILD)/boratype.o88 \
+               $(addprefix BREADXT:,$(BUILD)/breadxt.o88 $(BREADXTFILES)) \
                $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
@@ -23776,3 +23831,90 @@ $(BUILD)/PDX8.MOD: apps/pagedesk/pdx8.asm apps/pagedesk/pdrx8.inc $(BUILD)/pdx8.
 	    sys.exit(1 if t>$(PDX8_CAP) else 0)"
 pdx8: $(BUILD)/PDX8.MOD
 # ---- end PageDesk: PDX8 ----
+
+# SPEC.md9.16: failed package-entry glyph ownership and same-slot reuse.
+$(BUILD)/kbdabort.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdhold.bin: tests/kbdlayoutabort/kbdlayoutabort.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DKA_LIVE -o $@ $<
+$(BUILD)/kbdabort.o88: $(BUILD)/kbdabort.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdhold.o88: $(BUILD)/kbdhold.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutabort.img: $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/kbdabort.o88 $(BUILD)/kbdhold.o88
+#> [Gate disks] kbdlayoutaborttest :: failed-entry keyboard hold and instance reuse fixtures
+.PHONY: kbdlayoutaborttest
+kbdlayoutaborttest: $(BUILD)/kbdlayoutabort.img
+
+# SPEC.md18.5.3: file mutations execute through the existing disk module.
+$(BUILD)/diskmut.bin: tests/diskmut/diskmut.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/diskmut.o88: $(BUILD)/diskmut.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/diskmut.img: $(BUILD)/diskmut.o88 tests/diskmut/old.txt tests/diskmut/leaf.txt tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder CASE/EMPTY \
+		CASE:$(BUILD)/diskmut.o88 CASE:tests/diskmut/old.txt CASE/TREE/CHILD:tests/diskmut/leaf.txt
+#> [Gate disks] diskmuttest :: directory mutations, target restoration and missing-module refusals
+.PHONY: diskmuttest
+diskmuttest: $(BUILD)/diskmut.img
+
+# SPEC.md9.16/53.2.3: protected-mode REAL glyph borrowing, not shipped software.
+$(BUILD)/kbdreal.bin: tests/kbdlayoutreal/fixture.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/kbdreal.o88: $(BUILD)/kbdreal.bin tools/os88pkg.py
+	$(OS88PKG) $< -o $@
+$(BUILD)/kbdlayoutreal.img: $(BUILD)/kbdreal.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/kbdreal.o88
+#> [Gate disks] kbdlayoutrealtest :: protected-to-REAL keyboard glyph borrowing fixture
+.PHONY: kbdlayoutrealtest
+kbdlayoutrealtest: $(BUILD)/kbdlayoutreal.img
+
+# SPEC.md9.16: existing legacy frontends retain BIOS character input.
+$(BUILD)/kbdlayoutlegacy.img: $(BUILD)/win16.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/win16.o88
+#> [Gate disks] kbdlayoutlegacytest :: DOS and WIN16 keyboard ownership fixture
+.PHONY: kbdlayoutlegacytest
+kbdlayoutlegacytest: $(BUILD)/kbdlayoutlegacy.img
+
+# Native Borat typing tutor, SPEC.md 134 / docs/BORATYPE-SPEC.md.
+$(eval $(call CC_PACKAGE,boratype,boratype,BORATYPE.OVL,$(BUILD)/BTART.BIN $(BUILD)/BTSOUND.BIN,part,$(BUILD)/BTAN0.BIN $(BUILD)/BTAN1.BIN $(BUILD)/BTAN2.BIN $(BUILD)/BTAN3.BIN $(BUILD)/BTAN4.BIN))
+BORATYPESRC := $(wildcard apps/boratype/*.c apps/boratype/*.h)
+$(BUILD)/boratype.raw.asm: $(BORATYPESRC) apps/cc/gk.h
+$(BUILD)/boratype.bin: $(wildcard apps/boratype/*.inc) apps/breadxt/draw.inc apps/cc/gk.inc apps/cc/gkmus.inc apps/os88data.inc apps/os88ui.inc
+$(BUILD)/BTART.BIN: tools/os88btart.py tools/os88bbart.py apps/boratype/art.h $(wildcard apps/boratype/art/*.txt) $(wildcard apps/win16/fonts/*.txt) | $(BUILD)
+	python3 tools/os88btart.py build -o $@
+$(BUILD)/BTSOUND.BIN: tools/os88gkmus.py tools/os88btart.py tools/os88bbart.py apps/boratype/art.h apps/boratype/art/blink.txt apps/boratype/art/masthead.mask apps/boratype/art/badges.mask apps/boratype/art/large.txt apps/boratype/art/music.txt apps/boratype/art/sfx.txt | $(BUILD)
+	python3 tools/os88btart.py build-sound -o $@
+$(BUILD)/BTAN%.BIN: tools/os88btanim.py tools/os88lz.py tools/os88btscenes.py apps/boratype/art/scene-cards.txt apps/boratype/art/badges.mask apps/boratype/art/animation.txt | $(BUILD)
+	python3 tools/os88btanim.py build --bank $* --output $@
+#> [Applications] boratype :: Borat Teaches Typing native C lessons, practice and challenges (SPEC.md 134)
+boratype: $(BUILD)/boratype.o88
+#> [Applications] boratypedisk :: Borat Teaches Typing software disk in all four floppy geometries
+boratypedisk: $(BUILD)/boratype.img $(BUILD)/boratype720.img $(BUILD)/boratype120.img $(BUILD)/boratype360.img
+$(BUILD)/boratype.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype720.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype120.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/boratype360.img: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+#> [Applications] boratypebundle :: build and validate a local Borat Teaches Typing WPK installer
+boratypebundle: $(BUILD)/BORATYPE.WPK
+$(BUILD)/BORATYPE.WPK: $(BUILD)/boratype.o88 apps/boratype/HELP.TXT tools/os88wire.py Makefile
+	@mkdir -p $(BUILD)/boratype-stage
+	@cp $(BUILD)/boratype.o88 $(BUILD)/boratype-stage/BORATYPE.O88
+	@cp apps/boratype/HELP.TXT $(BUILD)/boratype-stage/HELP.TXT
+	python3 tools/os88wire.py --archive $@ --srcdir $(BUILD)/boratype-stage --home BORATYPE --program BORATYPE.O88
+#> [Applications] boratypepcmdisk :: build a local Sound Blaster disk from the 14 named MP3s in BT_AUDIO_SRC
+boratypepcmdisk: boratype
+	@test -n "$(BT_AUDIO_SRC)" || { echo "Set BT_AUDIO_SRC to the folder containing the 14 source MP3s"; exit 1; }
+	python3 tools/os88btpcm.py "$(BT_AUDIO_SRC)" "$(BUILD)/boratype-local-audio"
+	python3 tools/os88disk.py -o $(BUILD)/boratype-sb.img --size 1440 $(BUILD)/boratype.o88 apps/boratype/HELP.TXT $(BUILD)/boratype-local-audio/BTAUDIO.IDX $(BUILD)/boratype-local-audio/BTMUSIC.BTA $(BUILD)/boratype-local-audio/BTCLIPS.BTA --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $(BUILD)/boratype-sb.img
+.PHONY: boratype boratypedisk boratypebundle boratypepcmdisk

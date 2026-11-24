@@ -249,6 +249,7 @@ vesacp secs=50   # the Display page in protected mode: VXV_NEXT cycles the class
 vesablit4 secs=20   # a package's OSAPI_GFX_BLIT4 on VID_VESA, WireBall's title art pixel for pixel (565 re-expanded QEMU's way, vesa.px)
 vesafsx secs=20   # Gorillas' BIOS-mode bracket from the VESA desktop and back: the mode restored through VX_SETMODE, the margin's dither whole
 vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_detach points [vx_ep] at KERNEL_SEG:vx_null, the code selector on kern_mega), mode 12h and the sentence drawn
+vesakbd secs=30   # CP850 text in protected mode: Spanish on the Keyboard page, n-tilde typed into its sample and its eight rows read off the glass - VX_FONTRUN reads font_span through the kernel's data selector; red: the run bounded by 126 (a blank cell)
 
 # MOVES AND THE HEAP (wave 2)
 # On a 1MB kern_mega (@OS88_BOCHS_MEGS=1: no pool) every claim is conventional
@@ -454,3 +455,7 @@ redlinevga secs=90   # the whole Bench run on a 386: 25 rows timed (a host-speed
 redlineinspvga secs=60   # the Inspect tab under protected mode: its module a lazy part far-called through op_cseg's code selector, the ROM map through SEG_WIN, no int 15h C0h and no IVT, every page and INSPECT1.TXT
 redlinechipvga secs=60   # the Tune tab on an AT-class tier: the F000h fingerprint through SEG_WIN, the read-only port probes RUN, the option-ROM scan, the pick and CHIPSET1/2.TXT
 redlinechipvga@tune secs=150 -chipset= +--tune +os8088_redline_vga_gla   # the WRITE path: Mfg spec and the verified sweep (a cli window and a BIOS floppy read into the package's selector), REDLINE.CFG and AUTOSTRT\RLAPPLY.LNK on A:, RLAPPLY before, after and at a power cycle
+
+# OPTIONAL INTERNATIONAL KEYBOARD (SPEC.md 9.16, 6.7)
+kbdlayouttext-vga secs=200 ---profile +--image=build/mega.img   # all three physical layouts, CP850 edit/save/reopen, two real instance holds and final drop; 170.19s measured. Scratch system must start with mega.img; omit MartyPC's instruction profiler.
+kbdlayouthiber secs=50   # active-layout and glyph-only holds survive actual fixed-disk hibernate/resume, header/glyph/document and next physical key; 40.16s measured.

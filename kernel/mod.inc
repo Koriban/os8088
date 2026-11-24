@@ -40,7 +40,8 @@
 
 %ifdef FCP_MOD
 MOD_SER     equ 5
-MOD_NIMG    equ 6               ; SMALL: file operations, no hibernate, and
+MOD_KEYBOARD equ 6
+MOD_NIMG    equ 7               ; SMALL: file operations, no hibernate, and
                                 ; no Dock module (SPEC.md 30.5)
 %else
 MOD_DOCK    equ 4
@@ -49,9 +50,13 @@ MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
 MOD_DESK    equ 7               ; ...and the desk layer's verbs (11.103.10)
 MOD_STIKM   equ 8               ; ...and the Sticky Apps menu (SPEC.md 110.12)
 MOD_SER     equ 9
-MOD_NIMG    equ 10              ; BIG: hibernate, resident file operations,
+MOD_KEYBOARD equ 10
+MOD_CPW     equ 11              ; ...and the wide Control Panel's face (SPEC.md
+                                ; 135.2), after every id that was already
+                                ; numbered, so none of them moved
+MOD_NIMG    equ 12              ; BIG: hibernate, resident file operations,
                                 ; the optional Dock, EXTD.DRV, WIN95.DRV,
-                                ; DESK.DRV and STIKMENU.DRV
+                                ; DESK.DRV, STIKMENU.DRV and CPWIDE.DRV
 %endif
 ; FSCHECK.DRV (SPEC.md 118.14.1) is an image os88mod.py cuts and NO row: the
 ; package that uses it loads it, so it takes the id after every image's.
@@ -148,8 +153,12 @@ MOD_H_SCR   equ 12              ; word: how many of the image's LAST bytes are
                                 ; scan filled (SPEC.md 2.8.3, 110.12.2)
 MOD_H_ENT   equ 14              ; word[]: entry offsets, in this image
 MOD_VER     equ 5
-MOD_MAX_KB  equ 16              ; the biggest module image we will claim,
-                                ; image + bss: mod_need bounds the BYTES
+MOD_MAX_KB  equ 17              ; the biggest module image we will claim,
+                                ; image + bss: mod_need bounds the BYTES. 16
+                                ; until kern_mega's CTRL.DRV reached 16,430
+                                ; with SYSTEM.CFG's SX block (SPEC.md
+                                ; 26.8.6.1): a bound, not a claim - every
+                                ; claim is still the image's own granules
 
 ; The layout stamp (SPEC.md 2.8.2). Forward references to the section sizes,
 ; which is legal in a `dw` and is how MODC_SIZE already reaches its own end
@@ -213,6 +222,7 @@ mod_f_ext:  db 'EXTD.DRV', 0
 mod_f_win:  db 'WIN95.DRV', 0
 mod_f_desk: db 'DESK.DRV', 0    ; SPEC.md 11.103.10: QUERY loads it
 mod_f_stikm: db 'STIKMENU.DRV', 0 ; SPEC.md 110.12: the Sticky Apps drop loads it
+mod_f_cpw:  db 'CPWIDE.DRV', 0  ; SPEC.md 135.2: CTRL.DRV's open loads it
 %endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
@@ -248,6 +258,7 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw BUILD_NUM        ; MOD_H_BUILD
             dw MOD_STAMP        ; MOD_H_STAMP
 
+mod_f_keyboard: db 'KEYBOARD.DRV',0
 mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
 mod_f_kbm:  db 'KBMOUSE', 0     ; SPEC.md 2.8.8: no file has this name - it is
                                 ; what the RAM view calls the claim
@@ -285,6 +296,11 @@ mod_r_dock:
     dw 0, mod_f_stikm           ; MOD_STIKM, kern_big's alone (SPEC.md 110.12)
 %endif
     dw 0, mod_f_serial          ; MOD_SER, both builds (SPEC.md 115)
+mod_r_keyboard:
+    dw 0, mod_f_keyboard        ; MOD_KEYBOARD, SPEC.md 9.16
+%ifdef KERN_BIG
+    dw 0, mod_f_cpw             ; MOD_CPW, kern_big's alone (SPEC.md 135.2)
+%endif
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
@@ -804,6 +820,8 @@ mod_need:
     jb .badarm
     cmp ax, bp
     jae .badarm
+    pushf
+    cli                        ; IRQ-reachable entries publish as one FAR pair
     mov [di], ax                ; offset...
 %ifdef KERN_MEGA
     push ax                     ; kern_mega: the slot is a FAR CALL's, so it
@@ -819,6 +837,7 @@ mod_need:
 %else
     mov [di+2], es              ; ...and segment, which ES IS: it was loaded
 %endif
+    popf
                                 ; from [bx+MODR_SEG] at the top of this
                                 ; routine and no segment register is written
                                 ; in between
@@ -934,7 +953,7 @@ MOD_HIOK_SETS equ 1 << MOD_SETS ; CTRL.DRV's settings core, the same file
 MOD_HIOK_SETS equ 0
 %endif
 %ifdef KERN_BIG
-MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS | (1 << MOD_KBM)
+MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | (1 << MOD_CPW) | MOD_HIOK_SETS | (1 << MOD_KBM)
 ; (MOD_KBM, the keyboard mouse's adopted image, SPEC.md 2.8.8: armed at the
 ; boot in real mode like any boot-loaded module, so mod_hiboot moves it; its
 ; code half is readable, access byte 9Ah, so its table reads through CS hold)

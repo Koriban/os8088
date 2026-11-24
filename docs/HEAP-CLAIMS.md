@@ -325,6 +325,7 @@ declares the bare form and moves on `I_TASK == 0xFF`.
 | **ftpd** | 28.2KB | **MOVABLE + RESTARTABLE** | `fd_step` is a state machine in statics and the restart lands at the loop top, above it, so a transfer resumes at the step it had reached |
 | **Audio** | 30.2KB | **MOVABLE + RESTARTABLE** | hires only when playback starts; until then it is movable on `I_TASK` alone |
 | **Browser** | 19.8KB | **MOVABLE + RESTARTABLE** | `br_nstep` banks a generation and every store is guarded on it, so a fetch a restart abandons writes nothing — `br_abort`'s own design |
+| **optional keyboard image and CP850 provider** | image+BSS rounded to 512 bytes: 5.5 KiB on big/small/emu and 6 KiB on mega while selected or held | **PINNED, conventional on mega** | §9.16. IRQ dispatch and the live font pointer require a fixed address. Layout ownership, per-instance glyph bits and the Control Panel sample hold are separate; final release restores the original font, disarms slots and frees the claim. BIOS default with no glyph clients claims nothing; no restart-only cache. |
 | **kernel module images** | 2–8KB | **PINNED, and measured harmless** | `CTRL.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV` (+ `FILECP`/`FDLG` on kern_small). Claimed top-down, and `mem_claim_1`'s `.hi` arm puts one back at the ceiling when it is dropped and re-taken — so it strands nothing, and the descending pass closes any hole that opens beneath it. Measured: the Control Panel open costs **8.0KB, exactly its own size**, not a trapped run. The one exception used to be a module sitting under an attached `SOUND.DRV`; since §66.6.3.1 that image moves too |
 | **driver images** | 48KB | **MOVABLE** | §66.6.3. SOUND 6KB, HDD 8KB, ETHER 18KB, RAMDISK 9KB, NET 6KB, VMMOUSE 1KB (`drv_memk`). Every one of them, the sound driver's included: §66.6.3.1 patches the **sixteen hardware IRQ vectors and int 33h** instead of refusing on the table, and the copy runs at IF=0 so no ISR can be taken between it and the rewrite. Sixteen and not 256 is load-bearing — unused vectors are SCRATCH, and a full sweep rewrote an XT-IDE option ROM's word and left the machine with no hard disk. The other side of it is a contract: a driver may hook its own IRQ vector - and a pointing driver int 33h - and nothing else. `tests/drvmove.py` and `tests/sndmove.py` are the gates |
 | **every C package** | — | **MOVABLE** | `crt0.asm` declares it at entry; `cc_regreloc` is `cc_ovbind` where there is an overlay, because its `.res` loop writes the live `CS` into the return vectors and inside a relocation proc that CS is the new base |
@@ -381,3 +382,20 @@ And behind both: **every undeclared row above.** A pinned block is a barrier
 whatever its size — the measured case was a 3KB cache holding 40KB out of
 reach, and unpinning it moved a 114KB module and the sound driver's pool on
 the very next run with nothing else changed (§66.5.6).
+
+## Borat Teaches Typing (SPEC.md 134)
+
+| claim | size/lifetime | verdict | holder and relocation |
+|---|---|---|---|
+| native package region | measured by package build; instance lifetime | MOVABLE | C runtime region relocation; restartable worker feeds the PCM ring and posts timer wakes |
+| eager art/audio/overlay carve | art63,677B plus audio/overlay; instance lifetime | MOVABLE | `CC_ONMOVE_PARTS`; callback rereads `os88_part_seg(0/1)` and fixes face and second-bank holders |
+| optional sampled soundtrack and reactions | two file-sized claims, each below 64KB, when a valid local pack is installed | MOVABLE | `os88_onmove` updates the music and effects segments. Cursors are relative offsets. Both segment registers are restored before the worker yields. Close or failed setup frees the banks |
+| drawing band | 8KB; instance lifetime, reused as CGA cell shadow | MOVABLE | `bt_band`, face holder and `bx_bseg` updated by callback |
+
+Borat's observed XT region/parts/band total is 167,424 bytes on the accepted
+volume. Source audit bounds app-owned startup at that same total; retained
+carve slack depends on volume cluster alignment. HIGH/HIGHMEM grants a
+65,536-byte high region and 8KB high band on Mega, totaling 167,936 bytes with
+the same conventional part carve. High selectors stay opaque/stable; they
+are not real-mode paragraph segments. The actual286 high-memory tour and
+real-mode public compaction evidence are in [the ledger](boratype/EVIDENCE.md).
