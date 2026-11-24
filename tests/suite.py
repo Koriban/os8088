@@ -23624,6 +23624,33 @@ SOAK = [
         "no base term, and a reader who adds one to 'fix' it gets 12 where "
         "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
+    Row("basicat", "soak", py("tests/basiclang.py", "--at"), 180.0,
+        "SPEC.md 150.30's `@buf$`, the pin-and-pass operator - the thing 34 "
+        "of the API's 194 slots need and none of them could be called "
+        "without. It was a DESIGN read out of the bindings plan with no "
+        "Status line, which is how 150.54 came to record that a drawn "
+        "keypad could have boxes and not LABELS: "
+        "OSAPI_FONT_STR_XPARENT wants a NUL-terminated string in the "
+        "caller's segment and nothing in BASIC could hand one over. "
+        "THE COPY IS THE POINT. A kernel call wants NUL-terminated bytes in "
+        "the caller's own segment; a BASIC string is COUNTED and may hold a "
+        "NUL of its own, and the variables' region COMPACTS - so a pointer "
+        "into it is the long fuse the bindings plan forbids in as many "
+        "words. The copy goes in the TEMPORARIES, whose lifetime is already "
+        "the statement and which compaction never moves. "
+        "`@` MEANS TWO THINGS AND THE '$' TELLS THEM APART: it is GFA's "
+        "procedure-call prefix (150.23) as well, and a procedure cannot be "
+        "called buf$ because a trailing '$' is what makes a name TEXT. AT2 "
+        "is that half - `@twice(21)` still calls a FUNCTION - because a "
+        "rule that separates two meanings has to be tested from both "
+        "sides. "
+        "WHAT IT ANSWERS IS AN ADDRESS, so there is nothing printable that "
+        "means anything, and AT1 asks the questions that DO have answers: "
+        "that two copies made in one statement are six bytes apart for a "
+        "five-character string - the five and the NUL the operator exists "
+        "to add - that a second @ of the same text is a NEW place rather "
+        "than the old one, and that the source is untouched.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("basickeypad", "soak", py("tests/basiclang.py", "--keypad"), 260.0,
         "KEYPAD.BAS, apps/basic/samples/: three keys a BASIC program DRAWS "
         "and then HIT-TESTS - the whole chain in one sample, and the one "

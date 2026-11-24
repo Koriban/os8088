@@ -3356,12 +3356,47 @@ bas_c_fact:
     pop ax
     ret
 
+; `@` MEANS TWO THINGS AND THE `$` TELLS THEM APART. It is GFA's call
+; prefix (150.23) and the bindings plan's pin-and-pass operator (150.30),
+; and the rule that separates them needs no lookahead worth the name: a
+; PROCEDURE cannot be called buf$, because a trailing '$' is what makes a
+; name TEXT in this language (150.28). So a '$' word after '@' is the
+; buffer, anything else is the call it always was.
 .atfn:
-    inc word [bas_src]
-    call bas_word
-    jc .bad
+    inc word [bas_src]              ; over the '@'
+    call bas_skipsp
+    mov ax, [bas_src]
+    push ax                         ; ...so what follows can be re-read WHOLE
+    mov si, ax
+    cmp byte [si], '"'              ; TEXT THAT IS NOT A NAME: a literal has
+    je .atbuf                       ; no word for bas_word to find, and
+    cmp byte [si], '('              ; neither has a parenthesised expression.
+    je .atbuf                       ; Asking bas_word first refused `@"1"` as
+    call bas_word                   ; "expected a number"
+    jc .atfnbad
+    call bas_isstrname              ; CF=0 when the word ends in '$'
+    jc .atfncall
+.atbuf:
+    pop ax
+    mov [bas_src], ax               ; rewind: @ takes a STRING EXPRESSION,
+    call bas_c_str                  ; not only a bare variable
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_SADDR
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .x
+    ; AN ADDRESS IS A NUMBER, and bas_c_str will have left bas_restype
+    ; saying TEXT - the mistake 150.47 paid for once already
+    mov byte [bas_restype], 0
+    ret
+.atfncall:
+    pop ax
     mov al, 1                       ; ...and a value must come back
     jmp bas_callemit
+.atfnbad:
+    pop ax
+    jmp .bad
 .fnword:
     call bas_skipsp
     call bas_word

@@ -70,18 +70,31 @@ RETURN
 ' as one expression - that last one compiles without the `ox +`. The limit
 ' is nearer three operators than ten, so a program that computes anything
 ' writes it in lines rather than in one.
+' THE LABELS COST NO VARIABLE, which matters at a sixteen-name ceiling
+' (SPEC.md 150.55): `@` takes a string EXPRESSION, so a literal works and
+' no `t$` has to exist. 104 is OSAPI_FONT_STR_XPARENT - CX=x, DX=y, SI=the
+' NUL string - so the two leading zeros are AX and BX, which it ignores.
 PROCEDURE draw
   LOCAL l
   LOCAL m
   l = ox + 20
   m = l + 79
   OSAPI 64, l, ty, m, by
+  l = l + 34
+  m = ty + 11
+  OSAPI 104, 0, 0, l, m, @"1"
   l = ox + 120
   m = l + 79
   OSAPI 64, l, ty, m, by
+  l = l + 34
+  m = ty + 11
+  OSAPI 104, 0, 0, l, m, @"2"
   l = ox + 220
   m = l + 79
   OSAPI 64, l, ty, m, by
+  l = l + 34
+  m = ty + 11
+  OSAPI 104, 0, 0, l, m, @"3"
 RETURN
 
 ' --- which key is under (mx, my), in CONTENT coordinates, or 0 -----------

@@ -2666,6 +2666,43 @@ KEYP2 = ([("CLS", None), ("PRINT 31415", "31415")]
          + [(l, None) for l in KP_ENG]
          + [("#mouse 200 150 2", ["0", "77"])])
 
+# --- @buf$, the pin-and-pass operator (SPEC.md 150.30) ------------------
+# WHAT IT ANSWERS IS AN ADDRESS, so there is nothing to print that means
+# anything - these rows ask the questions that DO have answers: that it is a
+# number, that it moves with the length of what it copies, that two copies
+# in one statement are DIFFERENT places, and that `@name` still calls a
+# procedure, which is the collision the '$' rule resolves.
+AT1 = [
+    ("CLS", None), ("PRINT 31415", "31415"),
+    ('a$ = "hello"', None),
+    ('b$ = "world!!"', None),
+    # WHAT 150.30 PROMISES IS A LIFETIME, NOT A LAYOUT: a temporary lives to
+    # the end of the STATEMENT. So two @ in ONE statement are both live and
+    # cannot overlap - five characters and a NUL need six bytes between
+    # them - and that is assertable. Across statements nothing is promised,
+    # and the first draft of this row asserted `q - p` was 6 from two
+    # separate lines, which is the allocator's business and answered -4.
+    ("PRINT ABS(@b$ - @a$) >= 6", "-1"),
+    ("PRINT (@a$ <> @b$)", "-1"),
+    ("PRINT (@a$ <> 0)", "-1"),
+    # THE TEXT IS COPIED WHOLE, which LEN of the source still reports
+    ("PRINT LEN(a$)", "5"),
+    ('PRINT a$', "hello"),
+]
+
+# `@name` IS STILL THE CALL IT ALWAYS WAS (150.23), which is the half that
+# would break if the '$' test were wrong in the other direction.
+AT2 = [
+    ("CLS", None), ("PRINT 31415", "31415"),
+    ("v = 0", None),
+    ("v = @twice(21)", None),
+    ("PRINT v", "42"),
+    ("END", None),
+    ("FUNCTION twice(n)", None),
+    ("RETURN n * 2", None),
+    ("ENDFUNC", None),
+]
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2692,6 +2729,7 @@ MOUSE = (MOU1,)
 # sample was correct the whole time, which is why it was held rather than
 # weakened until it passed.
 KEYPAD = (KEYP0, KEYP1, KEYP2)
+ATBUF = (AT1, AT2)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2716,6 +2754,8 @@ elif "--mouse" in sys.argv:
     PARTS = MOUSE
 elif "--keypad" in sys.argv:
     PARTS = KEYPAD
+elif "--at" in sys.argv:
+    PARTS = ATBUF
 
 FAILED = []
 

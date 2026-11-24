@@ -261753,6 +261753,17 @@ none of them can alias into its own argument — which is the rule that keeps
 
 ### 150.30 `@` needs a NUL, and the arena is where it goes
 
+**Status: BUILT** - `OP_SADDR`, row `basicat`. `@` takes a string
+EXPRESSION, so `@buf$`, `@"1"` and `@(a$ + b$)` all work - and a LITERAL
+costs no variable, which matters at §150.55's sixteen-name ceiling.
+
+**`@` MEANS TWO THINGS AND THE `$` TELLS THEM APART.** It is also GFA's
+procedure-call prefix (§150.23), and a procedure cannot be called `buf$`
+because a trailing `$` is what makes a name TEXT. Text that is not a NAME -
+a literal, a parenthesised expression - has to be recognised BEFORE the word
+scan: `@"1"` has no word for `bas_word` to find and was refused as "expected
+a number" until a screenshot of a blank box named the line.
+
 Recorded here because it is a constraint on §150.28 discovered by reading
 `docs/plans/BASIC-BINDINGS-PLAN.md` §3 rather than by writing code, and it
 decides part of wave 4 before wave 4 starts.
@@ -263487,12 +263498,10 @@ already known.** `OSAPI 160` (`OSAPI_MOUSE`) answers `REG(2)` = 164 while
 80, is this window's content origin - so the gateway reaches the right entry
 AND §150.53's conversion is right, each checked by the other.
 
-**`@buf$` IS STILL NOT BUILT**, the one part of the earlier finding that
-stands. §150.30 records the pin-and-pass operator as a design read out of the
-bindings plan and it has no Status line; `@name` here is §150.23's PROCEDURE
-CALL, so `@b$` is refused as naming a procedure that does not exist. 34 of the
-API's 194 slots take a buffer and none is reachable from BASIC until that is
-built - so a drawn keypad can have boxes today and cannot have LABELS.
+**AND `@buf$` IS BUILT NOW** (§150.30), which this section had as the one
+thing between a drawn keypad and a labelled one. `KEYPAD.BAS` labels its
+keys through `OSAPI_FONT_STR_XPARENT` with `@"1"`, and the 34 slots that
+take a buffer are reachable.
 
 ### 150.55 Three limits an application met, and one silent wrong answer
 
@@ -263616,8 +263625,8 @@ argument for tier B is that the BASIC word and the SPEC word match.
 
 1. **Tier B itself** - generated, so the 9 translatable libraries arrive
    together rather than one verb at a time.
-2. **`@buf$`** (§150.30), because 34 slots take a buffer and tier B is worth
-   little while none of them can be called.
+2. ~~**`@buf$`**~~ **BUILT** (§150.30): 34 slots take a buffer, and tier B
+   would have been worth little while none of them could be called.
 3. **The menu item state** - `icheck`, `ienable`, `text` - which §150.38's
    snapshot model has no verb for yet.
 4. **`OPENW`**, which §150.38 deferred for reasons that §150.54 has now

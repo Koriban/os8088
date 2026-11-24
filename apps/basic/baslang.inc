@@ -220,7 +220,9 @@ OP_MOUSE    equ 71                  ; + a selector: 0 x, 1 y, 2 buttons
                                     ; (SPEC.md 150.53, node [210])
 OP_MOUSEST  equ 72                  ; MOUSE mx,my,mk + THREE variable indices:
                                     ; one poll, three stores, one instant
-OP_N        equ 73                  ; how many there are, table included
+OP_SADDR    equ 73                  ; @buf$ - a NUL-terminated copy, and its
+                                    ; ADDRESS (SPEC.md 150.30)
+OP_N        equ 74                  ; how many there are, table included
 OP_BIN_N    equ 12                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 150.4, wave 2) ---------------------------
@@ -3106,6 +3108,68 @@ bas_exec:
     pop ax
     jmp .done
 
+; --- OP_SADDR - @buf$, the pin-and-pass operator (SPEC.md 150.30) -------
+; Pops TEXT and pushes the ADDRESS of a NUL-terminated copy of it.
+;
+; **THE COPY IS THE POINT, NOT AN OPTIMISATION AVOIDED.** A kernel call wants
+; a NUL-terminated string in the caller's own segment; a BASIC string is
+; COUNTED and may hold a NUL of its own (150.28). And the variables' region
+; COMPACTS, so handing over a pointer into it is the long fuse the bindings
+; plan's §8 forbids in as many words. The temporaries' region is where the
+; copy goes: a temporary already lives to the end of the STATEMENT, which is
+; longer than one call, and compaction never moves it.
+;
+; THE ADDRESS GOES THROUGH A SIGNED CONVERSION and that is harmless rather
+; than lucky: a package's bss can reach past 32767, so fp_i2a may make the
+; number NEGATIVE - and OSAPI's own fp_a2i turns it back into the same
+; sixteen bits, which is what the register needs. Only PRINT would ever show
+; the sign, and nothing prints an address.
+.saddr:
+    cmp di, bas_stk + BAS_SLOT
+    jb .under
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, [di - BAS_SLOT]         ; the bytes...
+    mov cx, [di - BAS_SLOT + 2]     ; ...and how many
+    push si
+    push cx
+    inc cx                          ; ...and room for the NUL
+    call bas_stmpalloc              ; which refuses BY NAME itself
+    pop cx
+    pop si
+    jc .saddrbad
+    mov bx, ax                      ; where the copy lives
+    push bx
+.sacopy:
+    jcxz .sacdone
+    mov al, [si]
+    mov [bx], al                    ; a byte at a time: ES is the KERNEL's
+    inc si
+    inc bx
+    dec cx
+    jmp short .sacopy
+.sacdone:
+    mov byte [bx], 0                ; THE NUL the kernel is promised
+    pop bx
+    sub di, BAS_SLOT                ; the text is consumed...
+    mov ax, bx
+    call fp_i2a                     ; ...and its address takes the slot
+    call fp_pack_a
+    add di, BAS_SLOT
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp .next
+.saddrbad:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp .done                       ; bas_stmpalloc has already said why
+
 ; --- OP_MOUSE - MOUSEX / MOUSEY / MOUSEK (SPEC.md 150.53, node [210]) ---
 ; + a selector byte: 0 the x, 1 the y, 2 the buttons.
 ;
@@ -4524,6 +4588,7 @@ bas_optab:
     dw bas_exec.smidst              ; OP_SMIDST
     dw bas_exec.mouse               ; OP_MOUSE
     dw bas_exec.mousest             ; OP_MOUSEST
+    dw bas_exec.saddr               ; OP_SADDR
 BAS_OPTAB_N equ ($ - bas_optab) / 2
     times BAS_OPTAB_N - OP_N db 0
     times OP_N - BAS_OPTAB_N db 0
