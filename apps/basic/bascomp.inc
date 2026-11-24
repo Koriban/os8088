@@ -1533,7 +1533,19 @@ bas_c_stmt:
     ; sequence of related calls short.
     xor cx, cx                      ; CX = how many values pushed
 .oarg:
-    call bas_c_rel  
+    ; **CX IS THE COUNT AND bas_c_rel DOES NOT PROMISE IT.** It saves CX
+    ; around its own inner calls and not across itself, so an argument whose
+    ; compilation goes deep enough came back with the tally changed - and the
+    ; count is the byte the opcode carries, so OP_OSAPI then consumed the
+    ; wrong number of slots. TWO VARIABLE ARGUMENTS WAS ENOUGH: `OSAPI 64,
+    ; 10, 20, 30, 40` ran and `OSAPI 64, a, b, 30, 40` stopped the program
+    ; with no message, because the leftovers shifted what every later op
+    ; read. In a loop it was worse and slower to see - KEYPAD.BAS's draw()
+    ; leaked slots once a pass until the value stack overflowed, reported as
+    ; `expression too deep` (SPEC.md 150.55) a second into the run.
+    push cx
+    call bas_c_rel
+    pop cx
     cmp byte [bas_bad], 0
     jne .x
     inc cx

@@ -263530,13 +263530,30 @@ above, so the two rules pull against each other and the second one wins.
 **AND "EXPRESSION TOO DEEP" IS THE VALUE STACK, AT RUN TIME.** The message
 names the parser; `bas_e_deep` is raised by `bas_exec`'s `.over`, which is
 `BAS_STK_MAX` - SIXTEEN SLOTS - overflowing as an op pushes. So the limit is
-on how much is live at once while something evaluates, not on how an
-expression was written. `OSAPI 64, l, ty, m, by` - five values, every one a
-plain name - reaches it from inside a procedure inside the main loop, while
-the same call with five LITERALS compiles and runs. **Not understood yet:**
-whether that is depth per call or something accumulating across yields.
-`KEYPAD.BAS` is correct and its second row is held back rather than
-weakened until it passes.
+on how much is live at once, not on how an expression was written.
+
+**IT WAS ALSO HIDING A DEFECT, AND THE DEFECT WAS THE WHOLE OF IT.**
+`OSAPI`'s argument loop kept its running COUNT in `CX` across
+`call bas_c_rel`, which banks `CX` around its own inner calls but never
+across itself - so an argument whose compilation went deep enough came back
+with the tally changed. That count is the byte the opcode carries, so
+`OP_OSAPI` then consumed the wrong number of slots.
+
+**TWO VARIABLE ARGUMENTS WERE ENOUGH**, which is what made it look like a
+limit: `OSAPI 64, 10, 20, 30, 40` ran, `OSAPI 64, a, 20, 30, 40` ran, and
+`OSAPI 64, a, b, 30, 40` **stopped the program with no message at all** -
+the leftovers shifted what every later op read. In a loop it was slower to
+see and easier to misread: `KEYPAD.BAS`'s `draw()` leaked a slot once a
+pass until the stack overflowed, a second into the run, reported as
+"expression too deep". One `push cx`/`pop cx` fixes both.
+
+**THE LESSON IS ABOUT THE DIAGNOSIS, not the two instructions.** An
+overflow message invited a story about DEPTH - how many values a call takes,
+how an expression is written, whether something accumulates across yields -
+and every one of those was wrong. The question that broke it open was the
+cheapest available: the SAME call with the same values, written two ways.
+Five literals ran and five names did not, and no theory about depth survives
+that.
 
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 

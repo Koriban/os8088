@@ -2686,13 +2686,12 @@ CALC = (CALC1, CALC2, CALC3, CALC4, CALC5)
 KEYS = (KEY1, KEY2, KEY3)
 CH5 = (CH5A, CH5B, CH5C, CH5D, CH5SPC, CH5E, CH5F, CH5G)
 MOUSE = (MOU1,)
-# KEYP2 IS NOT IN THE ROW. It types the whole file and runs it, and draw()'s
-# `OSAPI 64, l, ty, m, by` - five values, all simple names - overflows the
-# SIXTEEN-slot value stack partway through, which is reported as "expression
-# too deep" (SPEC.md 150.55). The sample is correct and the row would be red
-# for a reason that is not the sample's, so it waits for that to be
-# understood rather than being quietly weakened until it passes.
-KEYPAD = (KEYP0, KEYP1)
+# KEYP2 IS BACK. It was held out while draw()'s `OSAPI 64, l, ty, m, by`
+# overflowed the value stack - which turned out to be the compiler losing
+# the argument COUNT across bas_c_rel, not a limit (SPEC.md 150.55). The
+# sample was correct the whole time, which is why it was held rather than
+# weakened until it passed.
+KEYPAD = (KEYP0, KEYP1, KEYP2)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
