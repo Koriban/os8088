@@ -263555,6 +263555,74 @@ cheapest available: the SAME call with the same values, written two ways.
 Five literals ran and five names did not, and no theory about depth survives
 that.
 
+### 150.56 Chapter 11 is TRANSLATED, and it is mostly tier B wearing GEM's names
+
+**Status: DECIDED (owner, 2026-11-24) and CONTRACTED HERE.** The Compendium's
+chapter 11 - the AES, 117 nodes across eleven libraries - is translated onto
+OS/8088 rather than refused. What follows is what that means, because the
+number is misleading in both directions.
+
+**THE AES IS AN APPLICATION ENVIRONMENT, AND THIS OS HAS ONE.** `AES` is
+Application Environment Services: windows, menus, dialogs, events, file
+selection, the clipboard, launching programs. Every one of those is a thing
+OS/8088 already does through kernel slots. So the chapter is not 117 nodes of
+new machinery - it is a CHECKLIST of what an application environment owes a
+BASIC, written by people who had shipped one, and most of it names something
+this system can already do.
+
+**AND `GEMSYS` IS `OSAPI`.** Node [348] is GFA's raw gateway: a call number
+and five parameter blocks. §150.8's tier C is the same idea and is already
+built, which is the single clearest sign that the translation is a matter of
+NAMES and a generated table rather than of design.
+
+**THE MAPPING, LIBRARY BY LIBRARY.** Where a column says BUILT the facility
+exists and a program can reach it today, through tier C if not yet by name:
+
+| AES library | OS/8088 | state |
+| --- | --- | --- |
+| Application `appl_*` | the package entry proc and its teardown; `OSAPI_TASK_*` | BUILT, implicit |
+| Event `evnt_*` | §150.36's `ON MENU`, `OSAPI_WM_WAKE`, `OSAPI_WM_TIMER`, `W_ONKEY`/`W_ONCLICK` | BUILT |
+| Menu `menu_*` | `OSAPI_MENU_SET`, `OSAPI_MENU_OWNER`; §150.38's `MENU m$()` | BUILT; item state (`icheck`, `ienable`, `text`) owed |
+| Form `form_*` | `form_alert` IS §150.37's `ALERT`; the rest is `os88ui`'s dialogs | PART BUILT |
+| Graphics `graf_*` | `graf_mkstate` IS §150.53's `MOUSE`; drag and rubber-box are the kernel's `ui_drag` | PART BUILT |
+| Scrap `scrp_*` | `OSAPI_CLIP_GET` / `_PUT` / `_SIZE` | slots exist, no verb |
+| File selector `fsel_*` | `OSAPI_FILE_DLG` | slot exists, no verb |
+| Window `wind_*` | `OSAPI_WM_CREATE`, `_CLOSE`, `_DESTROY`, `_TITLE`, `_GEOM`, `_CONTENT`, `_FRONT`, `_TOP`, `_SHOW`, `_HIDE`, `_RESIZE`, `_DAMAGE` | slots exist; §150.38's `OPENW` is the verb and is deferred |
+| Shell `shel_*` | `OSAPI_TASK_SPAWN`, and the file slots for the rest | slots exist, no verb |
+| **Object `objc_*`** | — | **DOES NOT TRANSLATE** |
+| **Resource `rsrc_*`** | — | **DOES NOT TRANSLATE** |
+
+**THE TWO THAT DO NOT TRANSLATE ARE ONE REFUSAL, NOT TWO.** `objc_*` and
+`rsrc_*` are both the GEM RESOURCE MODEL: a tree of `OBJECT` records with
+`TEDINFO`, `ICONBLK` and `BITBLK` payloads (nodes [349]-[358]), built by a
+resource editor, loaded from a `.RSC` file at run time and walked by the
+library. OS/8088 has no such file and no such tree - `apps/os88ui.inc` builds
+widgets IN CODE, as records the package owns, and a dialog here is a
+procedure rather than a loaded object. Translating `objc_add` would mean
+first inventing the tree it adds to, which is a resource system this OS has
+decided not to have. **They are refused by name, with that reason**, and the
+nine structure nodes go with them.
+
+**SO THE WORK IS TIER B, WHICH §150.8 ALREADY SPECIFIES.** "One BASIC word
+per kernel slot, named after it... generated from the same source
+`tools/os88index.py` reads, so it cannot drift from the kernel." Chapter 11's
+real contribution is telling us WHICH slots a BASIC program needs first, and
+the table above is that list. The AES names are not keywords here: a program
+writes the kernel's name, because inventing `WIND_CREATE` as an alias for
+`OSAPI_WM_CREATE` would put a second name on one thing and §150.8's whole
+argument for tier B is that the BASIC word and the SPEC word match.
+
+**WHAT IS ACTUALLY OWED**, in the order that unblocks the most:
+
+1. **Tier B itself** - generated, so the 9 translatable libraries arrive
+   together rather than one verb at a time.
+2. **`@buf$`** (§150.30), because 34 slots take a buffer and tier B is worth
+   little while none of them can be called.
+3. **The menu item state** - `icheck`, `ienable`, `text` - which §150.38's
+   snapshot model has no verb for yet.
+4. **`OPENW`**, which §150.38 deferred for reasons that §150.54 has now
+   partly answered: a program CAN draw.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
