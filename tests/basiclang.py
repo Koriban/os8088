@@ -2703,6 +2703,41 @@ AT2 = [
     ("ENDFUNC", None),
 ]
 
+# --- tier B: a kernel slot BY NAME (SPEC.md 150.57) ---------------------
+# THE ANSWER COMES FROM THE KERNEL, which is what makes this more than a
+# parse test: OSAPI_FONT_WIDTH takes a NUL string in SI and returns the
+# pixel width in AX, so the row asks the font engine how wide its own text
+# is. Eight pixels a character in the system font, so "AB" is 16 and "ABCD"
+# is 32 - and the one-argument form puts the address in SI with AX, BX, CX
+# and DX filled in front of it, which is the padding tier B exists to do.
+TB1 = [
+    ("CLS", None), ("PRINT 31415", "31415"),
+    ('OSAPI_FONT_WIDTH @"AB"', None),
+    ("PRINT REG(0)", "16"),
+    ('OSAPI_FONT_WIDTH @"ABCD"', None),
+    ("PRINT REG(0)", "32"),
+    # ...and a variable's text reaches it the same way
+    ('t$ = "ABCDEFGH"', None),
+    ("OSAPI_FONT_WIDTH @t$", None),
+    ("PRINT REG(0)", "64"),
+]
+
+# AN UNDERSCORE IS A LETTER NOW (150.57), which tier B needs because the
+# kernel's names have them - and which every program can therefore use. It
+# is the Compendium's own spelling: chapter 11 writes appl_init and
+# wind_create throughout.
+TB2 = [
+    ("CLS", None), ("PRINT 31415", "31415"),
+    ("my_var = 7", None),
+    ("PRINT my_var", "7"),
+    ("a_b_c = my_var * 6", None),
+    ("PRINT a_b_c", "42"),
+    # ...and a name is still one word, so this is NOT `my` minus `var`
+    ("my = 100", None),
+    ("PRINT my_var", "7"),
+    ("PRINT my", "100"),
+]
+
 EARLY = (PART1, PART2, PART3, PART4, PART5)
 LATE = (PART6, PART7, PART8, PART9, PART10, PART11, PART12, PART13,
         PART14, PART15, PART16, PART17, PART18, PART19, PART20, PART21,
@@ -2730,6 +2765,7 @@ MOUSE = (MOU1,)
 # weakened until it passed.
 KEYPAD = (KEYP0, KEYP1, KEYP2)
 ATBUF = (AT1, AT2)
+TIERB = (TB1, TB2)
 PARTS = EARLY + LATE + W3TAIL + WAVE4 + ARRAYS + MATH
 
 if "--early" in sys.argv:
@@ -2756,6 +2792,8 @@ elif "--keypad" in sys.argv:
     PARTS = KEYPAD
 elif "--at" in sys.argv:
     PARTS = ATBUF
+elif "--tierb" in sys.argv:
+    PARTS = TIERB
 
 FAILED = []
 

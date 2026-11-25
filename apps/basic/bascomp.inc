@@ -349,6 +349,16 @@ bas_c_stmt:
     jc .notelemst
     jmp .elemstore
 .notelemst:
+    ; A KERNEL SLOT BY NAME comes first, because a tier-B word takes its
+    ; arguments WITHOUT parentheses and would otherwise reach .nostmt as a
+    ; bare name with a stray value after it (SPEC.md 150.57).
+    push si
+    call bas_tbfind
+    jc .nottierb
+    pop ax
+    jmp bas_tbemit
+.nottierb:
+    pop si
     ; **A BARE NAME IS A CALL ONLY IF NOTHING ELSE FOLLOWS IT**, which keeps
     ; `PRIN 3` the refusal it was rather than a call to a procedure called
     ; PRIN with a stray 3 after it (SPEC.md 150.23).
@@ -5288,6 +5298,14 @@ bas_word:
     jb .after
     cmp al, 'z'
     jbe .take
+    ; **AN UNDERSCORE IS A LETTER HERE** (SPEC.md 150.57), and that is the
+    ; Compendium's own spelling rather than a liberty: chapter 11 writes
+    ; every AES routine as appl_init, wind_create, _appl_yield. Tier B's
+    ; whole argument is that the BASIC word and the SPEC word MATCH, and the
+    ; SPEC word is OSAPI_GFX_FILL - which lexed as `OSAPI` and left
+    ; `_GFX_FILL` behind until this line existed.
+    cmp al, '_'
+    je .take
 .after:
     ; **A DIGIT OR AN UNDERSCORE IS LEGAL AFTER THE FIRST CHARACTER** and
     ; not as it: `i2` is a name and `2` is a number, and bas_c_fact tells
@@ -5336,6 +5354,171 @@ bas_word:
 
 ; --- bas_wordis - ZF=1 if the word at DI/CX matches the NUL string at SI -----
 ; Case-insensitive, because BASIC is (`print` and `PRINT` are one keyword).
+; --- bas_tbemit - a tier-B word, compiled as tier C (SPEC.md 150.57) ---
+; in:  SI = the record's offset word, from bas_tbfind.
+;
+; THERE IS NO TIER-B OPCODE, and that is the design rather than a shortcut:
+; a numbered slot's call is exactly what OP_OSAPI already does, so the word
+; compiles to the SAME op with the slot as its first value and a 0 for every
+; register the slot does not use. Tier B is a COMPILE-TIME translation, so
+; it inherits tier C's runtime whole - including the argument count that
+; 150.55 had to teach it to keep.
+;
+; ARGUMENTS ARE IN REGISTER ORDER, which is what makes the padding possible
+; in one pass: the positions are ascending, so the compiler walks AX to DI
+; and takes the next argument when it reaches one the slot uses.
+bas_tbemit:
+    push si
+    mov ax, [si]                    ; the kernel offset is the slot value
+    call bas_emitnum
+    pop si
+    cmp byte [bas_bad], 0
+    jne .tbx
+    mov cl, [si + 2]                ; how many arguments
+    xor ch, ch
+    add si, 3                       ; ...and where their positions are
+    xor bx, bx                      ; BX = which argument
+    xor dx, dx                      ; DL = which register
+.tbloop:
+    cmp bx, cx
+    jae .tbdone
+    mov al, [si + bx]
+    cmp al, dl
+    je .tbarg
+    push bx
+    push cx
+    push dx
+    push si
+    xor ax, ax                      ; a register this slot does not use
+    call bas_emitnum
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .tbx
+    inc dl
+    jmp short .tbloop
+.tbarg:
+    or bx, bx
+    jz .tbfirst                     ; ...a comma before all but the first
+    push bx
+    push cx
+    push dx
+    push si
+    call bas_bcomma
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jc .tbx
+.tbfirst:
+    push bx
+    push cx
+    push dx
+    push si
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .tbpop
+    call bas_wantnum
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jc .tbx
+    inc bx
+    inc dl
+    jmp short .tbloop
+.tbdone:
+    mov al, OP_OSAPI
+    push dx
+    call bas_emit
+    pop dx
+    cmp byte [bas_bad], 0
+    jne .tbx
+    ; DL IS ALREADY THE COUNT OF REGISTERS WRITTEN, not the last index: the
+    ; loop leaves it one past the highest position it filled. Adding one for
+    ; the slot is the whole sum, and adding two made OP_OSAPI consume a slot
+    ; that was never pushed - reported at RUN time as `expression went
+    ; wrong`, which is the value stack underflowing.
+    mov al, dl
+    inc al                          ; ...and the slot in front of them
+    jmp bas_emit
+.tbpop:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.tbx:
+    ret
+
+; --- bas_tbfind - the scanned word in tier B's table (SPEC.md 150.57) ---
+; in:  DI = the word, CX = its length, as bas_word leaves them.
+; out: CF=0 and SI = the record's OFFSET word (the count and the register
+;      positions follow it); CF=1 and nothing found. DI and CX kept.
+;
+; THE TABLE IS GENERATED (tools/os88basb.py) so this walk is the only thing
+; here that knows its shape: a length byte, that many name bytes, the kernel
+; offset, a count, and that many register positions.
+bas_tbfind:
+    push ax
+    push bx
+    push dx
+    mov si, bas_tb
+.tbrec:
+    mov al, [si]                    ; the name's length, or 0 at the end
+    or al, al
+    jz .tbno
+    inc si
+    xor ah, ah
+    cmp ax, cx
+    jne .tbskip                     ; a different length cannot match
+    push cx
+    push di
+    push si
+    xor bx, bx
+.tbcmp:
+    mov dl, [si + bx]
+    mov dh, [di + bx]
+    cmp dh, 'a'
+    jb .tbnoup
+    cmp dh, 'z'
+    ja .tbnoup
+    sub dh, 0x20                    ; the source may be lower case
+.tbnoup:
+    cmp dl, dh
+    jne .tbpopno
+    inc bx
+    cmp bx, cx
+    jb .tbcmp
+    pop si
+    pop di
+    pop cx
+    add si, cx                      ; ...past the name: SI = the offset word
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.tbpopno:
+    pop si
+    pop di
+    pop cx
+.tbskip:
+    add si, ax                      ; past the name
+    add si, 2                       ; ...and the offset
+    mov al, [si]                    ; the count
+    inc si
+    xor ah, ah
+    add si, ax                      ; ...and that many positions
+    jmp short .tbrec
+.tbno:
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
 bas_wordis:
     push ax
     push bx

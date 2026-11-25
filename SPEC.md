@@ -263846,3 +263846,62 @@ its second already — §30.7's LaunchPad, which under this chapter is a dock
 SHELL rather than a replacement for §30's strip, so the stock dock stays and
 clearing one record goes back to it.
 
+
+### 150.58 Tier B, built: a kernel slot by name, and no opcode for it
+§150.57 measured the slot table and asked which of three ways to build tier
+B. This is the first, and what building it changed.
+
+**49 slots arrive by name**, generated from `apps/os88api.inc` by
+`tools/os88basb.py` and gated by its `--check` beside the index in
+`checkdocs`. A slot qualifies when it is NUMBERED — `KERNEL_SEG:0xNNNN`,
+which tier C's opcode can far-call — and its comment names its input
+registers in the `AX = ...` form. The doors do not qualify, because
+§150.57's stub table is not built; nor does a slot whose registers are
+written another way, because guessing one puts a program's value in the
+wrong register, which assembles and runs. **The generation IS the argument
+for the tier**: a slot renamed or re-registered upstream cannot leave a
+BASIC word behind saying the old thing, because no hand wrote the word.
+
+**THERE IS NO TIER-B OPCODE, and that is the design rather than a
+shortcut.** A numbered slot's call is exactly what `OP_OSAPI` already does,
+so the word compiles to the SAME op with the kernel offset as its first
+value and a `0` for every register the slot does not use. Tier B is a
+COMPILE-TIME translation into tier C, and it inherits tier C's runtime
+whole — including the argument count that §150.55 had to teach it to keep.
+The cost of the tier is a table and one compiler routine.
+
+**ARGUMENTS ARE IN REGISTER ORDER** — `AX, BX, CX, DX, SI, DI`, skipping the
+registers a slot ignores. That is what lets one pass emit the padding: the
+positions are ascending, so the compiler walks the registers and takes the
+next argument when it reaches one the slot uses. It also disposes of a
+special case — four of the 49 list their registers in another order in the
+prose, and under this rule they need no handling at all. The order a
+programmer writes is the REGISTER order, not the sentence's order.
+
+**AN UNDERSCORE IS A LETTER NOW.** `bas_word` took letters, digits and a
+sigil, so `OSAPI_GFX_FILL` lexed as `OSAPI` and left `_GFX_FILL` behind —
+which is not a detail but the tier's premise failing, since tier B exists so
+that the BASIC word and the SPEC word MATCH. It is the Compendium's own
+spelling as well: chapter 11 writes `appl_init`, `wind_create`, even
+`_appl_yield`. Every program gets underscored names out of it, and a name is
+still one word — `my_var` and `my` are different variables.
+
+**THE TABLE LIVES IN THE RESIDENT HALF, WITH THE KEYWORDS.** §68.10 keeps DS
+on the package and moves only CS, so the compiler — which IS the overlay
+module — reads resident data through DS and its own through CS. Put in
+`bascomp.inc` beside the code that walks it, the table read as garbage and
+every lookup missed, reported as `not a statement this wave knows`: the
+symptom of a table in the wrong half is indistinguishable from no table at
+all. Every other string the compiler compares against is in `baslang.inc`
+for this reason, which was the evidence, not the reasoning.
+
+**What is still owed**: the 96 doors (§150.57's 384-byte stub table), the 38
+slots that name no register in the `X =` form, and the four whose prose uses
+another notation. `tools/os88basb.py` refuses all of them by omission rather
+than guessing, so the list is exactly what annotating `os88api.inc` would
+fix.
+
+Gate: `basictierb` (`tests/basiclang.py --tierb`). TB1's answer comes from
+the kernel rather than the parser — `OSAPI_FONT_WIDTH` takes a NUL string in
+SI and returns a pixel width in AX, so the row asks the font engine how wide
+its own text is, and gets 16, 32 and 64 for two, four and eight characters.

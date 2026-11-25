@@ -4840,6 +4840,15 @@ bas_err:
     ret
 
 ; --- the keywords and the reasons --------------------------------------------
+; --- tier B's generated slot table (SPEC.md 150.57) ---------------------
+; IT LIVES WITH THE KEYWORDS, IN THE RESIDENT HALF, for the reason every
+; other string here does: §68.10 keeps DS on the package and moves only CS,
+; so the COMPILER - which is the overlay module - reads resident data
+; through DS and its own through CS. Put in bascomp.inc beside the code that
+; walks it, the table read as garbage and every lookup missed, with nothing
+; to show for it but "not a statement this wave knows".
+%include "basic/bastierb.inc"
+
 bas_kw_print:   db 'PRINT', 0
 bas_kw_rem:     db 'REM', 0
 bas_kw_end:     db 'END', 0

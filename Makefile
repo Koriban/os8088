@@ -2834,6 +2834,7 @@ test-soak: $(SHIPIMGS)
 checkdocs:
 	@python3 tools/checkdocs.py
 	@python3 tools/os88index.py --check
+	@python3 tools/os88basb.py --check
 	@python3 tools/os88help.py --check
 	@python3 tools/cp437font.py --check
 	@python3 tools/cp850font.py --check
@@ -7184,7 +7185,15 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 BASIC_SRC = apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
             apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
             apps/basic/baslang.inc apps/basic/bascomp.inc apps/os88fp.inc \
-            apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc
+            apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc \
+            apps/basic/bastierb.inc
+
+# TIER B'S TABLE IS GENERATED FROM THE SLOT LIST (SPEC.md 150.57, 150.58),
+# so an upstream edit to os88api.inc rewrites it here rather than leaving a
+# BASIC word behind saying the old thing. `os88basb.py --check` runs in
+# `checkdocs` as well, which is what catches a hand edit to the output.
+apps/basic/bastierb.inc: apps/os88api.inc tools/os88basb.py
+	python3 tools/os88basb.py
 
 $(BUILD)/basic.bin: $(BASIC_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DBAS_OVERLAY -o $@ apps/basic/basic.asm

@@ -23624,6 +23624,34 @@ SOAK = [
         "no base term, and a reader who adds one to 'fix' it gets 12 where "
         "the manual says 6.",
         needs=("qemu",), wants=("build/basic.img",)),
+    Row("basictierb", "soak", py("tests/basiclang.py", "--tierb"), 180.0,
+        "SPEC.md 150.57's tier B, first slice: 49 kernel slots callable BY "
+        "NAME, generated from apps/os88api.inc by tools/os88basb.py and "
+        "gated by its --check beside the index, so a slot renamed or "
+        "re-registered upstream cannot leave a BASIC word behind saying the "
+        "old thing. That generation is the whole of 150.8's argument for "
+        "the tier. "
+        "THERE IS NO TIER-B OPCODE, which is the design and not a shortcut: "
+        "a numbered slot's call is exactly what OP_OSAPI does, so the word "
+        "compiles to the SAME op with the kernel offset as its first value "
+        "and a 0 for every register the slot does not use. Tier B is a "
+        "COMPILE-TIME translation and inherits tier C's runtime whole. "
+        "ARGUMENTS ARE IN REGISTER ORDER - AX, BX, CX, DX, SI, DI, skipping "
+        "what the slot ignores - which is what lets one pass emit the "
+        "padding, and means the four slots whose prose lists registers in "
+        "another order need no special case. "
+        "TB1'S ANSWER COMES FROM THE KERNEL, not from the parser: "
+        "OSAPI_FONT_WIDTH takes a NUL string in SI and returns a pixel "
+        "width in AX, so the row asks the font engine how wide its own text "
+        "is - 16 for two characters, 32 for four, 64 for eight - which also "
+        "exercises 150.30's @ on both a literal and a variable. "
+        "TB2 IS THE LANGUAGE CHANGE TIER B NEEDED: an underscore is a "
+        "letter now, because the kernel's names have them and tier B's "
+        "premise is that the BASIC word and the SPEC word MATCH. It is the "
+        "Compendium's own spelling too - chapter 11 writes appl_init and "
+        "wind_create throughout. The row checks a name is still ONE word, "
+        "so my_var and my are different variables.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("basicat", "soak", py("tests/basiclang.py", "--at"), 180.0,
         "SPEC.md 150.30's `@buf$`, the pin-and-pass operator - the thing 34 "
         "of the API's 194 slots need and none of them could be called "
