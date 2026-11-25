@@ -263632,6 +263632,68 @@ argument for tier B is that the BASIC word and the SPEC word match.
 4. **`OPENW`**, which §150.38 deferred for reasons that §150.54 has now
    partly answered: a program CAN draw.
 
+### 150.57 Tier B: what the slot table does and does not already say
+
+**Status: CONTRACT, with one question for the owner.** §150.8 promised tier
+B as "one BASIC word per kernel slot, named after it... generated from the
+same source `tools/os88index.py` reads, so it cannot drift from the kernel",
+and §150.56 made it the first of chapter 11's owed list. Measuring the
+source first changed what the work is.
+
+**THE TABLE IS 177 NAMES IN TWO KINDS, AND ONLY 81 ARE CALLABLE TODAY.**
+`apps/os88api.inc` declares **81 numbered slots** (`KERNEL_SEG:0xNNNN`,
+which §150.8's tier C reaches by number) and **96 DOORS** (`OS88_DOOR`,
+which assemble to `int OS88_RARE` and an index byte - three bytes where a
+far call is five, §20.3.4). **Tier C cannot call a door at all**: `OSAPI`
+far-calls an offset, and no kernel entry dispatches a door by an index in a
+register. So more than half the API is unreachable from BASIC, which
+§150.56's table said "slots exist" of without making the distinction.
+
+**THE DOOR ANSWER IS A STUB TABLE, and it is cheap.** Four bytes per door -
+`int OS88_RARE`, the index, a `ret` - is 384 bytes for all 96, generated
+beside the names. The opcode then calls `stub + idx*4` in the package's own
+segment, which needs no self-modifying code and no new kernel entry. That is
+the design; it is not built.
+
+**BUT THE REGISTER MAPPING IS PROSE, AND THAT IS THE REAL FINDING.** The
+bindings plan says the per-slot register list is what tier B owes over tier
+C, and that "the data exists". It does not, quite. Each `%define` carries
+its registers in a COMMENT, in at least three notations:
+
+| form | count | example |
+| --- | --- | --- |
+| `AX = ...` | 135 | `OSAPI_GFX_FILL   ; AX=x1, BX=y1, CX=x2, DX=y2` |
+| something else | 4 | `OSAPI_SET_COLOR  ; AL -> [gfx_color]` |
+| no register named | 38 | `OSAPI_GFX_LOCK   ; acquire drawing mutex` |
+
+The 38 are mostly slots that genuinely take nothing (`GFX_LOCK`,
+`TASK_YIELD`), which is fine - but `SET_COLOR` and `SRAND` DO take a
+register and say so with an arrow, so "no `X =`" does not mean "no
+argument". **A generator that guessed would produce a tier-B word that puts
+a program's value in the wrong register**, which assembles, runs, and is the
+shape of defect §150.8's whole argument against the positional form is
+about.
+
+**THREE WAYS, AND THE CHOICE IS THE OWNER'S** because two of them change a
+file upstream also edits:
+
+1. **Generate from the `X =` form and refuse the rest BY NAME.** 135 words
+   arrive, the other 42 say why they are absent, and tier C plus `REG()`
+   still reaches them. No shared file changes. Honest, and incomplete by
+   construction.
+2. **Annotate `apps/os88api.inc`** with a machine-readable register list per
+   slot. The data becomes authoritative and the generator becomes trivial -
+   but it edits a file upstream owns, and every merge carries it.
+3. **Make tier B positional**, like tier C's convenience form, and skip the
+   mapping. This is the one to refuse: the bindings plan already names it a
+   trap - a slot whose inputs are `AX,BX,CX,DX` in order is served and every
+   other slot is not, "which is the shape of defect that looks like it
+   works".
+
+**Recommended: (1) now, (2) if upstream will take the annotation.** (1)
+delivers most of chapter 11's nine libraries without touching a shared file,
+and its refusals are a list of exactly what (2) would fix.
+
 ## 151. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is
